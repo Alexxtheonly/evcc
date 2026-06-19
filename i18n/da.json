@@ -220,6 +220,8 @@
       "interfacesHelp": "Begræns de netværksgrænseflader, som EEBus skal bruge, for at undgå kommunikationsproblemer. Lad feltet stå tomt for at bruge alle grænseflader. Én indtastning pr. linje.",
       "port": "Port",
       "portHelp": "Porten, der skal bruges.",
+      "qr": "koblingskode",
+      "qrExplain": "Skan fra en anden EEBus-enhed under installationen for automatisk parring uden manuel indtastning af SKI.",
       "removeConfirm": "Hele EEBus-konfigurationen fjernes. Nye certifikater og identifikatorer genereres ved næste opstart. Er du sikker på, at du vil fortsætte?",
       "shipid": "SHIP-ID",
       "shipidExplain": "Permanent enhedsidentifikator til identifikation i EEBus-netværket.",
@@ -1222,6 +1224,7 @@
     "energyflow": {
       "battery": "Batteri",
       "batteryCharge": "Batteriet oplades",
+      "batteryChargeHold": "Batteri (opladning blokeret)",
       "batteryDischarge": "Batteriet aflades",
       "batteryDischargeHold": "Batteri (låst)",
       "batteryForecastEmpty": "Tømt",
@@ -1546,7 +1549,7 @@
     },
     "groupBy": {
       "loadpoint": "Opladnings punkt",
-      "none": "Total",
+      "none": "Sol",
       "vehicle": "Køretøj"
     },
     "loadpoint": "Ladepunkt",
@@ -1568,7 +1571,7 @@
     "type": {
       "co2": "CO₂",
       "price": "Omkostning",
-      "solar": "Sol"
+      "solar": "Energi"
     },
     "vehicle": "Køretøj"
   },
