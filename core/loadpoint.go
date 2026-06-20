@@ -2082,8 +2082,12 @@ func (lp *Loadpoint) Update(sitePower, batteryBoostPower float64, consumption, f
 		// read identity and run associated action
 		lp.identifyVehicle()
 
-		// find vehicle by status for a couple of minutes after connecting
-		if lp.vehicleUnidentified() {
+		// find vehicle by status for a couple of minutes after connecting.
+		// a configured default vehicle pins the loadpoint's identity, so status
+		// detection must not run - otherwise it can steal another loadpoint's
+		// charging vehicle (approximate status match), causing the active vehicle
+		// to oscillate between loadpoints (#31068).
+		if lp.defaultVehicle == nil && lp.vehicleUnidentified() {
 			lp.identifyVehicleByStatus()
 		}
 	}
