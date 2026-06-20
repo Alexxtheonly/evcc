@@ -850,6 +850,17 @@ func (lp *Loadpoint) GetVehicle() api.Vehicle {
 
 // SetVehicle sets the active vehicle
 func (lp *Loadpoint) SetVehicle(vehicle api.Vehicle) {
+	// When the coordinator transfers our vehicle to another loadpoint it calls
+	// SetVehicle(nil). If we have a configured default that is still available,
+	// fall back to it instead of sitting empty - otherwise a loadpoint whose
+	// vehicle was (transiently) taken loses its configured default and never
+	// recovers it (vehicle oscillation / abandonment, #31068).
+	if vehicle == nil && lp.defaultVehicle != nil && lp.defaultVehicle != lp.GetVehicle() {
+		if o := lp.coordinator.Owner(lp.defaultVehicle); o == nil || o == lp {
+			vehicle = lp.defaultVehicle
+		}
+	}
+
 	// set desired vehicle (protected by lock, no locking here)
 	lp.setActiveVehicle(vehicle)
 
