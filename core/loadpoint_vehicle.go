@@ -162,7 +162,12 @@ func (lp *Loadpoint) setActiveVehicle(v api.Vehicle) {
 
 	// re-publish vehicle settings
 	lp.publish(keys.PhasesActive, lp.ActivePhases())
-	lp.unpublishVehicle()
+
+	// keep published soc/range when the same vehicle is re-assigned;
+	// only a real vehicle change should clear it
+	if from != to {
+		lp.unpublishVehicle()
+	}
 
 	// publish effective values
 	lp.PublishEffectiveValues()

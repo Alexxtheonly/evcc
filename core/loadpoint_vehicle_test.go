@@ -323,6 +323,38 @@ func TestDefaultVehicle(t *testing.T) {
 	assert.Nil(t, lp.vehicle, "expected no vehicle")
 }
 
+// TestReassignActiveVehicleKeepsSoc asserts that re-assigning the same active
+// vehicle keeps a known soc, while a real vehicle change still clears it.
+func TestReassignActiveVehicleKeepsSoc(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	v := api.NewMockVehicle(ctrl)
+	v.EXPECT().GetTitle().Return("default").AnyTimes()
+	v.EXPECT().Icon().Return("").AnyTimes()
+	v.EXPECT().Capacity().AnyTimes()
+	v.EXPECT().Phases().AnyTimes()
+	v.EXPECT().OnIdentified().Return(api.ActionConfig{}).AnyTimes()
+
+	lp := NewLoadpoint(util.NewLogger("foo"), settings.NewDatabaseSettingsAdapter("foo"))
+	lp.defaultVehicle = v
+
+	x, y, z := createChannels(t)
+	attachChannels(lp, x, y, z)
+
+	// vehicle becomes active and a soc has been read and published
+	lp.setActiveVehicle(v)
+	lp.vehicleSoc = 71
+
+	// same default vehicle re-assigned (e.g. vehicleDefaultOrDetect on reconnect)
+	lp.setActiveVehicle(v)
+	assert.Equal(t, v, lp.vehicle, "expected same vehicle to stay active")
+	assert.Equal(t, 71.0, lp.vehicleSoc, "soc must be preserved when the active vehicle is unchanged")
+
+	// switching the active vehicle must still clear the stale soc
+	lp.setActiveVehicle(nil)
+	assert.Zero(t, lp.vehicleSoc, "soc must be cleared when the vehicle changes")
+}
+
 // integratedDeviceCharger is a minimal charger advertising the IntegratedDevice feature.
 type integratedDeviceCharger struct{}
 
