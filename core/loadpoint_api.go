@@ -778,6 +778,15 @@ func (lp *Loadpoint) GetChargePowerFlexibility(rates api.Rates) float64 {
 	}
 
 	if mode == api.ModePV {
+		// priority sharing: when a sub-ordering strategy is active, expose only the
+		// above-minimum power as flexible (as MinPV does) so a higher-priority
+		// loadpoint reclaims a lower-priority peer down to its minimum instead of
+		// disabling it outright. This keeps every loadpoint charging from surplus
+		// whenever it covers their minimums (zero grid import); when surplus drops
+		// below the sum of minimums the peer's own disable logic still takes over.
+		if lp.GetPriorityStrategy() != api.PriorityNone {
+			return max(0, lp.GetChargePower()-lp.EffectiveMinPower())
+		}
 		return lp.GetChargePower()
 	}
 
