@@ -29,17 +29,17 @@ func TestPrioritzer(t *testing.T) {
 	// no additional power available
 	lo.EXPECT().GetChargePowerFlexibility(nil).Return(300.0)
 	p.UpdateChargePowerFlexibility(lo, nil)
-	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(lo))
+	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(lo, 0, false))
 
 	// additional power available
 	hi.EXPECT().GetChargePowerFlexibility(nil).Return(1e3)
 	p.UpdateChargePowerFlexibility(hi, nil)
-	assert.Equal(t, 300.0, p.GetChargePowerFlexibility(hi))
+	assert.Equal(t, 300.0, p.GetChargePowerFlexibility(hi, 0, false))
 
 	// additional power removed
 	lo.EXPECT().GetChargePowerFlexibility(nil).Return(0.0)
 	p.UpdateChargePowerFlexibility(lo, nil)
-	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(hi))
+	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(hi, 0, false))
 }
 
 // TestPrioritizerWithinTier verifies that loadpoints sharing the same priority
@@ -65,12 +65,12 @@ func TestPrioritizerWithinTier(t *testing.T) {
 	// fuller vehicle has nothing below it -> no extra power
 	full.EXPECT().GetChargePowerFlexibility(nil).Return(500.0)
 	p.UpdateChargePowerFlexibility(full, nil)
-	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(full))
+	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(full, 0, false))
 
 	// emptier vehicle (higher score in the same tier) takes the fuller one's flexible power
 	empty.EXPECT().GetChargePowerFlexibility(nil).Return(1e3)
 	p.UpdateChargePowerFlexibility(empty, nil)
-	assert.Equal(t, 500.0, p.GetChargePowerFlexibility(empty))
+	assert.Equal(t, 500.0, p.GetChargePowerFlexibility(empty, 0, false))
 }
 
 // TestPrioritizerHysteresis verifies the priority deadband: within the same tier,
@@ -106,10 +106,10 @@ func TestPrioritizerHysteresis(t *testing.T) {
 	p.UpdateChargePowerFlexibility(b, nil)
 
 	// a is only 0.01 ahead of b -> within the 0.05 band -> no steal (no leapfrog)
-	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(a))
+	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(a, 0, false))
 
 	// c is 0.11 ahead of b -> beyond the band -> takes b's flexible power
-	assert.Equal(t, 400.0, p.GetChargePowerFlexibility(c))
+	assert.Equal(t, 400.0, p.GetChargePowerFlexibility(c, 0, false))
 }
 
 // TestPrioritizerEnergyBasisMixedCapacity verifies that when one loadpoint in a
@@ -150,10 +150,61 @@ func TestPrioritizerEnergyBasisMixedCapacity(t *testing.T) {
 	// unknown (fuller, 0.50) has nothing emptier below it -> no extra power
 	unknown.EXPECT().GetChargePowerFlexibility(nil).Return(700.0)
 	p.UpdateChargePowerFlexibility(unknown, nil)
-	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(unknown))
+	assert.Equal(t, 0.0, p.GetChargePowerFlexibility(unknown, 0, false))
 
 	// known (emptier, 0.80) outranks unknown and takes its flexible power
 	known.EXPECT().GetChargePowerFlexibility(nil).Return(1e3)
 	p.UpdateChargePowerFlexibility(known, nil)
-	assert.Equal(t, 700.0, p.GetChargePowerFlexibility(known))
+	assert.Equal(t, 700.0, p.GetChargePowerFlexibility(known, 0, false))
+}
+
+// TestPrioritizerSharing verifies the surplus-conditional reclaim (share = true):
+// a higher-priority loadpoint keeps a lower-priority peer at its minimum when the
+// available power covers both minimums (sharing), but reclaims the peer fully when
+// it does not so the emptier car takes the single slot (displacement) - even when
+// the peer is already charging at its minimum (the regression that locked the
+// emptier car out).
+func TestPrioritizerSharing(t *testing.T) {
+	const min = 1380.0 // 230V * 6A * 1phase
+
+	newLP := func(ctrl *gomock.Controller, score float64) *loadpoint.MockAPI {
+		lp := loadpoint.NewMockAPI(ctrl)
+		lp.EXPECT().GetTitle().AnyTimes()
+		lp.EXPECT().GetPriorityBasis().Return(api.PriorityBasisPercent).AnyTimes()
+		lp.EXPECT().EffectivePriorityScore(gomock.Any()).Return(score).AnyTimes()
+		lp.EXPECT().GetPriorityHysteresis().Return(0).AnyTimes()
+		lp.EXPECT().EffectiveMinPower().Return(min).AnyTimes()
+		lp.EXPECT().GetMode().Return(api.ModePV).AnyTimes()
+		return lp
+	}
+
+	for _, tc := range []struct {
+		name      string
+		available float64
+		peerPower float64
+		want      float64
+	}{
+		// available covers both minimums (>= 2*1380) -> peer kept at its minimum,
+		// only its above-minimum power reclaimed: both keep charging
+		{"share", 5000, 2000, 2000 - min},
+		// available below the sum of minimums -> peer reclaimed fully so the
+		// emptier loadpoint takes the single slot
+		{"displace", 2000, 2000, 2000},
+		// peer already at its minimum, low available -> still fully reclaimed
+		// (a min-charging peer must remain displaceable by an emptier car)
+		{"displace-at-min", min, min, min},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			p := New(nil)
+
+			empty := newLP(ctrl, 0.80) // emptier -> higher priority
+			peer := newLP(ctrl, 0.20)  // fuller -> lower priority
+
+			peer.EXPECT().GetChargePowerFlexibility(nil).Return(tc.peerPower)
+			p.UpdateChargePowerFlexibility(peer, nil)
+
+			assert.Equal(t, tc.want, p.GetChargePowerFlexibility(empty, tc.available, true))
+		})
+	}
 }

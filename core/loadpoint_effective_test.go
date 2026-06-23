@@ -230,20 +230,26 @@ func TestGetChargePowerFlexibility(t *testing.T) {
 		mode       api.ChargeMode
 		status     api.ChargeStatus
 		planActive bool
+		strategy   api.PriorityStrategy
 		want       float64
 	}{
 		// not charging → always 0
-		{api.ModePV, api.StatusB, false, 0},
+		{api.ModePV, api.StatusB, false, api.PriorityNone, 0},
 		// PV mode, charging, no plan → full power is flexible
-		{api.ModePV, api.StatusC, false, 2700},
+		{api.ModePV, api.StatusC, false, api.PriorityNone, 2700},
+		// PV mode, charging, no plan, soc strategy → still full power: the priority
+		// sharing cap lives in the prioritizer, never in this function (guards
+		// against re-introducing a strategy-gated minimum cap here, which would
+		// make a peer charging at its minimum un-reclaimable and break displacement)
+		{api.ModePV, api.StatusC, false, api.PrioritySoc, 2700},
 		// PV mode, charging, plan active → not flexible
-		{api.ModePV, api.StatusC, true, 0},
+		{api.ModePV, api.StatusC, true, api.PriorityNone, 0},
 		// MinPV mode, charging, no plan → surplus above min is flexible (230V * 6A * 1phase = 1380W)
-		{api.ModeMinPV, api.StatusC, false, 2700 - 1380},
+		{api.ModeMinPV, api.StatusC, false, api.PriorityNone, 2700 - 1380},
 		// MinPV mode, charging, plan active → not flexible
-		{api.ModeMinPV, api.StatusC, true, 0},
+		{api.ModeMinPV, api.StatusC, true, api.PriorityNone, 0},
 		// Now mode → never flexible, regardless of plan
-		{api.ModeNow, api.StatusC, false, 0},
+		{api.ModeNow, api.StatusC, false, api.PriorityNone, 0},
 	} {
 		t.Run("", func(t *testing.T) {
 			lp := NewLoadpoint(util.NewLogger("foo"), nil)
@@ -251,6 +257,7 @@ func TestGetChargePowerFlexibility(t *testing.T) {
 			lp.status = tc.status
 			lp.chargePower = 2700
 			lp.planActive = tc.planActive
+			lp.priorityStrategy = tc.strategy
 			// EffectiveMinPower() = 230V * 6A * 1phase = 1380W
 			lp.minCurrent = 6
 			lp.phases = 1
