@@ -1024,7 +1024,12 @@ func (site *Site) update(lp updater) {
 	// prioritize if possible
 	var flexiblePower float64
 	if lp != nil && lp.GetMode() == api.ModePV {
-		flexiblePower = site.prioritizer.GetChargePowerFlexibility(lp)
+		// power reachable by all loadpoints (current charge power plus any grid
+		// export, or minus any import) - lets the prioritizer decide whether a
+		// lower-priority peer can be kept at its minimum or must yield its slot.
+		available := totalChargePower - site.gridPower
+		share := lp.GetPriorityStrategy() != api.PriorityNone
+		flexiblePower = site.prioritizer.GetChargePowerFlexibility(lp, available, share)
 	}
 
 	if sitePower, batteryBuffered, batteryStart, err := site.sitePower(totalChargePower, flexiblePower); err == nil {

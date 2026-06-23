@@ -31,7 +31,21 @@ func (p *Prioritizer) UpdateChargePowerFlexibility(lp loadpoint.API, rates api.R
 	}
 }
 
-func (p *Prioritizer) GetChargePowerFlexibility(lp loadpoint.API) float64 {
+// GetChargePowerFlexibility returns the power lp may reclaim from lower-priority
+// peers. available is the total power currently reachable by all loadpoints
+// (charge power minus grid draw). When share is set (lp runs a sub-ordering
+// strategy) it selects between two regimes per peer:
+//
+//   - sharing: when available covers both lp's and the peer's minimum, only the
+//     peer's above-minimum power is reclaimed so the peer keeps charging at its
+//     minimum - both loadpoints run from surplus with no grid import.
+//   - displacement: when available cannot cover both minimums, the peer's full
+//     power is reclaimed so the higher-priority loadpoint takes the single
+//     available slot (e.g. the emptier car under the soc strategy).
+//
+// With share unset the peer is always reclaimed fully, matching the original
+// priority-tier behavior.
+func (p *Prioritizer) GetChargePowerFlexibility(lp loadpoint.API, available float64, share bool) float64 {
 	// rank every candidate on a basis resolved per priority tier so the score
 	// fractions compared below share one scale (see effectiveBasis)
 	candidates := p.candidates(lp)
@@ -43,6 +57,11 @@ func (p *Prioritizer) GetChargePowerFlexibility(lp loadpoint.API) float64 {
 	// never weakens cross-tier (integer priority) ordering.
 	band := math.Min(float64(lp.GetPriorityHysteresis())/100, 0.99)
 
+	var lpMin float64
+	if share {
+		lpMin = lp.EffectiveMinPower()
+	}
+
 	var (
 		reduceBy float64
 		msg      string
@@ -51,8 +70,14 @@ func (p *Prioritizer) GetChargePowerFlexibility(lp loadpoint.API) float64 {
 	for other, power := range p.demand {
 		otherScore := other.EffectivePriorityScore(p.effectiveBasis(other, candidates))
 		if score-otherScore > band && power > 0 {
-			reduceBy += power
-			msg += fmt.Sprintf("%.0fW from %s at prio %.2f, ", power, other.GetTitle(), otherScore)
+			reclaim := power
+			// keep the peer at its minimum when both fit within the available
+			// power, otherwise reclaim it fully to free the single slot.
+			if share && other.GetMode() == api.ModePV && available >= lpMin+other.EffectiveMinPower() {
+				reclaim = max(0, power-other.EffectiveMinPower())
+			}
+			reduceBy += reclaim
+			msg += fmt.Sprintf("%.0fW from %s at prio %.2f, ", reclaim, other.GetTitle(), otherScore)
 		}
 	}
 
