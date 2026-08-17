@@ -31,6 +31,19 @@ func (m *mockSite) GetResidualPower() float64 {
 	return m.residualPower
 }
 
+// priority sub-ordering is a site-level setting; the embedded site.API is nil in tests
+func (m *mockSite) GetPriorityStrategy() api.PriorityStrategy {
+	return api.PriorityNone
+}
+
+func (m *mockSite) GetPriorityBasis() api.PriorityBasis {
+	return api.PriorityBasisPercent
+}
+
+func (m *mockSite) GetPriorityHysteresis() int {
+	return 0
+}
+
 func TestBoostPower(t *testing.T) {
 	Voltage = 230
 	lp := &Loadpoint{
