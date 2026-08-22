@@ -77,6 +77,40 @@ describe("batteryChargeWindows", () => {
     expect(batteryChargeWindows(e)).toEqual([]);
   });
 
+  it("does not credit grid import to the battery when household load already consumes it", () => {
+    const e = evopt({
+      req: { time_series: { dt, gt: [200, 200, 0, 0] } },
+      res: {
+        batteries: [{ charging_power: [500, 0, 0, 0], discharging_power: [0, 0, 0, 0] }],
+        grid_import: [200, 200, 0, 0], // fully consumed by household load
+        grid_export: [0, 0, 0, 0],
+      },
+      details: {
+        timestamp,
+        batteryDetails: [{ type: "battery", name: "bat1", title: "Anker", capacity: 10 }],
+      },
+    } as unknown as Partial<EvOpt>);
+
+    expect(batteryChargeWindows(e)).toEqual([]);
+  });
+
+  it("credits only the grid import left over after household load to battery charging", () => {
+    const e = evopt({
+      req: { time_series: { dt, gt: [200, 0, 0, 0] } },
+      res: {
+        batteries: [{ charging_power: [500, 0, 0, 0], discharging_power: [0, 0, 0, 0] }],
+        grid_import: [700, 0, 0, 0], // 200 household + 500 battery
+        grid_export: [0, 0, 0, 0],
+      },
+      details: {
+        timestamp,
+        batteryDetails: [{ type: "battery", name: "bat1", title: "Anker", capacity: 10 }],
+      },
+    } as unknown as Partial<EvOpt>);
+
+    expect(batteryChargeWindows(e)).toEqual([{ start: t(timestamp[0]!), end: t(timestamp[1]!) }]);
+  });
+
   it("returns empty for missing optimizer data", () => {
     expect(batteryChargeWindows(undefined)).toEqual([]);
   });

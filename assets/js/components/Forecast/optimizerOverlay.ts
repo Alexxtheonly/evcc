@@ -47,15 +47,29 @@ function collapse(slots: TimeWindow[], active: boolean[]): TimeWindow[] {
   return windows;
 }
 
-// batteryChargeWindows returns the slots where a home battery is charged from the grid
+// batteryChargeWindows returns the slots where a home battery is charged from the
+// grid. grid_import is a single netted figure per slot covering household load,
+// vehicle charging and battery charging together, so a slot isn't "battery grid
+// charge" just because grid_import and battery charging_power are both nonzero -
+// the import may be fully explained by non-battery consumption (e.g. household
+// load covered by grid while the battery charges from PV surplus). Only the
+// import left over after household load and vehicle charging is attributable to
+// the battery.
 export function batteryChargeWindows(evopt: EvOpt | undefined): TimeWindow[] {
   if (!evopt?.res?.batteries || !evopt.details?.batteryDetails) return [];
   const slots = slotBounds(evopt);
   const details = evopt.details.batteryDetails;
   const gridImport = evopt.res.grid_import || [];
+  const householdDemand = evopt.req?.time_series?.gt || [];
 
   const active = slots.map((_, i) => {
-    if ((gridImport[i] || 0) <= 0) return false;
+    const nonBatteryLoad =
+      (householdDemand[i] || 0) +
+      details.reduce((sum, d, bi) => {
+        if (d.type !== "vehicle") return sum;
+        return sum + (evopt.res.batteries[bi]?.charging_power?.[i] || 0);
+      }, 0);
+    if ((gridImport[i] || 0) - nonBatteryLoad <= 0) return false;
     return details.some((d, bi) => {
       if (d.type !== "battery") return false;
       return (evopt.res.batteries[bi]?.charging_power?.[i] || 0) > ACTIVE_THRESHOLD;
