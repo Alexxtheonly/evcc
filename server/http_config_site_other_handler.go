@@ -29,6 +29,10 @@ func setOptimizerAutomatic(pub publisher, site *core.Site) func(bool) error {
 		settings.SetBool(keys.OptimizerAutomatic, b)
 		pub(keys.OptimizerAutomatic, b)
 
+		// a pre-toggle damped mode/pending candidate must not survive the
+		// toggle and confirm itself against a post-toggle run
+		site.ResetOptimizerBatteryMode()
+
 		// suggestions become control decisions, don't wait for the next slot
 		site.Optimize()
 

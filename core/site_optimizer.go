@@ -221,6 +221,134 @@ func currentSlotSuggestion(detail batteryDetail, cfg optimizer.BatteryConfig, re
 	return s
 }
 
+// optimizerBatteryModeConfirmDelay is the minimum age of a pending mode
+// candidate before a later run may confirm it. Automatic mode runs the
+// optimizer on every control-loop cycle (~30s, see core/site.go:1478's
+// documented minimum interval) rather than once per tariff slot, so
+// consecutive runs are not independent observations by themselves — a
+// degenerate LP optimum on a flat price plateau can tip either way run to
+// run. Two runs 5 min apart is now ~10 agreeing cycles, not the "a forced
+// re-run seconds later" scenario the slot-cadence version guarded against.
+const optimizerBatteryModeConfirmDelay = 5 * time.Minute
+
+// optimizerBatteryModeValidity bounds how long a pending candidate may wait
+// for a confirming run before being treated as a fresh observation, and
+// doubles as the staleness bound for the applied mode once runs stop landing
+// altogether (the optimizer HTTP client alone times out after 90s, see
+// optimizerUpdateAsync). It must exceed optimizerBatteryModeConfirmDelay to
+// leave a confirmation window at all; one minute (~2 cycles) is enough
+// headroom since a run is attempted every cycle.
+const optimizerBatteryModeValidity = optimizerBatteryModeConfirmDelay + time.Minute
+
+// optimizerBatteryModeDisagreementLimit bounds how long an applied active mode
+// may stay unconfirmed while runs keep deriving something else before it is
+// de-escalated to normal instead of being frozen by the confirmation logic.
+// At slot cadence this was 40 min (2x a 20 min validity); at cycle cadence
+// that would tolerate ~24 disagreeing runs for over ten minutes on a mode that
+// may be actively charging or holding the battery, so it scales down with the
+// new (much tighter) validity instead of keeping the old absolute value.
+const optimizerBatteryModeDisagreementLimit = 2 * optimizerBatteryModeValidity
+
+// batteryModeCandidate maps the suggestions from the current optimizer run
+// onto a raw (undamped) battery-mode candidate for the first controllable
+// battery.
+// TODO apply per battery once the site tracks more than a single battery mode
+func (site *Site) batteryModeCandidate(suggestions map[string]types.Suggestion) api.BatteryMode {
+	for _, dev := range site.batteryMeters {
+		if dev == nil {
+			continue
+		}
+
+		s, ok := suggestions[batteryKey(dev.Config().Name)]
+		if !ok {
+			continue
+		}
+
+		mode, err := api.BatteryModeString(s.Action)
+		if err != nil {
+			// discharging to grid has no matching battery mode
+			return api.BatteryNormal
+		}
+
+		return mode
+	}
+
+	return api.BatteryUnknown
+}
+
+// setOptimizerBatteryMode stores the damped battery-mode decision derived
+// from the latest optimizer run. A new active mode (including a switch
+// between two active modes) only takes effect once two runs at least
+// optimizerBatteryModeConfirmDelay apart agree, so a degenerate LP optimum on
+// a flat price plateau cannot flap the battery every cycle. Reverting to
+// Unknown — automatic disabled, no suggestion, or disagreeing batteries — is
+// never delayed.
+//
+// Must be called at most once per optimizer run (from applyOptimizerResult),
+// not at control-loop cadence: batterySuggestionMode reads the result far
+// more often than that and must not re-trigger this logic, or every read
+// would look like a fresh, independent observation and the confirmation
+// delay would never bind.
+func (site *Site) setOptimizerBatteryMode(candidate api.BatteryMode) {
+	site.Lock()
+	defer site.Unlock()
+
+	now := time.Now()
+
+	apply := func(mode api.BatteryMode) {
+		site.optimizerBatteryMode = mode
+		site.optimizerBatteryModeConfirmedAt = now
+		site.optimizerBatteryModePending = api.BatteryUnknown
+	}
+
+	site.optimizerBatteryModeUpdated = now
+
+	switch {
+	case !site.Automatic():
+		// automatic mode may have been disabled between deriving and storing
+		// the candidate; re-check the flag inside the critical section
+		apply(api.BatteryUnknown)
+	case candidate == api.BatteryUnknown:
+		apply(api.BatteryUnknown)
+	case candidate == site.optimizerBatteryMode:
+		apply(candidate)
+	case candidate == site.optimizerBatteryModePending:
+		if age := now.Sub(site.optimizerBatteryModePendingSince); age >= optimizerBatteryModeConfirmDelay && age <= optimizerBatteryModeValidity {
+			apply(candidate)
+		} else if age > optimizerBatteryModeValidity {
+			// candidate went stale before confirming: treat as a fresh observation
+			site.optimizerBatteryModePendingSince = now
+		}
+	default:
+		site.optimizerBatteryModePending = candidate
+		site.optimizerBatteryModePendingSince = now
+	}
+
+	// persistent disagreement: runs keep deriving something else than the
+	// applied active mode. De-escalate instead of freezing — a frozen charge
+	// mode would keep buying energy on the strength of an arbitrarily old
+	// observation.
+	if site.optimizerBatteryMode != api.BatteryUnknown && site.optimizerBatteryMode != api.BatteryNormal &&
+		!site.optimizerBatteryModeConfirmedAt.IsZero() &&
+		now.Sub(site.optimizerBatteryModeConfirmedAt) > optimizerBatteryModeDisagreementLimit {
+		apply(api.BatteryNormal)
+	}
+}
+
+// ResetOptimizerBatteryMode clears the damped battery-mode decision and any
+// pending candidate. Call when automatic mode is toggled so a stale
+// pre-toggle observation cannot confirm a mode once the setting flips back.
+func (site *Site) ResetOptimizerBatteryMode() {
+	site.Lock()
+	defer site.Unlock()
+
+	site.optimizerBatteryMode = api.BatteryUnknown
+	site.optimizerBatteryModeUpdated = time.Time{}
+	site.optimizerBatteryModeConfirmedAt = time.Time{}
+	site.optimizerBatteryModePending = api.BatteryUnknown
+	site.optimizerBatteryModePendingSince = time.Time{}
+}
+
 // loadpointCurrentAction returns the loadpoint's current operating mode for
 // suggestion comparison, reusing chargeGoalReached so a loadpoint left
 // enabled while idle (e.g. vehicle finished at its limit) is treated as
@@ -301,6 +429,7 @@ func (site *Site) publishSuggestions() {
 func (site *Site) clearSuggestions() {
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
+	site.setOptimizerBatteryMode(api.BatteryUnknown)
 
 	site.publishBattery()
 	site.publishSuggestions()
@@ -716,6 +845,10 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 
 	site.setSuggestions(suggestions)
 	site.setBatteryForecast(site.addBatteryForecastTotals(req.Batteries, res.Batteries))
+
+	// derive and damp the battery mode to apply from the home battery
+	// suggestions; setOptimizerBatteryMode re-checks Automatic() under lock
+	site.setOptimizerBatteryMode(site.batteryModeCandidate(suggestions))
 
 	site.publishBattery()
 

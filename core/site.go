@@ -120,6 +120,15 @@ type Site struct {
 	suggestionsUpdated       time.Time                   // time the suggestions were applied
 	suggestionActions        map[string]string           // last notified actionable optimizer action by device key
 
+	// optimizerBatteryMode is the damped battery-mode decision derived once per
+	// optimizer run (in applyOptimizerResult); see setOptimizerBatteryMode.
+	// batterySuggestionMode (called at control-loop cadence) only ever reads it.
+	optimizerBatteryMode             api.BatteryMode // last confirmed battery mode decision
+	optimizerBatteryModeUpdated      time.Time       // time of the last optimizer run, any outcome
+	optimizerBatteryModeConfirmedAt  time.Time       // time optimizerBatteryMode was last (re)confirmed
+	optimizerBatteryModePending      api.BatteryMode // candidate mode awaiting confirmation
+	optimizerBatteryModePendingSince time.Time       // time the pending candidate was first observed
+
 	optimizerMu      sync.Mutex                     // guards optimizer runs
 	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu
 	optimizerClient  *optimizer.ClientWithResponses // cached api client for connection reuse, guarded by optimizerMu

@@ -142,32 +142,25 @@ func (site *Site) unmodelledCharging() bool {
 	return false
 }
 
-// batterySuggestionMode returns the optimizer's mode for the first controllable battery.
-// TODO apply per battery once the site tracks more than a single battery mode
+// batterySuggestionMode returns the damped optimizer battery-mode decision
+// from the last optimizer run, or false if there is none or it has gone
+// stale. The decision is derived and damped once per run in
+// setOptimizerBatteryMode; this only reads it, since requiredBatteryMode (and
+// hence this function) runs at control-loop cadence and must not treat every
+// call as a fresh, independent observation — see setOptimizerBatteryMode.
 func (site *Site) batterySuggestionMode() (api.BatteryMode, bool) {
-	for _, dev := range site.batteryMeters {
-		if dev == nil {
-			continue
-		}
+	site.RLock()
+	defer site.RUnlock()
 
-		name := dev.Config().Name
-
-		s := site.suggestion(batteryKey(name), site.GetBatteryMode().String())
-		if s == nil {
-			continue
-		}
-
-		mode, err := api.BatteryModeString(s.Action)
-		if err != nil {
-			// discharging to grid has no matching battery mode
-			site.log.DEBUG.Printf("battery %s: cannot apply suggestion %s", name, s.Action)
-			return api.BatteryNormal, true
-		}
-
-		return mode, true
+	if site.optimizerBatteryMode == api.BatteryUnknown {
+		return api.BatteryUnknown, false
 	}
 
-	return api.BatteryUnknown, false
+	if time.Since(site.optimizerBatteryModeUpdated) > optimizerBatteryModeValidity {
+		return api.BatteryUnknown, false
+	}
+
+	return site.optimizerBatteryMode, true
 }
 
 // batteryMaxSocReached checks is battery has exceed max soc limit

@@ -601,6 +601,13 @@ func (site *Site) SetBatteryModeExternal(mode api.BatteryMode) error {
 
 	disable := mode == api.BatteryUnknown
 
+	if !disable {
+		// external control takes over: a pending optimizer candidate from
+		// before the takeover must not confirm a mode once external control ends
+		site.optimizerBatteryModePending = api.BatteryUnknown
+		site.optimizerBatteryModePendingSince = time.Time{}
+	}
+
 	if mode != site.batteryModeExternal {
 		site.batteryModeExternal = mode
 		site.publish(keys.BatteryModeExternal, mode)

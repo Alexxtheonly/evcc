@@ -252,17 +252,19 @@ func TestBatteryModeAutomatic(t *testing.T) {
 		batteryMeters: []config.Device[api.Meter]{config.NewStaticDevice(config.Named{Name: "bat"}, bat)},
 	}
 
-	// optimizer decides to grid charge, replacing the grid charge limit
-	site.setSuggestions(map[string]types.Suggestion{
-		batteryKey("bat"): {Action: api.BatteryCharge.String()},
-	})
+	// optimizer decides to grid charge, replacing the grid charge limit; two
+	// runs at least optimizerBatteryModeConfirmDelay apart must agree before
+	// the damped decision takes effect (see setOptimizerBatteryMode)
+	site.setOptimizerBatteryMode(api.BatteryCharge)
+	site.optimizerBatteryModePendingSince = time.Now().Add(-optimizerBatteryModeConfirmDelay - time.Second)
+	site.setOptimizerBatteryMode(api.BatteryCharge)
 
 	batCon.EXPECT().SetBatteryMode(api.BatteryCharge)
 	site.updateBatteryMode(false, api.Rate{})
 	assert.Equal(t, api.BatteryCharge, site.GetBatteryMode())
 
 	// a stalled optimizer releases the battery
-	site.suggestionsUpdated = time.Now().Add(-suggestionMaxAge - time.Minute)
+	site.optimizerBatteryModeUpdated = time.Now().Add(-optimizerBatteryModeValidity - time.Minute)
 
 	batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
 	site.updateBatteryMode(false, api.Rate{})
