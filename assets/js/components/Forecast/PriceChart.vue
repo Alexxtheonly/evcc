@@ -126,19 +126,25 @@ export default defineComponent({
 		},
 		overlayMarkArea(): Record<string, unknown> | undefined {
 			const regions: { start: number; end: number; color: string }[] = [];
+			// drop windows that ended before the visible range - clamping only the
+			// start (and not dropping these) can hand echarts a region with
+			// end < start when the optimizer stalls longer than one slot
+			const isFuture = (w: TimeWindow) => w.end > this.startDate.getTime();
 			const clamp = (w: TimeWindow) => ({
 				start: clampStart(w.start, this.startDate),
-				end: w.end,
+				end: clampStart(w.end, this.startDate),
 			});
 
-			this.batteryChargeWindows.forEach((w) =>
-				regions.push({ ...clamp(w), color: dimColor(colors.grid) || "" })
-			);
-			this.batteryDischargeWindows.forEach((w) =>
-				regions.push({ ...clamp(w), color: dimColor(batteryColor(0)) || "" })
-			);
+			this.batteryChargeWindows
+				.filter(isFuture)
+				.forEach((w) => regions.push({ ...clamp(w), color: dimColor(colors.grid) || "" }));
+			this.batteryDischargeWindows
+				.filter(isFuture)
+				.forEach((w) =>
+					regions.push({ ...clamp(w), color: dimColor(batteryColor(0)) || "" })
+				);
 			this.vehicleWindows.forEach(({ key, windows }) =>
-				windows.forEach((w) =>
+				windows.filter(isFuture).forEach((w) =>
 					regions.push({
 						...clamp(w),
 						color: dimColor(this.vehicleColors[key] || null) || "",
