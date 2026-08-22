@@ -152,3 +152,45 @@ func TestRunOrErrorStopsGoroutineOnStartupFailure(t *testing.T) {
 		t.Fatal("run goroutine still alive after startup failure (goroutine leak)")
 	}
 }
+
+// calcErrRunner mirrors a real tariff run loop past the point where the fetch has already
+// succeeded: it fails in the per-item calc step instead (e.g. a custom formula), which is a
+// second, independent error source from the fetch error leakRunner covers above. Every
+// provider's run() must route this through reportError exactly like a fetch error - logging
+// it and continuing was the actual bug (a formula error deterministically fails again on the
+// next tick, so once never fires, done is never written, and runOrError blocks forever).
+type calcErrRunner struct {
+	exited chan struct{}
+}
+
+func (r *calcErrRunner) run(done chan error) {
+	defer close(r.exited)
+
+	var once sync.Once
+	for tick := time.Tick(time.Hour); ; <-tick {
+		// fetch succeeds; only the calc step fails
+		if reportError(&once, done, errors.New("formula error")) {
+			return
+		}
+		// without the fix (log-and-continue, no reportError call) the goroutine would
+		// block on <-tick here forever, exactly like the fetch-error leak above
+	}
+}
+
+// TestRunOrErrorStopsGoroutineOnFormulaError asserts that a calc/formula error on the first
+// tick is propagated from tariff construction, and stops the background goroutine, the same
+// way a fetch error already did before this fix.
+func TestRunOrErrorStopsGoroutineOnFormulaError(t *testing.T) {
+	r := &calcErrRunner{exited: make(chan struct{})}
+
+	res, err := runOrError(r)
+	require.Error(t, err, "formula error must be propagated")
+	require.Nil(t, res, "tariff must not be returned when the formula fails on startup")
+
+	select {
+	case <-r.exited:
+		// goroutine returned - no leak
+	case <-time.After(time.Second):
+		t.Fatal("run goroutine still alive after formula error on startup (goroutine leak / deadlock)")
+	}
+}

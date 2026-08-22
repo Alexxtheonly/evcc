@@ -100,18 +100,20 @@ func (t *EdfTempo) refreshToken() (*oauth2.Token, error) {
 	return util.TokenWithExpiry(&res), err
 }
 
+// edfTempoValue is a single day's color entry from the tempo_like_calendars API
+type edfTempoValue struct {
+	StartDate time.Time `json:"start_date"`
+	EndDate   time.Time `json:"end_date"`
+	Value     string    `json:"value"`
+}
+
 func (t *EdfTempo) run(done chan error) {
 	var once sync.Once
 
-tick:
 	for tick := time.Tick(time.Hour); ; <-tick {
 		var res struct {
 			Data struct {
-				Values []struct {
-					StartDate time.Time `json:"start_date"`
-					EndDate   time.Time `json:"end_date"`
-					Value     string    `json:"value"`
-				} `json:"values"`
+				Values []edfTempoValue `json:"values"`
 			} `json:"tempo_like_calendars"`
 		}
 
@@ -133,25 +135,39 @@ tick:
 			continue
 		}
 
-		data := make(api.Rates, 0, 24*len(res.Data.Values))
-		for _, r := range res.Data.Values {
-			for ts := r.StartDate.Local(); ts.Before(r.EndDate); ts = ts.Add(time.Hour) {
-				value, err := t.totalPrice(t.prices[strings.ToLower(r.Value)], ts)
-				if err != nil {
-					t.log.ERROR.Println(err)
-					continue tick
-				}
-				data = append(data, api.Rate{
-					Start: ts,
-					End:   ts.Add(time.Hour),
-					Value: value,
-				})
+		data, err := t.rates(res.Data.Values)
+		if err != nil {
+			if reportError(&once, done, err) {
+				return
 			}
+
+			t.log.ERROR.Println(err)
+			continue
 		}
 
 		mergeRates(t.data, data)
 		once.Do(func() { close(done) })
 	}
+}
+
+// rates converts raw edf-tempo calendar values into api.Rates, applying the configured
+// formula/charges/tax
+func (t *EdfTempo) rates(raw []edfTempoValue) (api.Rates, error) {
+	data := make(api.Rates, 0, 24*len(raw))
+	for _, r := range raw {
+		for ts := r.StartDate.Local(); ts.Before(r.EndDate); ts = ts.Add(time.Hour) {
+			value, err := t.totalPrice(t.prices[strings.ToLower(r.Value)], ts)
+			if err != nil {
+				return nil, err
+			}
+			data = append(data, api.Rate{
+				Start: ts,
+				End:   ts.Add(time.Hour),
+				Value: value,
+			})
+		}
+	}
+	return data, nil
 }
 
 // Rates implements the api.Tariff interface

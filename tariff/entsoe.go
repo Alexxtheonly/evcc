@@ -151,28 +151,36 @@ func (t *Entsoe) run(done chan error) {
 			continue
 		}
 
-		data := make(api.Rates, 0, len(res))
-		var calcErr error
-		for _, r := range res {
-			value, err := t.totalPrice(r.Value, r.Start)
-			if err != nil {
-				calcErr = err
-				break
+		data, err := t.rates(res)
+		if err != nil {
+			if reportError(&once, done, err) {
+				return
 			}
-			data = append(data, api.Rate{
-				Start: r.Start.Local(),
-				End:   r.End.Local(),
-				Value: value,
-			})
-		}
-		if calcErr != nil {
-			t.log.ERROR.Println(calcErr)
+
+			t.log.ERROR.Println(err)
 			continue
 		}
 
 		mergeRates(t.data, data)
 		once.Do(func() { close(done) })
 	}
+}
+
+// rates converts raw entsoe prices into api.Rates, applying the configured formula/charges/tax
+func (t *Entsoe) rates(raw []entsoe.Rate) (api.Rates, error) {
+	data := make(api.Rates, 0, len(raw))
+	for _, r := range raw {
+		value, err := t.totalPrice(r.Value, r.Start)
+		if err != nil {
+			return nil, err
+		}
+		data = append(data, api.Rate{
+			Start: r.Start.Local(),
+			End:   r.End.Local(),
+			Value: value,
+		})
+	}
+	return data, nil
 }
 
 // Rates implements the api.Tariff interface

@@ -64,32 +64,41 @@ func (t *SmartEnergy) run(done chan error) {
 			continue
 		}
 
-		data := make(api.Rates, 0, len(res.Data))
-		var calcErr error
-		for _, r := range res.Data {
-			if r.Date.Minute() != 0 {
-				continue
+		data, err := t.rates(res.Data)
+		if err != nil {
+			if reportError(&once, done, err) {
+				return
 			}
 
-			value, err := t.totalPrice(r.Value/100, r.Date)
-			if err != nil {
-				calcErr = err
-				break
-			}
-			data = append(data, api.Rate{
-				Start: r.Date.Local(),
-				End:   r.Date.Add(time.Hour).Local(),
-				Value: value,
-			})
-		}
-		if calcErr != nil {
-			t.log.ERROR.Println(calcErr)
+			t.log.ERROR.Println(err)
 			continue
 		}
 
 		mergeRates(t.data, data)
 		once.Do(func() { close(done) })
 	}
+}
+
+// rates converts raw smartenergy prices into api.Rates, applying the configured
+// formula/charges/tax
+func (t *SmartEnergy) rates(raw []smartenergy.Price) (api.Rates, error) {
+	data := make(api.Rates, 0, len(raw))
+	for _, r := range raw {
+		if r.Date.Minute() != 0 {
+			continue
+		}
+
+		value, err := t.totalPrice(r.Value/100, r.Date)
+		if err != nil {
+			return nil, err
+		}
+		data = append(data, api.Rate{
+			Start: r.Date.Local(),
+			End:   r.Date.Add(time.Hour).Local(),
+			Value: value,
+		})
+	}
+	return data, nil
 }
 
 // Rates implements the api.Tariff interface

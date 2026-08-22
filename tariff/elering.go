@@ -80,30 +80,38 @@ func (t *Elering) run(done chan error) {
 			continue
 		}
 
-		data := make(api.Rates, 0, len(res.Data[t.region]))
-		var calcErr error
-		for _, r := range res.Data[t.region] {
-			ts := time.Unix(r.Timestamp, 0).Local()
-
-			value, err := t.totalPrice(r.Price/1e3, ts)
-			if err != nil {
-				calcErr = err
-				break
+		data, err := t.rates(res.Data[t.region])
+		if err != nil {
+			if reportError(&once, done, err) {
+				return
 			}
-			data = append(data, api.Rate{
-				Start: ts,
-				End:   ts.Add(time.Hour),
-				Value: value,
-			})
-		}
-		if calcErr != nil {
-			t.log.ERROR.Println(calcErr)
+
+			t.log.ERROR.Println(err)
 			continue
 		}
 
 		mergeRates(t.data, data)
 		once.Do(func() { close(done) })
 	}
+}
+
+// rates converts raw elering prices into api.Rates, applying the configured formula/charges/tax
+func (t *Elering) rates(raw []elering.Price) (api.Rates, error) {
+	data := make(api.Rates, 0, len(raw))
+	for _, r := range raw {
+		ts := time.Unix(r.Timestamp, 0).Local()
+
+		value, err := t.totalPrice(r.Price/1e3, ts)
+		if err != nil {
+			return nil, err
+		}
+		data = append(data, api.Rate{
+			Start: ts,
+			End:   ts.Add(time.Hour),
+			Value: value,
+		})
+	}
+	return data, nil
 }
 
 // Rates implements the api.Tariff interface

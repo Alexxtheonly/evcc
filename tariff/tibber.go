@@ -103,11 +103,19 @@ func (t *Tibber) run(done chan error) {
 		pi := res.Viewer.Home.CurrentSubscription.PriceInfo
 		today, err := t.rates(pi.Today)
 		if err != nil {
+			if reportError(&once, done, err) {
+				return
+			}
+
 			t.log.ERROR.Println(err)
 			continue
 		}
 		tomorrow, err := t.rates(pi.Tomorrow)
 		if err != nil {
+			if reportError(&once, done, err) {
+				return
+			}
+
 			t.log.ERROR.Println(err)
 			continue
 		}

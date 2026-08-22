@@ -78,28 +78,36 @@ func (t *Awattar) run(done chan error) {
 			continue
 		}
 
-		data := make(api.Rates, 0, len(res.Data))
-		var calcErr error
-		for _, r := range res.Data {
-			value, err := t.totalPrice(r.Marketprice/1e3, r.StartTimestamp)
-			if err != nil {
-				calcErr = err
-				break
+		data, err := t.rates(res.Data)
+		if err != nil {
+			if reportError(&once, done, err) {
+				return
 			}
-			data = append(data, api.Rate{
-				Start: r.StartTimestamp.Local(),
-				End:   r.EndTimestamp.Local(),
-				Value: value,
-			})
-		}
-		if calcErr != nil {
-			t.log.ERROR.Println(calcErr)
+
+			t.log.ERROR.Println(err)
 			continue
 		}
 
 		mergeRates(t.data, data)
 		once.Do(func() { close(done) })
 	}
+}
+
+// rates converts raw awattar prices into api.Rates, applying the configured formula/charges/tax
+func (t *Awattar) rates(raw []awattar.PriceInfo) (api.Rates, error) {
+	data := make(api.Rates, 0, len(raw))
+	for _, r := range raw {
+		value, err := t.totalPrice(r.Marketprice/1e3, r.StartTimestamp)
+		if err != nil {
+			return nil, err
+		}
+		data = append(data, api.Rate{
+			Start: r.StartTimestamp.Local(),
+			End:   r.EndTimestamp.Local(),
+			Value: value,
+		})
+	}
+	return data, nil
 }
 
 // Rates implements the api.Tariff interface

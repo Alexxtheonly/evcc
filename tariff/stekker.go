@@ -86,7 +86,6 @@ func (t *Stekker) run(done chan error) {
 	var once sync.Once
 	client := request.NewHelper(t.log)
 
-tick:
 	for tick := time.Tick(time.Hour); ; <-tick {
 		url := fmt.Sprintf("%s?advanced_view=&region=%s&unit=MWh", stekkerURI, t.region)
 		resp, err := client.Get(url)
@@ -138,45 +137,59 @@ tick:
 			continue
 		}
 
-		var res api.Rates
-		for _, series := range data {
-			name, _ := series["name"].(string)
-			if !(strings.Contains(name, "Market") || strings.Contains(name, "Forecast")) {
-				continue
+		res, err := t.rates(data)
+		if err != nil {
+			if reportError(&once, done, err) {
+				return
 			}
 
-			xs, _ := series["x"].([]any)
-			ys, _ := series["y"].([]any)
-
-			for i := range xs {
-				xt, ok1 := xs[i].(string)
-				yt, ok2 := ys[i].(float64)
-				if !ok1 || !ok2 {
-					continue
-				}
-
-				start, err := time.Parse(time.RFC3339, xt)
-				if err != nil {
-					continue
-				}
-
-				value, err := t.totalPrice(yt/1000.0, start) // €/MWh → €/kWh
-				if err != nil {
-					t.log.ERROR.Println(err)
-					continue tick
-				}
-
-				res = append(res, api.Rate{
-					Start: start,
-					End:   start.Add(t.interval),
-					Value: value,
-				})
-			}
+			t.log.ERROR.Println(err)
+			continue
 		}
 
 		mergeRates(t.data, res)
 		once.Do(func() { close(done) })
 	}
+}
+
+// rates converts the raw stekker series data into api.Rates, applying the configured
+// formula/charges/tax
+func (t *Stekker) rates(data []map[string]any) (api.Rates, error) {
+	var res api.Rates
+	for _, series := range data {
+		name, _ := series["name"].(string)
+		if !(strings.Contains(name, "Market") || strings.Contains(name, "Forecast")) {
+			continue
+		}
+
+		xs, _ := series["x"].([]any)
+		ys, _ := series["y"].([]any)
+
+		for i := range xs {
+			xt, ok1 := xs[i].(string)
+			yt, ok2 := ys[i].(float64)
+			if !ok1 || !ok2 {
+				continue
+			}
+
+			start, err := time.Parse(time.RFC3339, xt)
+			if err != nil {
+				continue
+			}
+
+			value, err := t.totalPrice(yt/1000.0, start) // €/MWh → €/kWh
+			if err != nil {
+				return nil, err
+			}
+
+			res = append(res, api.Rate{
+				Start: start,
+				End:   start.Add(t.interval),
+				Value: value,
+			})
+		}
+	}
+	return res, nil
 }
 
 // Rates implements api.Tariff
