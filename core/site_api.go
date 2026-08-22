@@ -626,6 +626,45 @@ func (site *Site) SetOptimizerChargingStrategy(strategy string) error {
 	return nil
 }
 
+// GetOptimizerBatteryControl returns whether optimizer battery suggestions are applied to the home battery
+func (site *Site) GetOptimizerBatteryControl() bool {
+	site.RLock()
+	defer site.RUnlock()
+	return site.optimizerBatteryControl
+}
+
+// SetOptimizerBatteryControl sets whether optimizer battery suggestions are applied to the home battery
+func (site *Site) SetOptimizerBatteryControl(val bool) error {
+	if !site.hasBatteryControl() {
+		return ErrBatteryControlNotAvailable
+	}
+
+	site.Lock()
+	changed := site.optimizerBatteryControl != val
+	if changed {
+		site.optimizerBatteryControl = val
+		if !val {
+			// forget the stored mode so control stops immediately
+			site.optimizerBatteryMode = api.BatteryUnknown
+			site.optimizerBatteryModeUpdated = time.Time{}
+		}
+	}
+	site.Unlock()
+
+	if changed {
+		site.log.DEBUG.Println("set optimizer battery control:", val)
+		settings.SetBool(keys.OptimizerBatteryControl, val)
+		site.publish(keys.OptimizerBatteryControl, val)
+
+		if val {
+			// re-run the optimizer so control takes effect immediately
+			go site.optimizerUpdateAsync(0)
+		}
+	}
+
+	return nil
+}
+
 // GetBatteryMode returns the battery mode
 func (site *Site) GetBatteryMode() api.BatteryMode {
 	site.RLock()

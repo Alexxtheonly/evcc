@@ -35,6 +35,7 @@ import (
 	"github.com/evcc-io/evcc/util/config"
 	"github.com/evcc-io/evcc/util/modbus"
 	"github.com/evcc-io/evcc/util/telemetry"
+	optimizer "github.com/evcc-io/optimizer/client"
 	"github.com/jinzhu/now"
 	"github.com/samber/lo"
 	"github.com/smallnest/chanx"
@@ -101,6 +102,7 @@ type Site struct {
 
 	// optimizer settings
 	optimizerChargingStrategy string // optimizer grid charging strategy
+	optimizerBatteryControl   bool   // apply optimizer battery suggestions to the home battery
 
 	loadpoints  []*Loadpoint             // Loadpoints
 	tariffs     *tariff.Tariffs          // Tariffs
@@ -122,8 +124,12 @@ type Site struct {
 	suggestions              map[string]types.Suggestion // Optimizer suggestions by device key
 	suggestionActions        map[string]string           // last notified actionable optimizer action by device key
 
-	optimizerMu      sync.Mutex // guards optimizer runs
-	optimizerUpdated time.Time  // last optimizer run, guarded by optimizerMu
+	optimizerBatteryMode        api.BatteryMode // vetted battery mode of the last optimizer run, guarded by RWMutex
+	optimizerBatteryModeUpdated time.Time       // when the vetted battery mode was stored, guarded by RWMutex
+
+	optimizerMu      sync.Mutex                     // guards optimizer runs
+	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu
+	optimizerClient  *optimizer.ClientWithResponses // cached api client for connection reuse, guarded by optimizerMu
 
 	solarScaleCached func() (float64, error) // util.Cached wrapper around querySolarScale
 }
@@ -495,6 +501,12 @@ func (site *Site) restoreSettings() error {
 	}
 	site.publish(keys.OptimizerChargingStrategy, site.GetOptimizerChargingStrategy())
 	site.publish(keys.OptimizerChargingStrategies, optimizerChargingStrategies)
+	if v, err := settings.Bool(keys.OptimizerBatteryControl); err == nil {
+		if err := site.SetOptimizerBatteryControl(v); err != nil && !errors.Is(err, ErrBatteryControlNotAvailable) {
+			return err
+		}
+	}
+	site.publish(keys.OptimizerBatteryControl, site.GetOptimizerBatteryControl())
 
 	// drop legacy accumulator-based forecast settings (now stored via metrics collector)
 	settings.Delete("solarAccForecast")
