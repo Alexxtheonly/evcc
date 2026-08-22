@@ -174,6 +174,8 @@ export interface State {
   authProviders?: AuthProviders;
   /** @internal */
   evopt?: EvOpt;
+  /** @internal */
+  optimizerDecision?: OptimizerDecision;
   /** Running evcc version. */
   version?: string;
   /** Latest available evcc version. */
@@ -1493,6 +1495,28 @@ export interface OptimizationDetails {
 // Error response
 export interface Error {
   message: string; // Error description
+}
+
+/** Reason the applied optimizer battery mode is not (fully) in effect. */
+export enum OPTIMIZER_VETO_REASON {
+  /** A grid charge would not pay back its round-trip losses plus margin. */
+  PAYBACK = "payback",
+  /** Controllable batteries derived conflicting actions, so none was applied. */
+  FORCED_IDLE = "forcedIdle",
+  /** A mode change is pending confirmation by a later optimizer run. */
+  DAMPING = "damping",
+  /** The live rate has moved past the price the decision was based on. */
+  LIVE_RATE = "liveRate",
+}
+
+/** Vetted outcome of the optimizer's last run, for the forecast view's slot-0 annotation. */
+export interface OptimizerDecision {
+  mode: BATTERY_MODE;
+  chargeVetoed: boolean;
+  vetoReason?: OPTIMIZER_VETO_REASON;
+  price?: number;
+  /** @format date-time */
+  updated: string;
 }
 
 // Tariff zone configuration
