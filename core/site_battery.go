@@ -80,7 +80,7 @@ func (site *Site) requiredBatteryMode(batteryGridChargeActive bool, rate api.Rat
 	var res api.BatteryMode
 	batMode := site.GetBatteryMode()
 	extMode := site.GetBatteryModeExternal()
-	optMode := site.optimizerBatteryModeActive()
+	optMode := site.optimizerBatteryModeActive(rate)
 
 	var extModeReset bool
 	if extMode == api.BatteryUnknown {
@@ -108,7 +108,9 @@ func (site *Site) requiredBatteryMode(batteryGridChargeActive bool, rate api.Rat
 		// follow the optimizer plan while it is fresh; a stale optimizer result
 		// clears optMode and control falls through to the cases below
 		res = keepUnlessModified(optMode)
-	case batteryGridChargeActive:
+	case batteryGridChargeActive && !site.optimizerChargeVetoActive():
+		// the price threshold decides on the current rate alone; a fresh optimizer
+		// run that declined to grid charge must not be overruled by it
 		res = keepUnlessModified(api.BatteryCharge)
 	case site.dischargeControlActive(rate):
 		res = keepUnlessModified(api.BatteryHold)

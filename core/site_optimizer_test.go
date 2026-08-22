@@ -445,6 +445,9 @@ func TestBlendScale(t *testing.T) {
 }
 
 func TestCurrentSlotSuggestion(t *testing.T) {
+	// BYD-sized battery well between its SoC bounds
+	midSocConfig := optimizer.BatteryConfig{SCapacity: 19320, SMin: 966, SMax: 18354, SInitial: 10000}
+
 	// slotHours 1 makes the per-slot Wh values map 1:1 to W
 	for _, tc := range []struct {
 		name              string
@@ -469,7 +472,7 @@ func TestCurrentSlotSuggestion(t *testing.T) {
 				ChargingPower:    []float32{tc.charge},
 				DischargingPower: []float32{tc.disch},
 			}
-			s := currentSlotSuggestion(batteryDetail{Type: tc.typ}, res, tc.importing, tc.export, 1)
+			s := currentSlotSuggestion(batteryDetail{Type: tc.typ}, midSocConfig, res, tc.importing, tc.export, 1)
 			assert.Equal(t, tc.want, s.Action)
 			assert.InDelta(t, tc.charge, s.Charge, 1e-3)
 			assert.InDelta(t, tc.disch, s.Discharge, 1e-3)
@@ -477,7 +480,28 @@ func TestCurrentSlotSuggestion(t *testing.T) {
 	}
 
 	// no result yields an empty suggestion
-	assert.Empty(t, currentSlotSuggestion(batteryDetail{Type: batteryTypeBattery}, optimizer.BatteryResult{}, true, false, 1))
+	assert.Empty(t, currentSlotSuggestion(batteryDetail{Type: batteryTypeBattery}, midSocConfig, optimizer.BatteryResult{}, true, false, 1))
+
+	// a battery idling on a SoC bound is forced there, not making a choice:
+	// at SMin it cannot discharge, at SMax it cannot charge — deriving
+	// hold/holdcharge from a forced idle turns physics into phantom decisions
+	idle := optimizer.BatteryResult{ChargingPower: []float32{0}, DischargingPower: []float32{0}}
+
+	atMin := midSocConfig
+	atMin.SInitial = atMin.SMin
+	s := currentSlotSuggestion(batteryDetail{Type: batteryTypeBattery}, atMin, idle, true, false, 1)
+	assert.Equal(t, "normal", s.Action, "idle at SMin is forced, not hold")
+
+	atMax := midSocConfig
+	atMax.SInitial = atMax.SMax
+	s = currentSlotSuggestion(batteryDetail{Type: batteryTypeBattery}, atMax, idle, false, true, 1)
+	assert.Equal(t, "normal", s.Action, "idle at SMax is forced, not holdcharge")
+
+	// just outside the epsilon band the idle is a real decision again
+	nearMin := midSocConfig
+	nearMin.SInitial = nearMin.SMin + socBoundEpsilon(nearMin) + 1
+	s = currentSlotSuggestion(batteryDetail{Type: batteryTypeBattery}, nearMin, idle, true, false, 1)
+	assert.Equal(t, "hold", s.Action, "idle above the SMin band is a chosen hold")
 }
 
 // TestSuggestionActionable ensures the actionable flag follows the current state

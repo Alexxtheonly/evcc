@@ -163,12 +163,20 @@ func suggestionEvent(detail batteryDetail, s types.Suggestion) messenger.Event {
 	return ev
 }
 
+// socBoundEpsilon is the tolerance for treating a battery as sitting on one of
+// its SoC bounds, in Wh relative to its capacity.
+func socBoundEpsilon(cfg optimizer.BatteryConfig) float32 {
+	return max(cfg.SCapacity*0.01, 10)
+}
+
 // currentSlotSuggestion maps the optimizer's first-slot corner result onto an advisory action.
 // Because the optimization is linear, the first slot is at an operating-range extreme, so it
 // maps cleanly onto the discrete battery mode / loadpoint intent that control would later apply.
 // An idle battery is interpreted from the grid flow: importing means discharge is withheld
-// (hold), exporting means charging is withheld (holdcharge).
-func currentSlotSuggestion(detail batteryDetail, res optimizer.BatteryResult, gridImporting, gridExporting bool, slotHours float64) types.Suggestion {
+// (hold), exporting means charging is withheld (holdcharge). A battery idling on one of its
+// SoC bounds is forced there by physics, not by choice — at SMin it cannot discharge and at
+// SMax it cannot charge — so no hold/holdcharge intent is derived from it.
+func currentSlotSuggestion(detail batteryDetail, cfg optimizer.BatteryConfig, res optimizer.BatteryResult, gridImporting, gridExporting bool, slotHours float64) types.Suggestion {
 	if slotHours <= 0 || len(res.ChargingPower) == 0 || len(res.DischargingPower) == 0 {
 		return types.Suggestion{}
 	}
@@ -180,14 +188,16 @@ func currentSlotSuggestion(detail batteryDetail, res optimizer.BatteryResult, gr
 
 	if detail.Type == batteryTypeBattery {
 		idle := charge <= suggestionThreshold && discharge <= suggestionThreshold
+		atMin := cfg.SInitial <= cfg.SMin+socBoundEpsilon(cfg)
+		atMax := cfg.SInitial >= cfg.SMax-socBoundEpsilon(cfg)
 		switch {
 		case charge > suggestionThreshold && gridImporting:
 			// charging while importing means grid charging
 			s.Action = api.BatteryCharge.String()
-		case idle && gridImporting:
+		case idle && gridImporting && !atMin:
 			// idle while importing: discharge is deliberately withheld
 			s.Action = api.BatteryHold.String()
-		case idle && gridExporting:
+		case idle && gridExporting && !atMax:
 			// idle while exporting: surplus is exported instead of charged
 			s.Action = api.BatteryHoldCharge.String()
 		case discharge > suggestionThreshold && gridExporting:
@@ -241,18 +251,85 @@ func (site *Site) setBatteryForecast(forecast *types.BatteryForecast) {
 // means the optimizer is stale and battery control falls back to normal operation.
 const optimizerBatteryModeValidity = tariff.SlotDuration + 5*time.Minute
 
-// setOptimizerBatteryMode stores the vetted battery mode derived from the last optimizer run
-func (site *Site) setOptimizerBatteryMode(mode api.BatteryMode) {
+// optimizerBatteryModeConfirmDelay is the minimum age of a pending mode candidate
+// before a later run may confirm it. A forced re-run seconds after the first
+// observation sees the same data and is not independent evidence.
+const optimizerBatteryModeConfirmDelay = 5 * time.Minute
+
+// optimizerBatteryModeDisagreementLimit bounds how long an applied active mode may
+// stay unconfirmed while runs keep deriving something else. Beyond it the mode is
+// de-escalated to normal instead of being frozen by the confirmation logic.
+const optimizerBatteryModeDisagreementLimit = 2 * optimizerBatteryModeValidity
+
+// optimizerChargePriceTolerance (currency/kWh) is how far the live rate may exceed
+// the price a charge decision was based on before the decision is dropped.
+const optimizerChargePriceTolerance = 0.001
+
+// optimizerDecision is the vetted outcome of one optimizer run
+type optimizerDecision struct {
+	mode         api.BatteryMode
+	chargeVetoed bool    // a grid charge suggestion was declined by a gate
+	price        float64 // price (currency/kWh) underlying a charge decision
+}
+
+// setOptimizerBatteryMode stores the vetted decision derived from the last
+// optimizer run. Mode changes between active modes (and from/to normal) only
+// take effect when two runs sufficiently far apart agree, so degenerate LP
+// optima on flat price plateaus cannot flap the battery every slot. Reverting
+// to Unknown — the error, veto and disabled paths — is never delayed.
+func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 	site.Lock()
 	defer site.Unlock()
 
-	site.optimizerBatteryMode = mode
-	site.optimizerBatteryModeUpdated = time.Now()
+	now := time.Now()
+
+	apply := func(mode api.BatteryMode) {
+		site.optimizerBatteryMode = mode
+		site.optimizerBatteryModeConfirmedAt = now
+		site.optimizerBatteryModePending = api.BatteryUnknown
+		site.optimizerChargePrice = d.price
+	}
+
+	site.optimizerBatteryModeUpdated = now
+	site.optimizerChargeVetoed = d.chargeVetoed
+
+	switch {
+	case !site.optimizerBatteryControl:
+		// control may have been disabled between deriving and storing the decision
+		site.optimizerChargeVetoed = false
+		apply(api.BatteryUnknown)
+	case d.mode == api.BatteryUnknown:
+		apply(api.BatteryUnknown)
+	case d.mode == site.optimizerBatteryMode:
+		apply(d.mode)
+	case d.mode == site.optimizerBatteryModePending:
+		if age := now.Sub(site.optimizerBatteryModePendingSince); age >= optimizerBatteryModeConfirmDelay && age <= optimizerBatteryModeValidity {
+			apply(d.mode)
+		} else if age > optimizerBatteryModeValidity {
+			// candidate went stale between runs: treat as a fresh observation
+			site.optimizerBatteryModePendingSince = now
+		}
+	default:
+		site.optimizerBatteryModePending = d.mode
+		site.optimizerBatteryModePendingSince = now
+	}
+
+	// persistent disagreement: runs keep deriving something else than the applied
+	// active mode. De-escalate instead of freezing — a frozen charge mode would
+	// keep buying energy on the strength of an arbitrarily old observation.
+	if site.optimizerBatteryMode != api.BatteryUnknown && site.optimizerBatteryMode != api.BatteryNormal &&
+		!site.optimizerBatteryModeConfirmedAt.IsZero() &&
+		now.Sub(site.optimizerBatteryModeConfirmedAt) > optimizerBatteryModeDisagreementLimit {
+		apply(api.BatteryNormal)
+	}
 }
 
 // optimizerBatteryModeActive returns the battery mode to apply while optimizer
-// battery control is enabled and the last run is fresh, api.BatteryUnknown otherwise.
-func (site *Site) optimizerBatteryModeActive() api.BatteryMode {
+// battery control is enabled and the last run is fresh, api.BatteryUnknown
+// otherwise. A charge decision is additionally dropped when the live rate has
+// left the price it was based on — runs are not slot-aligned, so a slot boundary
+// (and a price step) can pass mid-decision.
+func (site *Site) optimizerBatteryModeActive(rate api.Rate) api.BatteryMode {
 	site.RLock()
 	defer site.RUnlock()
 
@@ -262,15 +339,35 @@ func (site *Site) optimizerBatteryModeActive() api.BatteryMode {
 	if time.Since(site.optimizerBatteryModeUpdated) > optimizerBatteryModeValidity {
 		return api.BatteryUnknown
 	}
+	if site.optimizerBatteryMode == api.BatteryCharge {
+		if rate.Value > site.optimizerChargePrice+optimizerChargePriceTolerance {
+			return api.BatteryUnknown
+		}
+		if limit := site.batteryGridChargeLimit; limit != nil && rate.Value > *limit {
+			return api.BatteryUnknown
+		}
+	}
 	return site.optimizerBatteryMode
 }
 
-// optimizerBatteryModeFromSuggestions maps the home battery suggestions onto the
-// battery mode to apply. Only controllable home batteries carry suggestions; when
+// optimizerChargeVetoActive reports whether a fresh optimizer run declined to
+// grid charge. The legacy price-threshold fallback decides on the current rate
+// alone and must not overrule the plan-informed decision.
+func (site *Site) optimizerChargeVetoActive() bool {
+	site.RLock()
+	defer site.RUnlock()
+
+	return site.optimizerBatteryControl && site.optimizerChargeVetoed &&
+		time.Since(site.optimizerBatteryModeUpdated) <= optimizerBatteryModeValidity
+}
+
+// optimizerDecisionFromSuggestions maps the home battery suggestions onto the
+// decision to apply. Only controllable home batteries carry suggestions; when
 // they disagree no mode is derived. Grid charging is additionally gated on the
 // forecast containing a slot expensive enough to recover the round-trip losses,
-// and on the configured grid charge limit when set.
-func optimizerBatteryModeFromSuggestions(suggestions map[string]types.Suggestion, details []batteryDetail, pn []float32, gridChargeLimit *float64) api.BatteryMode {
+// on the configured grid charge limit when set, and on the plan itself paying
+// the charged energy back with a margin.
+func optimizerDecisionFromSuggestions(suggestions map[string]types.Suggestion, details []batteryDetail, req optimizer.OptimizationInput, res optimizer.OptimizationResult, gridChargeLimit *float64) optimizerDecision {
 	mode := api.BatteryUnknown
 
 	for _, detail := range details {
@@ -292,16 +389,35 @@ func optimizerBatteryModeFromSuggestions(suggestions map[string]types.Suggestion
 
 		if mode != api.BatteryUnknown && m != mode {
 			// batteries disagree: don't act
-			return api.BatteryUnknown
+			return optimizerDecision{}
 		}
 		mode = m
 	}
 
-	if mode == api.BatteryCharge && !gridChargeJustified(pn, gridChargeLimit) {
-		return api.BatteryUnknown
+	if mode != api.BatteryCharge {
+		return optimizerDecision{mode: mode}
 	}
 
-	return mode
+	pn := req.TimeSeries.PN
+
+	if !gridChargeJustified(pn, gridChargeLimit) {
+		return optimizerDecision{chargeVetoed: true}
+	}
+
+	// every controllable home battery's plan must pay the charge back
+	for i, detail := range details {
+		if detail.Type != batteryTypeBattery || !detail.controllable {
+			continue
+		}
+		if i >= len(req.Batteries) || i >= len(res.Batteries) {
+			return optimizerDecision{chargeVetoed: true}
+		}
+		if !chargePaybackJustified(pn, res.Batteries[i].StateOfCharge, res.Batteries[i].DischargingPower, req.Batteries[i].SInitial) {
+			return optimizerDecision{chargeVetoed: true}
+		}
+	}
+
+	return optimizerDecision{mode: mode, price: float64(pn[0]) * 1e3}
 }
 
 // gridChargeJustified checks that grid-charging the battery now is worth it: a
@@ -318,7 +434,56 @@ func gridChargeJustified(pn []float32, limit *float64) bool {
 		return false
 	}
 
+	// energy at zero or negative cost is always worth storing; the spread test
+	// below would divide a negative price and lower the bar instead of raising it
+	if price <= 0 {
+		return true
+	}
+
 	return float64(lo.Max(pn[1:]))*1e3 >= price/(eta*eta)
+}
+
+// chargePaybackBuffer (currency/kWh) is the forecast-risk margin a planned grid
+// charge must clear beyond the round-trip losses. Prices are exact day-ahead;
+// the risk priced here is the load/PV forecast error that strands the energy.
+const chargePaybackBuffer = 0.03
+
+// chargePaybackJustified checks that the plan pays a slot-0 grid charge back at
+// a price covering the round-trip losses plus a risk margin. Charging/discharging
+// energies and SoC are AC-side plan values from the optimizer result; the
+// discharge-weighted price up to the first return to the initial SoC is the
+// price at which the plan actually gives the energy charged now back.
+func chargePaybackJustified(pn, soc, discharge []float32, sInitial float32) bool {
+	if len(pn) < 2 {
+		return false
+	}
+
+	// pn is currency/Wh
+	price := float64(pn[0]) * 1e3
+	if price <= 0 {
+		return true
+	}
+
+	n := min(len(pn), len(soc), len(discharge))
+
+	var value, energy float64
+	for t := 1; t < n; t++ {
+		value += float64(discharge[t]) * float64(pn[t]) * 1e3
+		energy += float64(discharge[t])
+
+		if soc[t] <= sInitial {
+			// the energy charged now has been given back
+			if energy == 0 {
+				return false
+			}
+			return value/energy >= (price+chargePaybackBuffer)/(eta*eta)
+		}
+	}
+
+	// the plan never returns to the initial SoC within the horizon: the charged
+	// energy's value rests on the terminal value alone, which is always below the
+	// buy price — not worth paying for now
+	return false
 }
 
 // suggestion returns the optimizer suggestion for the given device key.
@@ -358,7 +523,7 @@ func (site *Site) publishSuggestions() {
 func (site *Site) clearSuggestions() {
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
-	site.setOptimizerBatteryMode(api.BatteryUnknown)
+	site.setOptimizerBatteryMode(optimizerDecision{})
 
 	site.publishBattery()
 	site.publishSuggestions()
@@ -753,7 +918,7 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 			}),
 		})
 
-		suggestion := currentSlotSuggestion(detail, batRes, gridImporting, gridExporting, slotHours)
+		suggestion := currentSlotSuggestion(detail, batReq, batRes, gridImporting, gridExporting, slotHours)
 		if suggestion.Action == "" {
 			continue
 		}
@@ -769,9 +934,10 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 	site.setSuggestions(suggestions)
 	site.setBatteryForecast(site.addBatteryForecastTotals(req.Batteries, res.Batteries))
 
-	// derive the battery mode to apply from the home battery suggestions
+	// derive the battery mode to apply from the home battery suggestions;
+	// setOptimizerBatteryMode re-checks the control flag under lock
 	if site.GetOptimizerBatteryControl() {
-		site.setOptimizerBatteryMode(optimizerBatteryModeFromSuggestions(suggestions, details, req.TimeSeries.PN, site.GetBatteryGridChargeLimit()))
+		site.setOptimizerBatteryMode(optimizerDecisionFromSuggestions(suggestions, details, req, res, site.GetBatteryGridChargeLimit()))
 	}
 
 	site.publishBattery()

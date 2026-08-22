@@ -124,8 +124,13 @@ type Site struct {
 	suggestions              map[string]types.Suggestion // Optimizer suggestions by device key
 	suggestionActions        map[string]string           // last notified actionable optimizer action by device key
 
-	optimizerBatteryMode        api.BatteryMode // vetted battery mode of the last optimizer run, guarded by RWMutex
-	optimizerBatteryModeUpdated time.Time       // when the vetted battery mode was stored, guarded by RWMutex
+	optimizerBatteryMode             api.BatteryMode // vetted battery mode of the last optimizer run, guarded by RWMutex
+	optimizerBatteryModeUpdated      time.Time       // when the last optimizer decision was stored, guarded by RWMutex
+	optimizerBatteryModeConfirmedAt  time.Time       // when the applied mode was last confirmed by a run, guarded by RWMutex
+	optimizerBatteryModePending      api.BatteryMode // candidate mode awaiting confirmation by a later run, guarded by RWMutex
+	optimizerBatteryModePendingSince time.Time       // when the pending candidate was first derived, guarded by RWMutex
+	optimizerChargeVetoed            bool            // last run suggested grid charging but a gate declined it, guarded by RWMutex
+	optimizerChargePrice             float64         // price (currency/kWh) the active charge decision was based on, guarded by RWMutex
 
 	optimizerMu      sync.Mutex                     // guards optimizer runs
 	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu

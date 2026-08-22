@@ -643,11 +643,15 @@ func (site *Site) SetOptimizerBatteryControl(val bool) error {
 	changed := site.optimizerBatteryControl != val
 	if changed {
 		site.optimizerBatteryControl = val
-		if !val {
-			// forget the stored mode so control stops immediately
-			site.optimizerBatteryMode = api.BatteryUnknown
-			site.optimizerBatteryModeUpdated = time.Time{}
-		}
+		// forget stored and pending state in both directions so control stops
+		// immediately and a pre-toggle observation cannot confirm a mode after
+		// re-enabling
+		site.optimizerBatteryMode = api.BatteryUnknown
+		site.optimizerBatteryModeUpdated = time.Time{}
+		site.optimizerBatteryModeConfirmedAt = time.Time{}
+		site.optimizerBatteryModePending = api.BatteryUnknown
+		site.optimizerBatteryModePendingSince = time.Time{}
+		site.optimizerChargeVetoed = false
 	}
 	site.Unlock()
 
@@ -691,6 +695,13 @@ func (site *Site) SetBatteryModeExternal(mode api.BatteryMode) error {
 	defer site.Unlock()
 
 	disable := mode == api.BatteryUnknown
+
+	if !disable {
+		// external control takes over: a pending optimizer candidate from before
+		// the takeover must not confirm a mode once external control ends
+		site.optimizerBatteryModePending = api.BatteryUnknown
+		site.optimizerBatteryModePendingSince = time.Time{}
+	}
 
 	if mode != site.batteryModeExternal {
 		site.batteryModeExternal = mode
