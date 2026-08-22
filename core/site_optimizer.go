@@ -254,37 +254,148 @@ const optimizerBatteryModeDisagreementLimit = 2 * optimizerBatteryModeValidity
 // it is not an economic margin.
 const optimizerChargePriceTolerance = 0.001
 
+// chargePaybackBuffer (currency/kWh) is the forecast-risk margin a planned
+// grid charge must clear beyond the round-trip losses. Prices are exact
+// day-ahead; the risk priced here is the load/PV forecast error that strands
+// the energy.
+const chargePaybackBuffer = 0.03
+
+// optimizerVetoReason explains why the applied optimizer battery mode is not
+// (fully) in effect. It is UI annotation only and never feeds back into
+// control decisions — those are already made by the time a reason is derived.
+type optimizerVetoReason string
+
+const (
+	vetoReasonNone       optimizerVetoReason = ""
+	vetoReasonPayback    optimizerVetoReason = "payback"    // a grid charge would not pay back its round-trip losses plus margin
+	vetoReasonForcedIdle optimizerVetoReason = "forcedIdle" // controllable batteries derived conflicting actions, so none was applied
+	vetoReasonDamping    optimizerVetoReason = "damping"    // a mode change is pending confirmation by a later run
+	vetoReasonLiveRate   optimizerVetoReason = "liveRate"   // the live rate has moved past the price the decision was based on
+)
+
+// optimizerDecision is the vetted outcome of one optimizer run.
+type optimizerDecision struct {
+	mode         api.BatteryMode
+	chargeVetoed bool                // a grid charge suggestion was declined by a gate
+	vetoReason   optimizerVetoReason // reason for chargeVetoed, or for mode staying at api.BatteryUnknown
+	price        float64             // price (currency/kWh) underlying a charge decision
+}
+
+// gridChargeJustified checks that grid-charging the battery now is worth it: a
+// later slot must feed-in (or avoid import) at a price that covers the
+// round-trip loss of charging now and discharging later.
+func gridChargeJustified(pn []float32) bool {
+	if len(pn) < 2 {
+		return false
+	}
+
+	// pn is currency/Wh
+	price := float64(pn[0]) * 1e3
+
+	// energy at zero or negative cost is always worth storing; the spread test
+	// below would divide a negative price and lower the bar instead of raising it
+	if price <= 0 {
+		return true
+	}
+
+	return float64(lo.Max(pn[1:]))*1e3 >= price/(eta*eta)
+}
+
+// chargePaybackJustified checks that the plan pays a slot-0 grid charge back at
+// a price covering the round-trip losses plus a risk margin. Charging/discharging
+// energies and SoC are AC-side plan values from the optimizer result; the
+// discharge-weighted price up to the first return to the initial SoC is the
+// price at which the plan actually gives the energy charged now back.
+func chargePaybackJustified(pn, soc, discharge []float32, sInitial float32) bool {
+	if len(pn) < 2 {
+		return false
+	}
+
+	// pn is currency/Wh
+	price := float64(pn[0]) * 1e3
+	if price <= 0 {
+		return true
+	}
+
+	n := min(len(pn), len(soc), len(discharge))
+
+	var value, energy float64
+	for t := 1; t < n; t++ {
+		value += float64(discharge[t]) * float64(pn[t]) * 1e3
+		energy += float64(discharge[t])
+
+		if soc[t] <= sInitial {
+			// the energy charged now has been given back
+			if energy == 0 {
+				return false
+			}
+			return value/energy >= (price+chargePaybackBuffer)/(eta*eta)
+		}
+	}
+
+	// the plan never returns to the initial SoC within the horizon: the charged
+	// energy's value rests on the terminal value alone, which is always below the
+	// buy price — not worth paying for now
+	return false
+}
+
 // batteryModeCandidate maps the suggestions from the current optimizer run
-// onto a raw (undamped) battery-mode candidate for the first controllable
-// battery, plus the price (currency/kWh) a Charge candidate was based on.
-// TODO apply per battery once the site tracks more than a single battery mode
-func (site *Site) batteryModeCandidate(suggestions map[string]types.Suggestion, pn []float32) (api.BatteryMode, float64) {
-	for _, dev := range site.batteryMeters {
-		if dev == nil {
+// onto the raw (undamped) battery-mode decision across all controllable home
+// batteries: they must agree (details is index-aligned with req.Batteries/
+// res.Batteries, see applyOptimizerResult), and a Charge suggestion is
+// additionally gated on the plan being worth it (gridChargeJustified) and
+// every controllable battery's plan paying itself back (chargePaybackJustified).
+func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer.OptimizationInput, res optimizer.OptimizationResult, details []batteryDetail) optimizerDecision {
+	mode := api.BatteryUnknown
+
+	for _, detail := range details {
+		if detail.Type != batteryTypeBattery || !detail.controllable {
 			continue
 		}
 
-		s, ok := suggestions[batteryKey(dev.Config().Name)]
+		s, ok := suggestions[detail.key()]
 		if !ok {
 			continue
 		}
 
-		mode, err := api.BatteryModeString(s.Action)
+		m, err := api.BatteryModeString(s.Action)
 		if err != nil {
 			// discharging to grid has no matching battery mode
-			return api.BatteryNormal, 0
+			m = api.BatteryNormal
 		}
 
-		var price float64
-		if mode == api.BatteryCharge && len(pn) > 0 {
-			// pn is currency/Wh
-			price = float64(pn[0]) * 1e3
+		if mode != api.BatteryUnknown && m != mode {
+			// batteries disagree: don't act
+			return optimizerDecision{vetoReason: vetoReasonForcedIdle}
 		}
-
-		return mode, price
+		mode = m
 	}
 
-	return api.BatteryUnknown, 0
+	if mode != api.BatteryCharge {
+		return optimizerDecision{mode: mode}
+	}
+
+	pn := req.TimeSeries.PN
+
+	if !gridChargeJustified(pn) {
+		return optimizerDecision{chargeVetoed: true, vetoReason: vetoReasonPayback}
+	}
+
+	// every controllable home battery's plan must pay the charge back
+	for i, detail := range details {
+		if detail.Type != batteryTypeBattery || !detail.controllable {
+			continue
+		}
+		if i >= len(req.Batteries) || i >= len(res.Batteries) {
+			return optimizerDecision{chargeVetoed: true, vetoReason: vetoReasonPayback}
+		}
+		if !chargePaybackJustified(pn, res.Batteries[i].StateOfCharge, res.Batteries[i].DischargingPower, req.Batteries[i].SInitial) {
+			return optimizerDecision{chargeVetoed: true, vetoReason: vetoReasonPayback}
+		}
+	}
+
+	// pn is currency/Wh
+	return optimizerDecision{mode: mode, price: float64(pn[0]) * 1e3}
 }
 
 // setOptimizerBatteryMode stores the damped battery-mode decision derived
@@ -301,29 +412,34 @@ func (site *Site) batteryModeCandidate(suggestions map[string]types.Suggestion, 
 // would look like a fresh, independent observation and the confirmation
 // delay would never bind.
 //
-// price (currency/kWh) is the price the candidate was based on when it is
-// api.BatteryCharge; batterySuggestionMode re-validates it against the live
-// rate on every read, since a stale charge decision costs money in a way a
-// stale hold does not and must not wait out the generic staleness window.
-func (site *Site) setOptimizerBatteryMode(candidate api.BatteryMode, price float64) {
+// d.price (currency/kWh) is the price the candidate was based on when
+// d.mode is api.BatteryCharge; batterySuggestionMode re-validates it against
+// the live rate on every read, since a stale charge decision costs money in a
+// way a stale hold does not and must not wait out the generic staleness window.
+func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 	site.Lock()
 	defer site.Unlock()
 
+	candidate := d.mode
 	now := time.Now()
 
 	apply := func(mode api.BatteryMode) {
 		site.optimizerBatteryMode = mode
 		site.optimizerBatteryModeConfirmedAt = now
 		site.optimizerBatteryModePending = api.BatteryUnknown
-		site.optimizerChargePrice = price
+		site.optimizerChargePrice = d.price
 	}
 
 	site.optimizerBatteryModeUpdated = now
+	site.optimizerChargeVetoed = d.chargeVetoed
+	site.optimizerVetoReason = d.vetoReason
 
 	switch {
 	case !site.Automatic():
 		// automatic mode may have been disabled between deriving and storing
 		// the candidate; re-check the flag inside the critical section
+		site.optimizerChargeVetoed = false
+		site.optimizerVetoReason = vetoReasonNone
 		apply(api.BatteryUnknown)
 	case candidate == api.BatteryUnknown:
 		apply(api.BatteryUnknown)
@@ -335,10 +451,18 @@ func (site *Site) setOptimizerBatteryMode(candidate api.BatteryMode, price float
 		} else if age > optimizerBatteryModeValidity {
 			// candidate went stale before confirming: treat as a fresh observation
 			site.optimizerBatteryModePendingSince = now
+			if candidate == api.BatteryCharge {
+				site.optimizerVetoReason = vetoReasonDamping
+			}
+		} else if candidate == api.BatteryCharge {
+			site.optimizerVetoReason = vetoReasonDamping
 		}
 	default:
 		site.optimizerBatteryModePending = candidate
 		site.optimizerBatteryModePendingSince = now
+		if candidate == api.BatteryCharge {
+			site.optimizerVetoReason = vetoReasonDamping
+		}
 	}
 
 	// persistent disagreement: runs keep deriving something else than the
@@ -350,6 +474,88 @@ func (site *Site) setOptimizerBatteryMode(candidate api.BatteryMode, price float
 		now.Sub(site.optimizerBatteryModeConfirmedAt) > optimizerBatteryModeDisagreementLimit {
 		apply(api.BatteryNormal)
 	}
+
+	site.publishOptimizerDecisionLocked()
+}
+
+// optimizerDecisionPublish is the wire format of the vetted optimizer decision,
+// published for the forecast view's slot-0 annotation. Kept separate from the
+// internal optimizerDecision so the payload shape does not follow it.
+type optimizerDecisionPublish struct {
+	Mode         api.BatteryMode     `json:"mode"`
+	ChargeVetoed bool                `json:"chargeVetoed"`
+	VetoReason   optimizerVetoReason `json:"vetoReason,omitempty"`
+	Price        float64             `json:"price,omitempty"`
+	Updated      time.Time           `json:"updated"`
+}
+
+// publishOptimizerDecisionLocked publishes the current optimizer decision.
+// Caller must already hold site.Lock or site.RLock.
+func (site *Site) publishOptimizerDecisionLocked() {
+	site.publish(keys.OptimizerDecision, optimizerDecisionPublish{
+		Mode:         site.optimizerBatteryMode,
+		ChargeVetoed: site.optimizerChargeVetoed,
+		VetoReason:   site.optimizerVetoReason,
+		Price:        site.optimizerChargePrice,
+		Updated:      site.optimizerBatteryModeUpdated,
+	})
+}
+
+// publishOptimizerDecision publishes the current optimizer decision. Caller
+// must not hold any site lock.
+func (site *Site) publishOptimizerDecision() {
+	site.RLock()
+	defer site.RUnlock()
+	site.publishOptimizerDecisionLocked()
+}
+
+// liveRateVetoLocked reports whether rate has moved past the price the active
+// charge decision was based on. Caller must already hold site.RLock or
+// site.Lock. Unlike the fork this ports from, there is no grid-charge-limit
+// check: GetBatteryGridChargeLimit() is structurally nil while Automatic() is
+// true (see core/site_api.go), so under automatic mode that check is dead.
+func (site *Site) liveRateVetoLocked(rate api.Rate) bool {
+	fresh := time.Since(site.optimizerBatteryModeUpdated) <= optimizerBatteryModeValidity
+	active := site.optimizerBatteryMode == api.BatteryCharge && fresh
+
+	return active && rate.Value > site.optimizerChargePrice+optimizerChargePriceTolerance
+}
+
+// updateOptimizerLiveRateVeto refreshes the live-rate-guard annotation for the
+// forecast view. batterySuggestionMode already drops a stale charge decision
+// from control when the live rate diverges from the price it was based on;
+// this only makes that fact visible, it never changes what is applied.
+//
+// Called every control cycle, where most of the time there is no optimizer, no
+// change of mind, or automatic mode is off — all a no-op. An RLock fast path
+// avoids taking the write lock for those; the write path re-checks under
+// site.Lock since state may have changed between the two.
+func (site *Site) updateOptimizerLiveRateVeto(rate api.Rate) {
+	site.RLock()
+	veto := site.liveRateVetoLocked(rate)
+	noop := (veto && site.optimizerVetoReason == vetoReasonLiveRate) ||
+		(!veto && site.optimizerVetoReason != vetoReasonLiveRate)
+	site.RUnlock()
+
+	if noop {
+		return
+	}
+
+	site.Lock()
+	defer site.Unlock()
+
+	veto = site.liveRateVetoLocked(rate)
+
+	switch {
+	case veto && site.optimizerVetoReason != vetoReasonLiveRate:
+		site.optimizerVetoReason = vetoReasonLiveRate
+	case !veto && site.optimizerVetoReason == vetoReasonLiveRate:
+		site.optimizerVetoReason = vetoReasonNone
+	default:
+		return
+	}
+
+	site.publishOptimizerDecisionLocked()
 }
 
 // ResetOptimizerBatteryMode clears the damped battery-mode decision and any
@@ -365,6 +571,10 @@ func (site *Site) ResetOptimizerBatteryMode() {
 	site.optimizerBatteryModePending = api.BatteryUnknown
 	site.optimizerBatteryModePendingSince = time.Time{}
 	site.optimizerChargePrice = 0
+	site.optimizerChargeVetoed = false
+	site.optimizerVetoReason = vetoReasonNone
+
+	site.publishOptimizerDecisionLocked()
 }
 
 // loadpointCurrentAction returns the loadpoint's current operating mode for
@@ -447,7 +657,7 @@ func (site *Site) publishSuggestions() {
 func (site *Site) clearSuggestions() {
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
-	site.setOptimizerBatteryMode(api.BatteryUnknown, 0)
+	site.setOptimizerBatteryMode(optimizerDecision{})
 
 	site.publishBattery()
 	site.publishSuggestions()
@@ -866,8 +1076,7 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 
 	// derive and damp the battery mode to apply from the home battery
 	// suggestions; setOptimizerBatteryMode re-checks Automatic() under lock
-	mode, price := site.batteryModeCandidate(suggestions, req.TimeSeries.PN)
-	site.setOptimizerBatteryMode(mode, price)
+	site.setOptimizerBatteryMode(batteryModeCandidate(suggestions, req, res, details))
 
 	site.publishBattery()
 

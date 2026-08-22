@@ -56,6 +56,9 @@ func (site *Site) SetBatteryMode(batMode api.BatteryMode) {
 func (site *Site) updateBatteryMode(batteryGridChargeActive bool, rate api.Rate) {
 	batteryMode := site.requiredBatteryMode(batteryGridChargeActive, rate)
 
+	// UI annotation only, does not affect the mode derived above
+	site.updateOptimizerLiveRateVeto(rate)
+
 	// put battery into hold mode when charging is active and HEMS dimmed
 	fromToCharge := batteryMode == api.BatteryCharge || batteryMode == api.BatteryUnknown && site.batteryMode == api.BatteryCharge
 	if dimmed := hems.Dimmed(site.hems); fromToCharge && dimmed != nil && *dimmed {

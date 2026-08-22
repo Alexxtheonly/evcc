@@ -123,12 +123,14 @@ type Site struct {
 	// optimizerBatteryMode is the damped battery-mode decision derived once per
 	// optimizer run (in applyOptimizerResult); see setOptimizerBatteryMode.
 	// batterySuggestionMode (called at control-loop cadence) only ever reads it.
-	optimizerBatteryMode             api.BatteryMode // last confirmed battery mode decision
-	optimizerBatteryModeUpdated      time.Time       // time of the last optimizer run, any outcome
-	optimizerBatteryModeConfirmedAt  time.Time       // time optimizerBatteryMode was last (re)confirmed
-	optimizerBatteryModePending      api.BatteryMode // candidate mode awaiting confirmation
-	optimizerBatteryModePendingSince time.Time       // time the pending candidate was first observed
-	optimizerChargePrice             float64         // price (currency/kWh) the active charge decision was based on
+	optimizerBatteryMode             api.BatteryMode     // last confirmed battery mode decision
+	optimizerBatteryModeUpdated      time.Time           // time of the last optimizer run, any outcome
+	optimizerBatteryModeConfirmedAt  time.Time           // time optimizerBatteryMode was last (re)confirmed
+	optimizerBatteryModePending      api.BatteryMode     // candidate mode awaiting confirmation
+	optimizerBatteryModePendingSince time.Time           // time the pending candidate was first observed
+	optimizerChargePrice             float64             // price (currency/kWh) the active charge decision was based on
+	optimizerChargeVetoed            bool                // last run suggested grid charging but a gate declined it
+	optimizerVetoReason              optimizerVetoReason // why the applied mode is not (fully) in effect, for UI annotation
 
 	optimizerMu      sync.Mutex                     // guards optimizer runs
 	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu

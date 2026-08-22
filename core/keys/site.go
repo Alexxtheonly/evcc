@@ -58,6 +58,7 @@ const (
 	// optimizer
 	OptimizerChargingStrategy   = "optimizerChargingStrategy"
 	OptimizerChargingStrategies = "optimizerChargingStrategies"
+	OptimizerDecision           = "optimizerDecision" // vetted outcome of the last optimizer run, for UI annotation
 
 	// battery status
 	Battery     = "battery"

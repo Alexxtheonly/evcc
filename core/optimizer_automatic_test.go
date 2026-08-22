@@ -255,9 +255,9 @@ func TestBatteryModeAutomatic(t *testing.T) {
 	// optimizer decides to grid charge, replacing the grid charge limit; two
 	// runs at least optimizerBatteryModeConfirmDelay apart must agree before
 	// the damped decision takes effect (see setOptimizerBatteryMode)
-	site.setOptimizerBatteryMode(api.BatteryCharge, 0)
+	site.setOptimizerBatteryMode(optimizerDecision{mode: api.BatteryCharge})
 	site.optimizerBatteryModePendingSince = time.Now().Add(-optimizerBatteryModeConfirmDelay - time.Second)
-	site.setOptimizerBatteryMode(api.BatteryCharge, 0)
+	site.setOptimizerBatteryMode(optimizerDecision{mode: api.BatteryCharge})
 
 	batCon.EXPECT().SetBatteryMode(api.BatteryCharge)
 	site.updateBatteryMode(false, api.Rate{})
