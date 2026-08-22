@@ -306,7 +306,7 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		dev := newBatteryDevice(t, 20, 100)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
-		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute)
+		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
 
 		assert.Equal(t, float32(1500), req.SMin)
 		assert.Equal(t, float32(10000), req.SMax)
@@ -318,7 +318,7 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		dev := newBatteryDevice(t, 0, 80)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
-		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute)
+		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
 
 		assert.Equal(t, float32(0), req.SMin)
 		assert.Equal(t, float32(9500), req.SMax)
@@ -330,7 +330,7 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		dev := newBatteryDevice(t, 20, 80)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
-		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute)
+		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
 
 		assert.Equal(t, float32(2000), req.SMin)
 		assert.Equal(t, float32(8000), req.SMax)
@@ -341,7 +341,7 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		dev := newBatteryDevice(t, 20, 0)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
-		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute)
+		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
 
 		assert.Equal(t, float32(2000), req.SMin)
 		assert.Equal(t, float32(10000), req.SMax)
@@ -490,12 +490,54 @@ func TestLoadpointRequestChargeGoal(t *testing.T) {
 			lp.EXPECT().GetPlanGoal().Return(0.0, false).AnyTimes()
 			lp.EXPECT().EffectivePriority().Return(0).AnyTimes()
 
-			req, _ := site.loadpointRequest(lp, 8, 15*time.Minute, nil)
+			req, _ := site.loadpointRequest(lp, 8, 15*time.Minute, nil, 0)
 
 			assert.Equal(t, tc.wantInitial, req.SInitial)
 			assert.Equal(t, tc.wantSMax, req.SMax)
 		})
 	}
+}
+
+// TestLoadpointRequestCPriorityNegativePriceHorizon is the integration counterpart to
+// TestSafeCPriority: it verifies loadpointRequest actually wires minImportPrice into
+// safeCPriority when building the request, not just that the helper itself is correct in
+// isolation. A negative minImportPrice (one negatively-priced slot anywhere in the horizon is
+// enough - see safeCPriority) must drop an explicitly raised loadpoint priority to 0 instead
+// of letting it invert into a penalty.
+func TestLoadpointRequestCPriorityNegativePriceHorizon(t *testing.T) {
+	site := &Site{log: util.NewLogger("foo")}
+
+	newMock := func(t *testing.T) loadpoint.API {
+		ctrl := gomock.NewController(t)
+
+		v := api.NewMockVehicle(ctrl)
+		v.EXPECT().Capacity().Return(50.0).AnyTimes()
+		v.EXPECT().GetTitle().Return("").AnyTimes()
+
+		lp := loadpoint.NewMockAPI(ctrl)
+		lp.EXPECT().GetVehicle().Return(v).AnyTimes()
+		lp.EXPECT().GetSoc().Return(50.0).AnyTimes()
+		lp.EXPECT().EffectiveLimitSoc().Return(100).AnyTimes()
+		lp.EXPECT().GetLimitEnergy().Return(0.0).AnyTimes()
+		lp.EXPECT().GetChargedEnergy().Return(0.0).AnyTimes()
+		lp.EXPECT().GetTitle().Return("lp").AnyTimes()
+		lp.EXPECT().EffectiveMinPower().Return(1380.0).AnyTimes()
+		lp.EXPECT().EffectiveMaxPower().Return(11000.0).AnyTimes()
+		lp.EXPECT().GetMode().Return(api.ModePV).AnyTimes()
+		lp.EXPECT().GetStatus().Return(api.StatusB).AnyTimes()
+		lp.EXPECT().GetSmartCostLimit().Return(nil).AnyTimes()
+		lp.EXPECT().EffectivePlanStrategy().Return(api.PlanStrategy{}).AnyTimes()
+		lp.EXPECT().GetPlanGoal().Return(0.0, false).AnyTimes()
+		lp.EXPECT().EffectivePriority().Return(10).AnyTimes() // top third -> CPriority 2
+
+		return lp
+	}
+
+	req, _ := site.loadpointRequest(newMock(t), 8, 15*time.Minute, nil, 0.0001) // positive horizon
+	assert.Equal(t, 2, req.CPriority, "positive horizon: explicit priority passes through")
+
+	req, _ = site.loadpointRequest(newMock(t), 8, 15*time.Minute, nil, -0.0001) // negative horizon
+	assert.Equal(t, 0, req.CPriority, "negative horizon: would invert, dropped to 0")
 }
 
 func TestOptimizerChargingStrategy(t *testing.T) {
@@ -543,10 +585,23 @@ func TestEffectivePriorityToCPriority(t *testing.T) {
 		assert.Equal(t, 2, effectivePriorityToCPriority(p), "priority %d", p)
 	}
 
-	// a default-priority loadpoint never outranks the home battery's fixed CPriority,
-	// but an explicitly high-priority one does
-	assert.Less(t, effectivePriorityToCPriority(0), homeBatteryCPriority)
+	// the home battery's own CPriority is 0 (see homeBatteryCPriority) - any explicitly
+	// raised loadpoint priority outranks it, a default-priority one ties rather than losing
+	assert.Equal(t, 0, homeBatteryCPriority)
+	assert.GreaterOrEqual(t, effectivePriorityToCPriority(0), homeBatteryCPriority)
 	assert.Greater(t, effectivePriorityToCPriority(10), homeBatteryCPriority)
+}
+
+// TestSafeCPriority asserts the negative-price guard described on safeCPriority: the solver's
+// CPriority preference term multiplies by min_import_price, so a negative minimum (one
+// negatively-priced slot anywhere in the horizon is enough) would invert a positive priority
+// into a penalty. Only a strictly negative minimum must trigger the guard - zero leaves the
+// term at zero contribution either way, so there is nothing to invert.
+func TestSafeCPriority(t *testing.T) {
+	assert.Equal(t, 2, safeCPriority(2, 0.0001), "positive minimum: priority passes through")
+	assert.Equal(t, 2, safeCPriority(2, 0), "zero minimum: nothing to invert, priority passes through")
+	assert.Equal(t, 0, safeCPriority(2, -0.0001), "negative minimum: would invert, dropped to 0")
+	assert.Equal(t, 0, safeCPriority(0, -0.0001), "already 0: stays 0")
 }
 
 func TestBlendMeasured(t *testing.T) {

@@ -182,14 +182,16 @@ func socBoundEpsilon(cfg optimizer.BatteryConfig) float32 {
 }
 
 // homeBatteryCPriority is the CPriority (see BatteryConfig.CPriority) given to the home
-// battery. It sits in the middle of the 0..2 scale: above a loadpoint left at its default,
-// unset priority (0, the common case - effectivePriorityToCPriority also maps that to 0, so
-// without this the home battery would tie with every vehicle instead of the solver preferring
-// to fill the shared household battery first), but below a vehicle the user explicitly raised
-// into the top third of the loadpoint priority scale (e.g. "this car must leave charged").
-// CPriority is a tie-break preference between cost-equivalent solver choices only - it never
-// changes the priced objective - so getting this exactly right is low stakes.
-const homeBatteryCPriority = 1
+// battery: 0, i.e. no preference beyond what the priced objective already decides. CPriority
+// does not mean "fill this one first" - the solver's preference term
+// (optimizer.py:472-475) rewards both charging and discharging a battery, weighted by how
+// early in the horizon it happens, so a positive CPriority actually means "cycle this battery
+// more, and sooner". For an EV (DMax = 0) the discharge half of that term is inert, so a
+// positive CPriority does express "fill this one first" as intended. For the home battery,
+// which both charges and discharges, the same value would instead buy cost-neutral extra
+// cycling - wear with no benefit - which is why it stays at 0 rather than mirroring the
+// vehicle mapping.
+const homeBatteryCPriority = 0
 
 // effectivePriorityToCPriority maps a loadpoint's EffectivePriority - 0..10 in the UI
 // (config.loadpoint.priorityLabel), unbounded if set directly in config - onto the optimizer's
@@ -200,6 +202,24 @@ const homeBatteryCPriority = 1
 // solver's top preference; everything in between lands in the middle.
 func effectivePriorityToCPriority(priority int) int {
 	return min(max(priority, 0), 10) * 3 / 11
+}
+
+// safeCPriority returns priority unchanged unless minImportPrice (the horizon's minimum
+// import price, matching the solver's own min_import_price = np.min(time_series.p_N)) is
+// negative, in which case it returns 0. The solver's CPriority preference term
+// (optimizer.py:472-475) multiplies charge/discharge decisions by min_import_price *
+// c_priority: with a non-negative minimum that is a reward that scales with priority as
+// intended, but a single negatively-priced slot anywhere in the horizon flips the sign of
+// the whole term, turning "prefer this battery" into "avoid this battery". The solver
+// already works around the identical pitfall for the adjacent peak-leveling term by using
+// penalty_base instead of min_import_price for exactly this reason (see the comment at
+// optimizer.py:459-460); the priority term never got the same treatment because nothing ever
+// set a non-zero CPriority before this.
+func safeCPriority(priority int, minImportPrice float32) int {
+	if minImportPrice < 0 {
+		return 0
+	}
+	return priority
 }
 
 // currentSlotSuggestion maps the optimizer's first-slot corner result onto an advisory action.
@@ -911,8 +931,14 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		},
 	}
 
+	// minImportPrice is the same value the solver itself derives as min_import_price
+	// (optimizer.py: self.min_import_price = np.min(self.time_series.p_N)) - used below both
+	// for the end-of-horizon Wh value and to guard CPriority against inverting on a negative
+	// price (see safeCPriority).
+	minImportPrice := lo.Min(req.TimeSeries.PN)
+
 	// end of horizon Wh value
-	pa := lo.Min(req.TimeSeries.PN) * eta * 0.99
+	pa := minImportPrice * eta * 0.99
 
 	details = requestDetails{
 		Timestamps: asTimestamps(dt, now),
@@ -958,7 +984,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		}
 
 		// skip disabled loadpoints
-		if cfg, detail := site.loadpointRequest(lp, minLen, firstSlotDuration, grid); cfg.CMax > 0 {
+		if cfg, detail := site.loadpointRequest(lp, minLen, firstSlotDuration, grid, minImportPrice); cfg.CMax > 0 {
 			detail.loadpoint = &id
 			batteries = append(batteries, optimizerBattery{cfg, detail})
 		}
@@ -990,7 +1016,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 			continue
 		}
 
-		cfg, detail := site.batteryRequest(dev, b, grid, minLen, firstSlotDuration)
+		cfg, detail := site.batteryRequest(dev, b, grid, minLen, firstSlotDuration, minImportPrice)
 		batteries = append(batteries, optimizerBattery{cfg, detail})
 	}
 
@@ -1246,14 +1272,14 @@ func batteryForecastSocExtremes(req []optimizer.BatteryConfig, resp []optimizer.
 	return high, low
 }
 
-func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDuration time.Duration, grid api.Rates) (optimizer.BatteryConfig, batteryDetail) {
+func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDuration time.Duration, grid api.Rates, minImportPrice float32) (optimizer.BatteryConfig, batteryDetail) {
 	bat := optimizer.BatteryConfig{
 		ChargeFromGrid: true,
 		CMin:           float32(lp.EffectiveMinPower()),
 		CMax:           float32(lp.EffectiveMaxPower()),
 		DMax:           0,
 		SMin:           0,
-		CPriority:      effectivePriorityToCPriority(lp.EffectivePriority()),
+		CPriority:      safeCPriority(effectivePriorityToCPriority(lp.EffectivePriority()), minImportPrice),
 		// PA:             pa,
 	}
 
@@ -1402,7 +1428,7 @@ func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit f
 	return chargeLimit, dischargeLimit
 }
 
-func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measurement, grid api.Rates, minLen int, firstSlotDuration time.Duration) (optimizer.BatteryConfig, batteryDetail) {
+func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measurement, grid api.Rates, minLen int, firstSlotDuration time.Duration, minImportPrice float32) (optimizer.BatteryConfig, batteryDetail) {
 	chargeLimit, dischargeLimit := site.batteryPowerLimits(dev.Config().Name)
 
 	bat := optimizer.BatteryConfig{
@@ -1410,7 +1436,7 @@ func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measureme
 		DMax:      float32(dischargeLimit),
 		SCapacity: float32(*b.Capacity * 1e3),         // Wh
 		SInitial:  float32(*b.Capacity * *b.Soc * 10), // Wh
-		CPriority: homeBatteryCPriority,
+		CPriority: safeCPriority(homeBatteryCPriority, minImportPrice),
 		// PA:       pa,
 	}
 
