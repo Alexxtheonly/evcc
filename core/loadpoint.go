@@ -594,6 +594,13 @@ func (lp *Loadpoint) evVehicleDisconnectHandler() {
 	// re-read odometer to catch delayed update (#30225)
 	lp.vehicleOdometer()
 
+	// record the disconnect time; charging typically stops earlier, so Finished
+	// reflects the charge stop while this reflects the vehicle actually leaving
+	lp.updateSession(func(s *session.Session) {
+		now := lp.clock.Now()
+		s.Disconnected = &now
+	})
+
 	// session is persisted during evChargeStopHandler which runs before
 	lp.clearSession()
 
