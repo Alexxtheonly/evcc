@@ -221,17 +221,22 @@ func (c *Collector) SetReturnEnergyMeterTotal(v float64) error {
 // reported a total before keeps using meter deltas even if a single read fails,
 // so a transient failure is recovered via the next delta and not double-counted.
 //
-// incomplete flags that one of the readings feeding this call failed (e.g. a
-// meter timeout left power at its zero value instead of the real reading). It
-// sticks for the whole slot: any call within the slot can taint it, and once
-// tainted the persisted slot is marked Incomplete and excluded from
+// incomplete flags that the power reading feeding this call failed (e.g. a meter
+// timeout left power at its zero value instead of the real reading). It only taints
+// the slot when the persisted value actually derives from that power reading - i.e.
+// the call's direction (by the sign of power) has no energy meter of its own, so
+// AddPower below is what feeds the accumulator. When that direction does have an
+// energy meter, the persisted value comes from SetEnergyMeterTotal's delta instead,
+// completely independent of the (possibly zero-valued, failed) power reading, so a
+// failed power read must not discard otherwise-good metered energy. The taint sticks
+// for the whole slot: any call within the slot whose power reading was actually used
+// can set it, and once set the persisted slot is marked Incomplete and excluded from
 // LastSlotEnergy and the learned profile (see db_profile.go), the same way a
-// recovered downtime slot already is. A single transient read failure must
-// not get silently averaged into the 30-day profile the optimizer forecasts
-// household demand from.
+// recovered downtime slot already is. A single transient read failure must not get
+// silently averaged into the 30-day profile the optimizer forecasts household demand
+// from - but nor should a battery/PV meter with a working energy total lose a whole
+// slot of good data because its instantaneous power reading alone timed out.
 func (c *Collector) AddEnergy(energyTotal, returnEnergyTotal *float64, power float64, incomplete bool) error {
-	c.incomplete = c.incomplete || incomplete
-
 	return c.process(func() {
 		// a direction that ever reported a total is metered, so a nil read is a
 		// transient failure rather than a power-only meter
@@ -239,13 +244,21 @@ func (c *Collector) AddEnergy(energyTotal, returnEnergyTotal *float64, power flo
 		hasReturnMeter := returnEnergyTotal != nil || c.accu.returnEnergyMeter != nil
 
 		// integrate power for the unmetered direction first, since applying a
-		// meter total advances the accumulator clock
+		// meter total advances the accumulator clock. c.incomplete is set here, inside
+		// fun() and so before process()'s advanceSlot/persist runs below, not after: a
+		// bad reading whose timestamp falls just after a slot boundary still integrates
+		// energy for the interval since the accumulator's last update (AddPower adds
+		// backwards over elapsed time, not forwards from now), so it belongs to the
+		// slot about to be persisted, not the new one this call's timestamp is
+		// nominally in. Setting the flag any later would taint the wrong slot.
 		if power >= 0 {
 			if !hasEnergyMeter {
 				c.accu.AddPower(power)
+				c.incomplete = c.incomplete || incomplete
 			}
 		} else if !hasReturnMeter {
 			c.accu.AddPower(power)
+			c.incomplete = c.incomplete || incomplete
 		}
 
 		if energyTotal != nil {

@@ -653,8 +653,12 @@ func (site *Site) clearPlanLocks() {
 // updateGridMeter), a failed PV or battery read does not abort the update - mm[i].Power is
 // left at its zero value and the caller carries on with a value that looks like "no power"
 // instead of "unknown power". Callers that persist mm into anything the optimizer learns
-// from must pass the corresponding failed[i] through as AddEnergy's incomplete flag, or a
-// transient Modbus timeout gets silently averaged into the demand forecast.
+// from must pass the corresponding failed[i] through as AddEnergy's incomplete flag, so a
+// transient Modbus timeout does not get silently averaged into the demand forecast.
+// AddEnergy itself only lets that flag taint the persisted slot when the failed power
+// reading was actually used - a meter that also reports its own energy total keeps
+// deriving the slot from that meter's delta regardless, so a bad power read alone does
+// not discard otherwise-good metered energy.
 func (site *Site) collectMeters(key string, meters []config.Device[api.Meter]) ([]types.Measurement, []bool) {
 	mm := make([]types.Measurement, len(meters))
 	failed := make([]bool, len(meters))
@@ -1079,7 +1083,8 @@ func (site *Site) updateGridMeter() error {
 
 // updateMeters reads all meters and returns the updated measurement state
 func (site *Site) updateMeters() (siteState, error) {
-	// reset for this cycle - updatePvMeters/updateBatteryMeters OR their own result in below
+	// reset demandIncomplete for this cycle - updatePvMeters and updateBatteryMeters each OR
+	// their own anyFailed result into it below (via the errgroup goroutines started next)
 	site.Lock()
 	site.demandIncomplete = false
 	site.Unlock()

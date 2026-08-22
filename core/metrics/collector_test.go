@@ -600,6 +600,41 @@ func TestCollectorAddEnergyIncomplete(t *testing.T) {
 	require.False(t, ok)
 }
 
+// TestCollectorAddEnergyIncompleteIgnoredWhenEnergyMeterPresent verifies that a failed power
+// reading does not taint a slot whose persisted energy actually comes from the meter's own
+// energy total instead (F13): a direction with an energy meter derives its value from
+// SetEnergyMeterTotal's delta regardless of what a concurrently failed power reading says, so
+// marking the slot Incomplete on that basis alone would discard otherwise-good metered energy.
+func TestCollectorAddEnergyIncompleteIgnoredWhenEnergyMeterPresent(t *testing.T) {
+	clk := clock.NewMock() // 1970-01-01 00:00:00 UTC, on a slot boundary
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	col, err := NewCollector(Home, "incomplete-with-meter", "", WithClock(clk))
+	require.NoError(t, err)
+
+	// seed the energy meter
+	require.NoError(t, col.AddEnergy(new(1000.0), nil, 1e3, false))
+	clk.Add(5 * time.Minute) // 00:05
+
+	// meter delta of 0.3 kWh is good, but the concurrent power read failed (0, incomplete) -
+	// the persisted value still comes from the meter delta, not the failed power reading
+	require.NoError(t, col.AddEnergy(new(1000.3), nil, 0, true))
+	clk.Add(10 * time.Minute)                                     // 00:15: crosses the boundary
+	require.NoError(t, col.AddEnergy(new(1000.3), nil, 0, false)) // triggers the persist of slot 00:00
+
+	var m meter
+	require.Equal(t, int64(1), db.Instance.Where("meter = ? AND ts = ?", col.entity.Id, 0).Find(&m).RowsAffected)
+	require.False(t, m.Incomplete, "a failed power read must not taint a slot whose energy comes from the meter total")
+	require.InDelta(t, 0.3, m.Energy, 1e-10, "energy must still reflect the good meter delta")
+
+	// not excluded from LastSlotEnergy, unlike a genuinely incomplete slot
+	v, ok := col.LastSlotEnergy()
+	require.True(t, ok)
+	require.InDelta(t, 0.3, v, 1e-10)
+}
+
 // TestCollectorAddEnergyIncompleteDoesNotLeakIntoNextSlot verifies the incomplete flag is
 // scoped to the slot it occurred in and does not taint the following, fully-good slot.
 func TestCollectorAddEnergyIncompleteDoesNotLeakIntoNextSlot(t *testing.T) {

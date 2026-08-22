@@ -282,7 +282,11 @@ func TestUpdateProfile(t *testing.T) {
 // TestUpdateProfileExcludesIncomplete verifies that a slot flagged Incomplete (a reading
 // feeding it failed, see Collector.AddEnergy) is excluded from energyProfile the same way a
 // recovered downtime slot already is - a single transient meter failure must not be silently
-// averaged into the 30-day profile the optimizer forecasts household demand from.
+// averaged into the 30-day profile the optimizer forecasts household demand from. The first
+// half of the day gets a second row so its buckets have 2 samples each; flagging one of those
+// incomplete leaves that bucket still covered (len(res) stays 96) while total samples drop
+// one below energyProfileMinSamples - isolating that guard (F13) from the older
+// len(res)!=96 bucket-completeness check.
 func TestUpdateProfileExcludesIncomplete(t *testing.T) {
 	clock := clock.NewMock()
 	_, o := clock.Now().Zone()
@@ -296,19 +300,31 @@ func TestUpdateProfileExcludesIncomplete(t *testing.T) {
 
 	from := clock.Now()
 
-	// exactly one day: 96 slots, none recovered
+	// one full day: 96 slots, one row per time-of-day bucket
 	for range 4 * 24 {
 		persist(entity, clock.Now(), 1, 0, nil, false, false)
 		clock.Add(15 * time.Minute)
 	}
 
-	// baseline: a full day yields a complete 96-slot profile
+	// a second day, but only its first half: buckets 0..47 now have 2 rows each,
+	// bringing the total to 144 - exactly energyProfileMinSamples
+	var secondRowTs time.Time
+	for i := range 4 * 12 {
+		if i == 0 {
+			secondRowTs = clock.Now()
+		}
+		persist(entity, clock.Now(), 1, 0, nil, false, false)
+		clock.Add(15 * time.Minute)
+	}
+
+	// baseline: 144 rows at the sample floor yield a complete 96-slot profile
 	_, err := energyProfile(entity, from)
 	require.NoError(t, err)
 
-	// flag one slot incomplete: with only 96 rows total and one excluded, the
-	// profile can no longer produce all 96 time-of-day buckets
-	require.NoError(t, db.Instance.Model(new(meter)).Where("meter = ? AND ts = ?", entity.Id, from.Unix()).Update("incomplete", true).Error)
+	// flag one of the double-covered rows incomplete: its bucket still has the
+	// first day's row (len(res) stays 96), but total samples drop to 143 - one
+	// below energyProfileMinSamples
+	require.NoError(t, db.Instance.Model(new(meter)).Where("meter = ? AND ts = ?", entity.Id, secondRowTs.Unix()).Update("incomplete", true).Error)
 
 	_, err = energyProfile(entity, from)
 	require.ErrorIs(t, err, ErrIncomplete)
