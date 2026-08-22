@@ -163,12 +163,20 @@ func suggestionEvent(detail batteryDetail, s types.Suggestion) messenger.Event {
 	return ev
 }
 
+// socBoundEpsilon is the tolerance for treating a battery as sitting on one of
+// its SoC bounds, in Wh relative to its capacity.
+func socBoundEpsilon(cfg optimizer.BatteryConfig) float32 {
+	return max(cfg.SCapacity*0.01, 10)
+}
+
 // currentSlotSuggestion maps the optimizer's first-slot corner result onto an advisory action.
 // Because the optimization is linear, the first slot is at an operating-range extreme, so it
 // maps cleanly onto the discrete battery mode / loadpoint intent that control would later apply.
 // An idle battery is interpreted from the grid flow: importing means discharge is withheld
-// (hold), exporting means charging is withheld (holdcharge).
-func currentSlotSuggestion(detail batteryDetail, res optimizer.BatteryResult, gridImport, gridExport float32, slotHours float64) types.Suggestion {
+// (hold), exporting means charging is withheld (holdcharge). A battery idling on one of its
+// SoC bounds is forced there by physics, not by choice — at SMin it cannot discharge and at
+// SMax it cannot charge — so no hold/holdcharge intent is derived from it.
+func currentSlotSuggestion(detail batteryDetail, cfg optimizer.BatteryConfig, res optimizer.BatteryResult, gridImport, gridExport float32, slotHours float64) types.Suggestion {
 	if slotHours <= 0 || len(res.ChargingPower) == 0 || len(res.DischargingPower) == 0 {
 		return types.Suggestion{}
 	}
@@ -186,14 +194,16 @@ func currentSlotSuggestion(detail batteryDetail, res optimizer.BatteryResult, gr
 
 	if detail.Type == batteryTypeBattery {
 		idle := charge <= suggestionThreshold && discharge <= suggestionThreshold
+		atMin := cfg.SInitial <= cfg.SMin+socBoundEpsilon(cfg)
+		atMax := cfg.SInitial >= cfg.SMax-socBoundEpsilon(cfg)
 		switch {
 		case charge > suggestionThreshold && gridImporting:
 			// charging while importing means grid charging
 			s.Action = api.BatteryCharge.String()
-		case idle && gridImporting:
+		case idle && gridImporting && !atMin:
 			// idle while importing: discharge is deliberately withheld
 			s.Action = api.BatteryHold.String()
-		case idle && gridExporting:
+		case idle && gridExporting && !atMax:
 			// idle while exporting: surplus is exported instead of charged
 			s.Action = api.BatteryHoldCharge.String()
 		case discharge > suggestionThreshold && gridExporting:
@@ -691,7 +701,7 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 			}),
 		})
 
-		suggestion := currentSlotSuggestion(detail, batRes, gridImport, gridExport, slotHours)
+		suggestion := currentSlotSuggestion(detail, batReq, batRes, gridImport, gridExport, slotHours)
 		if suggestion.Action == "" {
 			continue
 		}
