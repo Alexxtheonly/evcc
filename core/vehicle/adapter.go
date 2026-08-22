@@ -133,18 +133,8 @@ func (v *adapter) SetPlanSoc(ts time.Time, soc int) error {
 }
 
 func (v *adapter) SetRepeatingPlans(plans []api.RepeatingPlan) error {
-	for _, plan := range plans {
-		for _, day := range plan.Weekdays {
-			if day < 0 || day > 6 {
-				return fmt.Errorf("weekday out of range: %v", day)
-			}
-		}
-		if _, err := time.LoadLocation(plan.Tz); err != nil {
-			return fmt.Errorf("invalid timezone: %v", err)
-		}
-		if _, err := time.Parse("15:04", plan.Time); err != nil {
-			return fmt.Errorf("invalid time: %v", err)
-		}
+	if err := validateRepeatingPlans(plans); err != nil {
+		return err
 	}
 
 	if err := settings.SetJson(v.key()+keys.RepeatingPlans, plans); err != nil {

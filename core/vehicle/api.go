@@ -39,6 +39,13 @@ type API interface {
 	// SetRepeatingPlans stores every repeating plan
 	SetRepeatingPlans([]api.RepeatingPlan) error
 
+	// GetAdaptivePlans returns the adaptive (learned) repeating plans and their update time
+	GetAdaptivePlans() ([]api.RepeatingPlan, time.Time)
+	// SetAdaptivePlans stores the adaptive repeating plans; nil clears them
+	SetAdaptivePlans([]api.RepeatingPlan) error
+	// GetEffectiveRepeatingPlans returns user repeating plans or, when none are stored, fresh adaptive plans
+	GetEffectiveRepeatingPlans() []api.RepeatingPlan
+
 	// GetPlanStrategy returns the plan strategy
 	GetPlanStrategy() api.PlanStrategy
 	// SetPlanStrategy sets the plan strategy
