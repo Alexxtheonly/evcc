@@ -11,6 +11,7 @@ type Session struct {
 	ID                   uint           `json:"id" csv:"-" gorm:"primarykey"`
 	Created              time.Time      `json:"created"`
 	Finished             time.Time      `json:"finished"`
+	Disconnected         *time.Time     `json:"disconnected" csv:"-"`
 	Loadpoint            string         `json:"loadpoint"`
 	Identifier           string         `json:"identifier"`
 	Vehicle              string         `json:"vehicle"`

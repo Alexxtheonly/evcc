@@ -89,6 +89,21 @@ func TestSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, s, 1)
 	t.Logf("session: %+v", s)
+
+	// vehicle leaves an hour after charging stopped: the disconnect time is
+	// persisted separately from the charge-stop time
+	clock.Add(time.Hour)
+	lp.updateSession(func(s *session.Session) {
+		now := lp.clock.Now()
+		s.Disconnected = &now
+	})
+
+	s, err = db.Sessions()
+	require.NoError(t, err)
+	assert.Len(t, s, 1)
+	require.NotNil(t, s[0].Disconnected)
+	assert.Equal(t, clock.Now(), *s[0].Disconnected)
+	assert.Equal(t, time.Hour, s[0].Disconnected.Sub(s[0].Finished))
 }
 
 func TestCloseSessionsOnStartup_emptyDb(t *testing.T) {
