@@ -1168,7 +1168,7 @@
       "modeHoldcharge": "Charge locked",
       "modeNormal": "Normal operation",
       "modeUnknown": "No plan",
-      "planReadyBy": "{vehicle} ready by {soc}",
+      "planReadyBy": "{vehicle} charged to {soc}",
       "reasonDamping": "pending confirmation",
       "reasonForcedIdle": "batteries disagree",
       "reasonLiveRate": "price moved",
