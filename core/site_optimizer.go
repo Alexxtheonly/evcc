@@ -597,15 +597,20 @@ func (site *Site) optimizerUpdate(battery []types.Measurement) error {
 		return nil // nothing to optimize
 	}
 
-	httpClient := request.NewClient(site.log)
-	httpClient.Timeout = 90 * time.Second
+	// create the api client once and reuse it across runs to keep connections alive
+	if site.optimizerClient == nil {
+		httpClient := request.NewClient(site.log)
+		httpClient.Timeout = 90 * time.Second
 
-	apiClient, err := optimizer.NewClientWithResponses(optimizerURI(), optimizer.WithHTTPClient(httpClient))
-	if err != nil {
-		return err
+		apiClient, err := optimizer.NewClientWithResponses(optimizerURI(), optimizer.WithHTTPClient(httpClient))
+		if err != nil {
+			return err
+		}
+
+		site.optimizerClient = apiClient
 	}
 
-	resp, err := apiClient.PostOptimizeChargeScheduleWithResponse(context.TODO(), req, func(_ context.Context, req *http.Request) error {
+	resp, err := site.optimizerClient.PostOptimizeChargeScheduleWithResponse(context.TODO(), req, func(_ context.Context, req *http.Request) error {
 		if sponsor.IsAuthorized() {
 			req.Header.Set("Authorization", "Bearer "+sponsor.Token)
 		}
