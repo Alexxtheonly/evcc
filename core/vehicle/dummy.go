@@ -78,6 +78,14 @@ func (v *dummy) GetEffectiveRepeatingPlans() []api.RepeatingPlan {
 	return nil
 }
 
+func (v *dummy) GetAdaptivePlanLearning() bool {
+	return false
+}
+
+func (v *dummy) SetAdaptivePlanLearning(enabled bool) error {
+	return nil
+}
+
 func (v *dummy) GetPlanStrategy() api.PlanStrategy {
 	return api.PlanStrategy{}
 }

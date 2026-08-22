@@ -132,6 +132,8 @@ type Site struct {
 	optimizerChargeVetoed            bool            // last run suggested grid charging but a gate declined it, guarded by RWMutex
 	optimizerChargePrice             float64         // price (currency/kWh) the active charge decision was based on, guarded by RWMutex
 
+	adaptivePlansUpdated time.Time // last adaptive plan learning run, guarded by RWMutex
+
 	optimizerMu      sync.Mutex                     // guards optimizer runs
 	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu
 	optimizerClient  *optimizer.ClientWithResponses // cached api client for connection reuse, guarded by optimizerMu
@@ -1272,6 +1274,8 @@ func (site *Site) update(lp updater) {
 		site.log.ERROR.Println(err)
 	} else {
 		go site.optimizerUpdateAsync(tariff.SlotDuration)
+
+		site.updateAdaptivePlansAsync()
 
 		site.updatePower(lp, state, totalChargePower, consumption, feedin)
 	}
