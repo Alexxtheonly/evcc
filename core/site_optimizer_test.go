@@ -360,8 +360,9 @@ func persistBatteryQuarterHours(t *testing.T, c *metrics.Collector, clk *clock.M
 	}
 }
 
-// TestBatteryPowerLimits verifies the fallback and percentile-derived paths of
-// batteryPowerLimits end to end (Site -> metrics.Collector -> sqlite -> percentileOf -> W).
+// TestBatteryPowerLimits verifies the fallback and observed-maximum paths of
+// batteryPowerLimits end to end (Site -> metrics.Collector -> sqlite -> W). History must only
+// ever raise the batteryPower fallback, never lower it - see the function's doc comment.
 func TestBatteryPowerLimits(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, metrics.SetupSchema())
@@ -391,7 +392,7 @@ func TestBatteryPowerLimits(t *testing.T) {
 		assert.Equal(t, float64(batteryPower), discharge)
 	})
 
-	t.Run("enough history: derives the percentile, ignoring the one spike", func(t *testing.T) {
+	t.Run("enough history above the fallback: raises the limit to the observed maximum", func(t *testing.T) {
 		clk := clock.NewMock()
 		clk.Set(time.Now().Truncate(tariff.SlotDuration))
 
@@ -399,11 +400,14 @@ func TestBatteryPowerLimits(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, c.AddEnergy(nil, nil, 0, false)) // baseline, no persist yet
 
-		// exactly batteryPowerMinSamples (20) slots per direction: 19 steady + 1 outlier spike
+		// exactly batteryPowerMinSamples (20) slots per direction: mostly modest slot averages
+		// (as a real battery running well under its cap for most 15min windows would produce)
+		// plus one slot that came closest to running at full power for the whole window - the
+		// demonstrated maximum, not an average of the whole history, becomes the limit
 		dischargePowers := append([]float64{}, repeat(19, 4000.0)...)
-		dischargePowers = append(dischargePowers, 40000) // spike: 10x steady
-		chargePowers := append([]float64{}, repeat(19, -8000.0)...)
-		chargePowers = append(chargePowers, -80000) // spike: 10x steady
+		dischargePowers = append(dischargePowers, 12000) // demonstrated sustained capability
+		chargePowers := append([]float64{}, repeat(19, -5000.0)...)
+		chargePowers = append(chargePowers, -15000)
 
 		persistBatteryQuarterHours(t, c, clk, dischargePowers)
 		persistBatteryQuarterHours(t, c, clk, chargePowers)
@@ -411,10 +415,29 @@ func TestBatteryPowerLimits(t *testing.T) {
 		site.collectors["seasoned"] = c
 		charge, discharge := site.batteryPowerLimits("seasoned")
 
-		// P95 over 20 samples (nearest-rank index 18 of 0..19) is the 19th-smallest value,
-		// i.e. the steady value - the single spike at index 19 is excluded
-		assert.Equal(t, 4000.0, discharge, "discharge limit must reflect the steady value, not the spike")
-		assert.Equal(t, 8000.0, charge, "charge limit must reflect the steady value, not the spike")
+		assert.Equal(t, 12000.0, discharge, "discharge limit must reflect the demonstrated maximum, not an average")
+		assert.Equal(t, 15000.0, charge, "charge limit must reflect the demonstrated maximum, not an average")
+	})
+
+	t.Run("enough history but all below the fallback: keeps the default as a floor", func(t *testing.T) {
+		clk := clock.NewMock()
+		clk.Set(time.Now().Truncate(tariff.SlotDuration))
+
+		c, err := metrics.NewCollector(metrics.Battery, "trickler", "", metrics.WithClock(clk))
+		require.NoError(t, err)
+		require.NoError(t, c.AddEnergy(nil, nil, 0, false)) // baseline, no persist yet
+
+		// batteryPowerMinSamples slots per direction, every one well below the batteryPower
+		// fallback - a battery that has only ever trickled must not get pinned below the
+		// default just because that is all it has demonstrated so far
+		persistBatteryQuarterHours(t, c, clk, repeat(20, 1500.0))
+		persistBatteryQuarterHours(t, c, clk, repeat(20, -2000.0))
+
+		site.collectors["trickler"] = c
+		charge, discharge := site.batteryPowerLimits("trickler")
+
+		assert.Equal(t, float64(batteryPower), discharge, "must not be pinned below the default fallback")
+		assert.Equal(t, float64(batteryPower), charge, "must not be pinned below the default fallback")
 	})
 }
 

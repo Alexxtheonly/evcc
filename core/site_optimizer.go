@@ -39,20 +39,14 @@ const (
 	batteryPower = 6000
 
 	// batteryPowerLookback is the trailing window of energy history batteryPowerLimits draws
-	// its percentile from.
+	// its observed maximum from.
 	batteryPowerLookback = 30 * 24 * time.Hour
 
 	// batteryPowerMinSamples is the minimum number of qualifying (non-zero, non-recovered,
-	// non-incomplete) 15min slots required before batteryPowerLimits trusts a percentile over
-	// the batteryPower fallback. A newly added battery, or one that has barely charged or
-	// discharged yet, stays on the fallback until it has a real track record.
+	// non-incomplete) 15min slots required before batteryPowerLimits trusts the observed
+	// maximum over the batteryPower fallback. A newly added battery, or one that has barely
+	// charged or discharged yet, stays on the fallback until it has a real track record.
 	batteryPowerMinSamples = 20
-
-	// batteryPowerPercentile is the percentile of observed per-slot power batteryPowerLimits
-	// uses as the limit - deliberately not the historical max, so a single anomalous spike
-	// (a brief inrush, a misread) does not set the limit for every future optimizer run,
-	// while staying high enough to reflect what the battery has actually demonstrated.
-	batteryPowerPercentile = 0.95
 )
 
 // optimizerChargingStrategies are the valid grid charging strategies; the first
@@ -1368,11 +1362,21 @@ func clearDemandWhenFull(demand []float32, headroom float32) []float32 {
 // that does not implement api.BatteryPowerLimiter, from the meter's own observed energy
 // history instead of the flat batteryPower constant every such battery was otherwise stuck
 // with regardless of its real size - every "can the battery absorb this cheap hour" answer
-// scales linearly with this value. Uses batteryPowerPercentile of non-zero per-slot power
-// over batteryPowerLookback, not the historical max, so one anomalous spike does not set the
-// limit for every future optimizer run. Falls back to batteryPower per direction when there
-// is not enough history (batteryPowerMinSamples) - a newly added battery, or one that has
-// only ever charged (or only ever discharged) so far.
+// scales linearly with this value.
+//
+// Each sample is one 15min slot's average power (kWh observed in the slot / slot duration),
+// which systematically understates true sustained capability: a battery doing 6kW for 4
+// minutes then idling for the remaining 11 contributes a sample of only 1.6kW, because the
+// slot boundary, not the battery, decides how long the burst gets averaged over. Deriving a
+// limit below the fallback from this data is worse than not deriving one at all - a
+// too-low limit makes the optimizer schedule fewer, shorter hard charges/discharges, which
+// then keeps producing exactly the low-power samples that justify the low limit next time
+// (self-reinforcing). So history here can only ever raise the fallback, never lower it: take
+// the maximum observed sustained slot power per direction, once there is enough of it
+// (batteryPowerMinSamples), and use batteryPower as a floor under that, not a starting point
+// to average around. A battery that has demonstrably sustained more than the default gets
+// credit for it; one that has only ever trickled keeps the default instead of being pinned
+// below it.
 func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit float64) {
 	chargeLimit, dischargeLimit = batteryPower, batteryPower
 
@@ -1388,11 +1392,11 @@ func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit f
 	}
 
 	// kWh observed in one 15min slot -> average W sustained over that slot
-	if p, ok := percentileOf(charge, batteryPowerPercentile, batteryPowerMinSamples); ok {
-		chargeLimit = p * 1e3 * slotsPerHour
+	if len(charge) >= batteryPowerMinSamples {
+		chargeLimit = max(chargeLimit, slices.Max(charge)*1e3*slotsPerHour)
 	}
-	if p, ok := percentileOf(discharge, batteryPowerPercentile, batteryPowerMinSamples); ok {
-		dischargeLimit = p * 1e3 * slotsPerHour
+	if len(discharge) >= batteryPowerMinSamples {
+		dischargeLimit = max(dischargeLimit, slices.Max(discharge)*1e3*slotsPerHour)
 	}
 
 	return chargeLimit, dischargeLimit
