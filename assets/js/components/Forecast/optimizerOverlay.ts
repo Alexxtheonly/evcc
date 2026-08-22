@@ -257,9 +257,9 @@ export function adaptivePlanMarkers(
 
 // shouldAnnotateOptimizerDecision reports whether the slot-0 decision annotation
 // should render. Three conditions must hold:
-//  - optimizer battery control must actually be enabled: the backend keeps
-//    publishing a decision (mode Unknown) whenever control is off, so the UI
-//    - not the publish path - is what must gate on it.
+//  - automatic mode must actually be enabled: the backend keeps publishing a
+//    decision (mode Unknown) whenever automatic mode is off, so the UI - not
+//    the publish path - is what must gate on it.
 //  - the decision must still be within the same validity horizon the backend
 //    applies before dropping a decision from control (see validFor), so a stale
 //    decision (e.g. the optimizer stuck retrying errOptimizerNotReady, which
@@ -268,10 +268,10 @@ export function adaptivePlanMarkers(
 //    as a "No plan" annotation.
 export function shouldAnnotateOptimizerDecision(
   d: OptimizerDecision | undefined,
-  batteryControlEnabled: boolean,
+  automaticEnabled: boolean,
   nowMs: number
 ): boolean {
-  if (!d || !batteryControlEnabled) return false;
+  if (!d || !automaticEnabled) return false;
   if (nowMs - new Date(d.updated).getTime() > d.validFor) return false;
   if (d.mode === BATTERY_MODE.UNKNOWN && !d.vetoReason) return false;
   return true;

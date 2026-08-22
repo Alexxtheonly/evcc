@@ -58,7 +58,7 @@ export default defineComponent({
 		vehicles: { type: Array as PropType<Vehicle[]>, default: () => [] },
 		deviceColors: { type: Object as PropType<DeviceColors>, default: () => ({}) },
 		optimizerDecision: { type: Object as PropType<OptimizerDecision> },
-		optimizerBatteryControl: { type: Boolean, default: false },
+		optimizerAutomatic: { type: Boolean, default: false },
 	},
 	computed: {
 		slots(): UiForecastSlot[] {
@@ -199,10 +199,7 @@ export default defineComponent({
 
 		optimizerDecisionLabel(): string | undefined {
 			const d = this.optimizerDecision;
-			if (
-				!d ||
-				!shouldAnnotateOptimizerDecision(d, this.optimizerBatteryControl, Date.now())
-			) {
+			if (!d || !shouldAnnotateOptimizerDecision(d, this.optimizerAutomatic, Date.now())) {
 				return undefined;
 			}
 
