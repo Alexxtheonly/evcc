@@ -1241,6 +1241,10 @@ export interface Vehicle {
   plan?: StaticPlan;
   /** Repeating charging plans. */
   repeatingPlans: RepeatingPlan[] | null;
+  /** Adaptive (learned) repeating plans. Used only while no repeating plans are stored. */
+  adaptivePlans?: RepeatingPlan[] | null;
+  /** Whether adaptive plans currently drive charging. */
+  adaptivePlansActive?: boolean;
   /** Charging plan strategy. */
   planStrategy: PlanStrategy;
   /** Vehicle title for UI display. */

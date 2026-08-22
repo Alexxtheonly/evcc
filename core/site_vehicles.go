@@ -18,20 +18,22 @@ type planStruct struct {
 }
 
 type vehicleStruct struct {
-	Title          string              `json:"title"`
-	Icon           string              `json:"icon,omitempty"`
-	Capacity       float64             `json:"capacity,omitempty"`
-	Phases         int                 `json:"phases,omitempty"`
-	Mode           api.ChargeMode      `json:"mode,omitempty"`
-	MinSoc         int                 `json:"minSoc,omitempty"`
-	LimitSoc       int                 `json:"limitSoc,omitempty"`
-	MinCurrent     float64             `json:"minCurrent,omitempty"`
-	MaxCurrent     float64             `json:"maxCurrent,omitempty"`
-	Priority       int                 `json:"priority,omitempty"`
-	Features       []string            `json:"features,omitempty"`
-	Plan           *planStruct         `json:"plan,omitempty"`
-	RepeatingPlans []api.RepeatingPlan `json:"repeatingPlans"`
-	PlanStrategy   api.PlanStrategy    `json:"planStrategy"`
+	Title               string              `json:"title"`
+	Icon                string              `json:"icon,omitempty"`
+	Capacity            float64             `json:"capacity,omitempty"`
+	Phases              int                 `json:"phases,omitempty"`
+	Mode                api.ChargeMode      `json:"mode,omitempty"`
+	MinSoc              int                 `json:"minSoc,omitempty"`
+	LimitSoc            int                 `json:"limitSoc,omitempty"`
+	MinCurrent          float64             `json:"minCurrent,omitempty"`
+	MaxCurrent          float64             `json:"maxCurrent,omitempty"`
+	Priority            int                 `json:"priority,omitempty"`
+	Features            []string            `json:"features,omitempty"`
+	Plan                *planStruct         `json:"plan,omitempty"`
+	RepeatingPlans      []api.RepeatingPlan `json:"repeatingPlans"`
+	AdaptivePlans       []api.RepeatingPlan `json:"adaptivePlans,omitempty"`
+	AdaptivePlansActive bool                `json:"adaptivePlansActive"`
+	PlanStrategy        api.PlanStrategy    `json:"planStrategy"`
 }
 
 // publishVehicles returns a list of vehicle titles
@@ -55,21 +57,26 @@ func (site *Site) publishVehicles() {
 			}
 		}
 
+		repeatingPlans := v.GetRepeatingPlans()
+		adaptivePlans, _ := v.GetAdaptivePlans()
+
 		res[v.Name()] = vehicleStruct{
-			Title:          instance.GetTitle(),
-			Icon:           instance.Icon(),
-			Capacity:       instance.Capacity(),
-			Phases:         instance.Phases(),
-			Mode:           v.GetMode(),
-			MinSoc:         v.GetMinSoc(),
-			LimitSoc:       v.GetLimitSoc(),
-			MinCurrent:     ac.MinCurrent,
-			MaxCurrent:     ac.MaxCurrent,
-			Priority:       ac.Priority,
-			Features:       lo.Map(instance.Features(), func(f api.Feature, _ int) string { return f.String() }),
-			Plan:           plan,
-			RepeatingPlans: v.GetRepeatingPlans(),
-			PlanStrategy:   v.GetPlanStrategy(),
+			Title:               instance.GetTitle(),
+			Icon:                instance.Icon(),
+			Capacity:            instance.Capacity(),
+			Phases:              instance.Phases(),
+			Mode:                v.GetMode(),
+			MinSoc:              v.GetMinSoc(),
+			LimitSoc:            v.GetLimitSoc(),
+			MinCurrent:          ac.MinCurrent,
+			MaxCurrent:          ac.MaxCurrent,
+			Priority:            ac.Priority,
+			Features:            lo.Map(instance.Features(), func(f api.Feature, _ int) string { return f.String() }),
+			Plan:                plan,
+			RepeatingPlans:      repeatingPlans,
+			AdaptivePlans:       adaptivePlans,
+			AdaptivePlansActive: len(repeatingPlans) == 0 && len(v.GetEffectiveRepeatingPlans()) > 0,
+			PlanStrategy:        v.GetPlanStrategy(),
 		}
 
 		// publish effective plan strategy immediately for soc-based planning

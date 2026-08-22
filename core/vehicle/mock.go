@@ -41,6 +41,35 @@ func (m *MockAPI) EXPECT() *MockAPIMockRecorder {
 	return m.recorder
 }
 
+// GetAdaptivePlans mocks base method.
+func (m *MockAPI) GetAdaptivePlans() ([]api.RepeatingPlan, time.Time) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAdaptivePlans")
+	ret0, _ := ret[0].([]api.RepeatingPlan)
+	ret1, _ := ret[1].(time.Time)
+	return ret0, ret1
+}
+
+// GetAdaptivePlans indicates an expected call of GetAdaptivePlans.
+func (mr *MockAPIMockRecorder) GetAdaptivePlans() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAdaptivePlans", reflect.TypeOf((*MockAPI)(nil).GetAdaptivePlans))
+}
+
+// GetEffectiveRepeatingPlans mocks base method.
+func (m *MockAPI) GetEffectiveRepeatingPlans() []api.RepeatingPlan {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetEffectiveRepeatingPlans")
+	ret0, _ := ret[0].([]api.RepeatingPlan)
+	return ret0
+}
+
+// GetEffectiveRepeatingPlans indicates an expected call of GetEffectiveRepeatingPlans.
+func (mr *MockAPIMockRecorder) GetEffectiveRepeatingPlans() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEffectiveRepeatingPlans", reflect.TypeOf((*MockAPI)(nil).GetEffectiveRepeatingPlans))
+}
+
 // GetLimitSoc mocks base method.
 func (m *MockAPI) GetLimitSoc() int {
 	m.ctrl.T.Helper()
@@ -152,6 +181,20 @@ func (m *MockAPI) Name() string {
 func (mr *MockAPIMockRecorder) Name() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Name", reflect.TypeOf((*MockAPI)(nil).Name))
+}
+
+// SetAdaptivePlans mocks base method.
+func (m *MockAPI) SetAdaptivePlans(arg0 []api.RepeatingPlan) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetAdaptivePlans", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetAdaptivePlans indicates an expected call of SetAdaptivePlans.
+func (mr *MockAPIMockRecorder) SetAdaptivePlans(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetAdaptivePlans", reflect.TypeOf((*MockAPI)(nil).SetAdaptivePlans), arg0)
 }
 
 // SetLimitSoc mocks base method.

@@ -196,6 +196,52 @@ func addRepeatingPlansHandler(site site.API) http.HandlerFunc {
 	}
 }
 
+// updateAdaptivePlansHandler stores the adaptive (learned) repeating plans
+func updateAdaptivePlansHandler(site site.API) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+
+		v, err := site.Vehicles().ByName(vars["name"])
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		var res []api.RepeatingPlan
+		if err := json.NewDecoder(r.Body).Decode(&res); err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		if err := v.SetAdaptivePlans(res); err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		jsonWrite(w, res)
+	}
+}
+
+// removeAdaptivePlansHandler clears the adaptive repeating plans
+func removeAdaptivePlansHandler(site site.API) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+
+		v, err := site.Vehicles().ByName(vars["name"])
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		if err := v.SetAdaptivePlans(nil); err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		jsonWrite(w, struct{}{})
+	}
+}
+
 // planSocRemoveHandler removes plan soc and time
 func planSocRemoveHandler(site site.API) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
