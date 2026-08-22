@@ -710,6 +710,16 @@ test.describe("adaptive plans", async () => {
     });
     expect(response.status()).toBe(200);
 
+    // belt and braces: nothing writes the plan while the modal is open. Registered
+    // before the modal opens so the whole interaction - not just a tail window
+    // after all assertions ran - is covered.
+    let repeatingPlanPosted = false;
+    page.on("request", (req) => {
+      if (req.method() === "POST" && req.url().includes("/plan/repeating")) {
+        repeatingPlanPosted = true;
+      }
+    });
+
     await lp1.getByTestId("charging-plan-button").click();
     const modal = await page.getByTestId("charging-plan-modal").first();
 
@@ -726,13 +736,6 @@ test.describe("adaptive plans", async () => {
     // no path to create a user plan from here
     await expect(modal.getByTestId("repeating-plan-add")).not.toBeVisible();
 
-    // belt and braces: nothing writes the plan while the modal is open
-    let repeatingPlanPosted = false;
-    page.on("request", (req) => {
-      if (req.method() === "POST" && req.url().includes("/plan/repeating")) {
-        repeatingPlanPosted = true;
-      }
-    });
     await page.waitForTimeout(200);
     expect(repeatingPlanPosted).toBe(false);
 
