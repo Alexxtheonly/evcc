@@ -1269,6 +1269,21 @@ paths:
             application/json:
               schema:
                 $ref: "./openapi.state.yaml#/components/schemas/PlanStrategy"
+  /vehicles/{name}/adaptiveplanlearning/{enable}:
+    post:
+      operationId: setVehicleAdaptivePlanLearning
+      summary: Set adaptive plan learning
+      description: "Learn repeating charging plans from the vehicle's own charging session history. Disabling clears the learned plans immediately."
+      externalDocs:
+        url: https://docs.evcc.io/en/features/plans
+      tags:
+        - vehicles
+      parameters:
+        - $ref: "#/components/parameters/vehicleName"
+        - $ref: "#/components/parameters/enable"
+      responses:
+        "200":
+          $ref: "#/components/responses/BooleanResult"
   /db/backup:
     get:
       operationId: downloadBackup

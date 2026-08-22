@@ -95,6 +95,29 @@
 						</select>
 					</SettingsFormRow>
 				</template>
+				<SettingsFormRow
+					:id="fieldId(vehicle, 'adaptivePlanLearning')"
+					:label="$t('main.vehicleSettings.adaptivePlanLearning')"
+					:description="$t('main.vehicleSettings.adaptivePlanLearningDescription')"
+				>
+					<div class="form-check form-switch">
+						<input
+							:id="fieldId(vehicle, 'adaptivePlanLearning')"
+							:checked="vehicle.adaptivePlanLearning"
+							class="form-check-input"
+							type="checkbox"
+							role="switch"
+							data-testid="adaptive-plan-learning"
+							@change="changeAdaptivePlanLearning(vehicle, $event)"
+						/>
+					</div>
+					<small
+						v-if="vehicle.adaptivePlanLearning && !hasAdaptivePlans(vehicle)"
+						class="d-block text-muted mt-1"
+					>
+						{{ $t("main.vehicleSettings.adaptivePlanLearningNoHistory") }}
+					</small>
+				</SettingsFormRow>
 			</div>
 			<p class="mb-0 border-top pt-4">
 				<i18n-t keypath="main.vehicleSettings.editHint" tag="span" scope="global">
@@ -204,6 +227,13 @@ export default defineComponent({
 		},
 		changeLimitSoc(vehicle: Vehicle, event: Event): void {
 			api.post(`vehicles/${vehicle.name}/limitsoc/${this.selectValue(event)}`);
+		},
+		hasAdaptivePlans(vehicle: Vehicle): boolean {
+			return (vehicle.adaptivePlans?.length ?? 0) > 0;
+		},
+		changeAdaptivePlanLearning(vehicle: Vehicle, event: Event): void {
+			const enabled = (event.target as HTMLInputElement).checked;
+			api.post(`vehicles/${vehicle.name}/adaptiveplanlearning/${enabled}`);
 		},
 	},
 });

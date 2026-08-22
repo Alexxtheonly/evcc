@@ -1547,6 +1547,9 @@
       "vehicleSoc": "Charge"
     },
     "vehicleSettings": {
+      "adaptivePlanLearning": "Learn charging plans",
+      "adaptivePlanLearningDescription": "Learn repeating charging plans from this vehicle's own charging sessions, recomputed every 6 hours. A repeating plan you create yourself always takes precedence.",
+      "adaptivePlanLearningNoHistory": "Not enough session history yet.",
       "connectedTo": "connected to {0}",
       "description": "These defaults are applied when the vehicle connects to a charging point.",
       "editHint": "Add or edit vehicles in {0}.",
