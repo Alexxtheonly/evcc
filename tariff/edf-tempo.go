@@ -103,6 +103,7 @@ func (t *EdfTempo) refreshToken() (*oauth2.Token, error) {
 func (t *EdfTempo) run(done chan error) {
 	var once sync.Once
 
+tick:
 	for tick := time.Tick(time.Hour); ; <-tick {
 		var res struct {
 			Data struct {
@@ -135,12 +136,16 @@ func (t *EdfTempo) run(done chan error) {
 		data := make(api.Rates, 0, 24*len(res.Data.Values))
 		for _, r := range res.Data.Values {
 			for ts := r.StartDate.Local(); ts.Before(r.EndDate); ts = ts.Add(time.Hour) {
-				ar := api.Rate{
+				value, err := t.totalPrice(t.prices[strings.ToLower(r.Value)], ts)
+				if err != nil {
+					t.log.ERROR.Println(err)
+					continue tick
+				}
+				data = append(data, api.Rate{
 					Start: ts,
 					End:   ts.Add(time.Hour),
-					Value: t.totalPrice(t.prices[strings.ToLower(r.Value)], ts),
-				}
-				data = append(data, ar)
+					Value: value,
+				})
 			}
 		}
 

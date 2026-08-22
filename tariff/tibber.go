@@ -101,19 +101,33 @@ func (t *Tibber) run(done chan error) {
 		}
 
 		pi := res.Viewer.Home.CurrentSubscription.PriceInfo
-		data := append(t.rates(pi.Today), t.rates(pi.Tomorrow)...)
+		today, err := t.rates(pi.Today)
+		if err != nil {
+			t.log.ERROR.Println(err)
+			continue
+		}
+		tomorrow, err := t.rates(pi.Tomorrow)
+		if err != nil {
+			t.log.ERROR.Println(err)
+			continue
+		}
+		data := append(today, tomorrow...)
 
 		mergeRates(t.data, data)
 		once.Do(func() { close(done) })
 	}
 }
 
-func (t *Tibber) rates(pi []tibber.Price) api.Rates {
+func (t *Tibber) rates(pi []tibber.Price) (api.Rates, error) {
 	data := make(api.Rates, 0, len(pi))
 	for _, r := range pi {
 		price := r.Total
 		if t.Charges != 0 || t.Tax != 0 || t.Formula != "" {
-			price = t.totalPrice(r.Energy, r.StartsAt)
+			var err error
+			price, err = t.totalPrice(r.Energy, r.StartsAt)
+			if err != nil {
+				return nil, err
+			}
 		}
 		ar := api.Rate{
 			Start: r.StartsAt.Local(),
@@ -122,7 +136,7 @@ func (t *Tibber) rates(pi []tibber.Price) api.Rates {
 		}
 		data = append(data, ar)
 	}
-	return data
+	return data, nil
 }
 
 // Rates implements the api.Tariff interface

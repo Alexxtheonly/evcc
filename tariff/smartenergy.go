@@ -65,17 +65,26 @@ func (t *SmartEnergy) run(done chan error) {
 		}
 
 		data := make(api.Rates, 0, len(res.Data))
+		var calcErr error
 		for _, r := range res.Data {
 			if r.Date.Minute() != 0 {
 				continue
 			}
 
-			ar := api.Rate{
+			value, err := t.totalPrice(r.Value/100, r.Date)
+			if err != nil {
+				calcErr = err
+				break
+			}
+			data = append(data, api.Rate{
 				Start: r.Date.Local(),
 				End:   r.Date.Add(time.Hour).Local(),
-				Value: t.totalPrice(r.Value/100, r.Date),
-			}
-			data = append(data, ar)
+				Value: value,
+			})
+		}
+		if calcErr != nil {
+			t.log.ERROR.Println(calcErr)
+			continue
 		}
 
 		mergeRates(t.data, data)

@@ -102,13 +102,16 @@ func (t *Fixed) Rates() (api.Rates, error) {
 				end = dayStart.Add(time.Minute * time.Duration(markers[i+1].Minutes()))
 			}
 
-			rate := api.Rate{
-				Start: ts,
-				End:   end,
-				Value: t.totalPrice(zone.Price, ts),
+			value, err := t.totalPrice(zone.Price, ts)
+			if err != nil {
+				return nil, err
 			}
 
-			res = append(res, rate)
+			res = append(res, api.Rate{
+				Start: ts,
+				End:   end,
+				Value: value,
+			})
 		}
 	}
 

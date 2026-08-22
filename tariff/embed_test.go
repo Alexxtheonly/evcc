@@ -1,6 +1,7 @@
 package tariff
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -13,7 +14,8 @@ func TestTotalPriceFallback(t *testing.T) {
 	e := embed{Charges: 0.10, Tax: 0.19}
 	require.NoError(t, e.init())
 
-	got := e.totalPrice(0.20, time.Now())
+	got, err := e.totalPrice(0.20, time.Now())
+	require.NoError(t, err)
 	assert.InDelta(t, (0.20+0.10)*1.19, got, 1e-9)
 }
 
@@ -27,7 +29,8 @@ func TestTotalPriceMatchingZone(t *testing.T) {
 	require.NoError(t, e.init())
 
 	ts := time.Date(2026, 1, 15, 2, 0, 0, 0, time.Local)
-	got := e.totalPrice(0.20, ts)
+	got, err := e.totalPrice(0.20, ts)
+	require.NoError(t, err)
 	assert.InDelta(t, 0.20+0.10, got, 1e-9)
 }
 
@@ -41,7 +44,8 @@ func TestTotalPriceNonMatchingZone(t *testing.T) {
 	require.NoError(t, e.init())
 
 	ts := time.Date(2026, 1, 15, 12, 0, 0, 0, time.Local)
-	got := e.totalPrice(0.20, ts)
+	got, err := e.totalPrice(0.20, ts)
+	require.NoError(t, err)
 	assert.InDelta(t, 0.20+0.50, got, 1e-9)
 }
 
@@ -55,7 +59,8 @@ func TestTotalPriceNegativeChargesZone(t *testing.T) {
 	require.NoError(t, e.init())
 
 	ts := time.Date(2026, 1, 15, 11, 0, 0, 0, time.Local)
-	got := e.totalPrice(0.20, ts)
+	got, err := e.totalPrice(0.20, ts)
+	require.NoError(t, err)
 	assert.InDelta(t, 0.20-0.05, got, 1e-9)
 }
 
@@ -70,11 +75,15 @@ func TestTotalPriceLastZoneWins(t *testing.T) {
 
 	// 03:00 is covered by both zones; later entry wins
 	ts := time.Date(2026, 1, 15, 3, 0, 0, 0, time.Local)
-	assert.InDelta(t, 0.20+0.05, e.totalPrice(0.20, ts), 1e-9)
+	got, err := e.totalPrice(0.20, ts)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.20+0.05, got, 1e-9)
 
 	// 05:00 is only covered by the broader zone
 	ts = time.Date(2026, 1, 15, 5, 0, 0, 0, time.Local)
-	assert.InDelta(t, 0.20+0.10, e.totalPrice(0.20, ts), 1e-9)
+	got, err = e.totalPrice(0.20, ts)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.20+0.10, got, 1e-9)
 }
 
 func TestEffectiveChargesMonthFilter(t *testing.T) {
@@ -107,11 +116,41 @@ func TestTotalPriceFormulaSeesResolvedCharges(t *testing.T) {
 
 	// In zone: charges resolves to 0.30
 	ts := time.Date(2026, 1, 15, 11, 0, 0, 0, time.Local)
-	assert.InDelta(t, (0.20+0.30)*2, e.totalPrice(0.20, ts), 1e-9)
+	got, err := e.totalPrice(0.20, ts)
+	require.NoError(t, err)
+	assert.InDelta(t, (0.20+0.30)*2, got, 1e-9)
 
 	// Out of zone: falls back to base 0.10
 	ts = time.Date(2026, 1, 15, 14, 0, 0, 0, time.Local)
-	assert.InDelta(t, (0.20+0.10)*2, e.totalPrice(0.20, ts), 1e-9)
+	got, err = e.totalPrice(0.20, ts)
+	require.NoError(t, err)
+	assert.InDelta(t, (0.20+0.10)*2, got, 1e-9)
+}
+
+// TestTotalPriceFormulaErrorPropagates verifies that a runtime formula failure is returned as
+// an error instead of silently producing a price of 0 - a fabricated free price would make
+// every downstream consumer (smart cost limit, grid charge limit, the optimizer) believe
+// energy is free. calc is injected directly to exercise a failure at call time, independent
+// of init()'s own canary evaluation of the formula.
+func TestTotalPriceFormulaErrorPropagates(t *testing.T) {
+	wantErr := errors.New("formula boom")
+	e := embed{
+		calc: func(price, charges float64, ts time.Time) (float64, error) {
+			return 0, wantErr
+		},
+	}
+
+	got, err := e.totalPrice(0.20, time.Now())
+	require.ErrorIs(t, err, wantErr)
+	assert.Zero(t, got)
+}
+
+// TestTotalPriceFormulaNonFloatPropagates verifies a formula that evaluates but does not
+// return a float value (e.g. a typo returning a string) surfaces as an error from init(),
+// which runs the formula once as a canary before the tariff is ever used.
+func TestTotalPriceFormulaNonFloatPropagates(t *testing.T) {
+	e := embed{Formula: `"not a number"`}
+	require.Error(t, e.init())
 }
 
 func TestEmbedDecodeChargesZones(t *testing.T) {

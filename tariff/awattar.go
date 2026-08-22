@@ -79,13 +79,22 @@ func (t *Awattar) run(done chan error) {
 		}
 
 		data := make(api.Rates, 0, len(res.Data))
+		var calcErr error
 		for _, r := range res.Data {
-			ar := api.Rate{
+			value, err := t.totalPrice(r.Marketprice/1e3, r.StartTimestamp)
+			if err != nil {
+				calcErr = err
+				break
+			}
+			data = append(data, api.Rate{
 				Start: r.StartTimestamp.Local(),
 				End:   r.EndTimestamp.Local(),
-				Value: t.totalPrice(r.Marketprice/1e3, r.StartTimestamp),
-			}
-			data = append(data, ar)
+				Value: value,
+			})
+		}
+		if calcErr != nil {
+			t.log.ERROR.Println(calcErr)
+			continue
 		}
 
 		mergeRates(t.data, data)

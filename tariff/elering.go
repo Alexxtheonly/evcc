@@ -81,15 +81,24 @@ func (t *Elering) run(done chan error) {
 		}
 
 		data := make(api.Rates, 0, len(res.Data[t.region]))
+		var calcErr error
 		for _, r := range res.Data[t.region] {
 			ts := time.Unix(r.Timestamp, 0).Local()
 
-			ar := api.Rate{
+			value, err := t.totalPrice(r.Price/1e3, ts)
+			if err != nil {
+				calcErr = err
+				break
+			}
+			data = append(data, api.Rate{
 				Start: ts,
 				End:   ts.Add(time.Hour),
-				Value: t.totalPrice(r.Price/1e3, ts),
-			}
-			data = append(data, ar)
+				Value: value,
+			})
+		}
+		if calcErr != nil {
+			t.log.ERROR.Println(calcErr)
+			continue
 		}
 
 		mergeRates(t.data, data)

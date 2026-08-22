@@ -152,13 +152,22 @@ func (t *Entsoe) run(done chan error) {
 		}
 
 		data := make(api.Rates, 0, len(res))
+		var calcErr error
 		for _, r := range res {
-			ar := api.Rate{
+			value, err := t.totalPrice(r.Value, r.Start)
+			if err != nil {
+				calcErr = err
+				break
+			}
+			data = append(data, api.Rate{
 				Start: r.Start.Local(),
 				End:   r.End.Local(),
-				Value: t.totalPrice(r.Value, r.Start),
-			}
-			data = append(data, ar)
+				Value: value,
+			})
+		}
+		if calcErr != nil {
+			t.log.ERROR.Println(calcErr)
+			continue
 		}
 
 		mergeRates(t.data, data)

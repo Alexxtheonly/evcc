@@ -86,6 +86,7 @@ func (t *Stekker) run(done chan error) {
 	var once sync.Once
 	client := request.NewHelper(t.log)
 
+tick:
 	for tick := time.Tick(time.Hour); ; <-tick {
 		url := fmt.Sprintf("%s?advanced_view=&region=%s&unit=MWh", stekkerURI, t.region)
 		resp, err := client.Get(url)
@@ -159,10 +160,16 @@ func (t *Stekker) run(done chan error) {
 					continue
 				}
 
+				value, err := t.totalPrice(yt/1000.0, start) // €/MWh → €/kWh
+				if err != nil {
+					t.log.ERROR.Println(err)
+					continue tick
+				}
+
 				res = append(res, api.Rate{
 					Start: start,
 					End:   start.Add(t.interval),
-					Value: t.totalPrice(yt/1000.0, start), // €/MWh → €/kWh
+					Value: value,
 				})
 			}
 		}

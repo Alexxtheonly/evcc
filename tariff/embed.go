@@ -105,13 +105,16 @@ func (t *embed) effectiveCharges(ts time.Time) float64 {
 	return t.Charges
 }
 
-func (t *embed) totalPrice(price float64, ts time.Time) float64 {
+// totalPrice returns the effective price including charges, tax and (if configured) the
+// custom formula. A formula error is propagated rather than silently treated as a price of
+// 0 - every downstream consumer (smart cost limit, grid charge limit, the optimizer's price
+// signal) would otherwise read a runtime formula failure as "energy is free" and act on it.
+func (t *embed) totalPrice(price float64, ts time.Time) (float64, error) {
 	charges := t.effectiveCharges(ts)
 	if t.calc != nil {
-		res, _ := t.calc(price, charges, ts)
-		return res
+		return t.calc(price, charges, ts)
 	}
-	return (price + charges) * (1 + t.Tax)
+	return (price + charges) * (1 + t.Tax), nil
 }
 
 var _ api.FeatureDescriber = (*embed)(nil)
