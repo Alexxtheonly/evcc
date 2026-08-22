@@ -4,9 +4,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benbjohnson/clock"
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/loadpoint"
+	"github.com/evcc-io/evcc/core/metrics"
 	"github.com/evcc-io/evcc/core/types"
+	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
@@ -343,6 +346,84 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		assert.Equal(t, float32(2000), req.SMin)
 		assert.Equal(t, float32(10000), req.SMax)
 	})
+}
+
+// persistBatteryQuarterHours drives a collector through len(powersW) consecutive 15min
+// slots, each ending up persisted with the energy that constant power implies (Wh = W *
+// 0.25h). Positive power lands in the discharge column, negative in the charge column - see
+// the battery accumulation convention documented on metrics.Collector.BatteryPowerSamples.
+func persistBatteryQuarterHours(t *testing.T, c *metrics.Collector, clk *clock.Mock, powersW []float64) {
+	t.Helper()
+	for _, p := range powersW {
+		clk.Add(15 * time.Minute)
+		require.NoError(t, c.AddEnergy(nil, nil, p, false))
+	}
+}
+
+// TestBatteryPowerLimits verifies the fallback and percentile-derived paths of
+// batteryPowerLimits end to end (Site -> metrics.Collector -> sqlite -> percentileOf -> W).
+func TestBatteryPowerLimits(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{log: util.NewLogger("foo"), collectors: map[string]*metrics.Collector{}}
+
+	t.Run("no collector for this device: falls back", func(t *testing.T) {
+		charge, discharge := site.batteryPowerLimits("unknown")
+		assert.Equal(t, float64(batteryPower), charge)
+		assert.Equal(t, float64(batteryPower), discharge)
+	})
+
+	t.Run("not enough history: falls back", func(t *testing.T) {
+		clk := clock.NewMock()
+		clk.Set(time.Now().Truncate(tariff.SlotDuration))
+
+		c, err := metrics.NewCollector(metrics.Battery, "sparse", "", metrics.WithClock(clk))
+		require.NoError(t, err)
+		require.NoError(t, c.AddEnergy(nil, nil, 0, false)) // baseline, no persist yet
+
+		// well below batteryPowerMinSamples in each direction
+		persistBatteryQuarterHours(t, c, clk, []float64{4000, 4000, 4000, -8000, -8000})
+
+		site.collectors["sparse"] = c
+		charge, discharge := site.batteryPowerLimits("sparse")
+		assert.Equal(t, float64(batteryPower), charge)
+		assert.Equal(t, float64(batteryPower), discharge)
+	})
+
+	t.Run("enough history: derives the percentile, ignoring the one spike", func(t *testing.T) {
+		clk := clock.NewMock()
+		clk.Set(time.Now().Truncate(tariff.SlotDuration))
+
+		c, err := metrics.NewCollector(metrics.Battery, "seasoned", "", metrics.WithClock(clk))
+		require.NoError(t, err)
+		require.NoError(t, c.AddEnergy(nil, nil, 0, false)) // baseline, no persist yet
+
+		// exactly batteryPowerMinSamples (20) slots per direction: 19 steady + 1 outlier spike
+		dischargePowers := append([]float64{}, repeat(19, 4000.0)...)
+		dischargePowers = append(dischargePowers, 40000) // spike: 10x steady
+		chargePowers := append([]float64{}, repeat(19, -8000.0)...)
+		chargePowers = append(chargePowers, -80000) // spike: 10x steady
+
+		persistBatteryQuarterHours(t, c, clk, dischargePowers)
+		persistBatteryQuarterHours(t, c, clk, chargePowers)
+
+		site.collectors["seasoned"] = c
+		charge, discharge := site.batteryPowerLimits("seasoned")
+
+		// P95 over 20 samples (nearest-rank index 18 of 0..19) is the 19th-smallest value,
+		// i.e. the steady value - the single spike at index 19 is excluded
+		assert.Equal(t, 4000.0, discharge, "discharge limit must reflect the steady value, not the spike")
+		assert.Equal(t, 8000.0, charge, "charge limit must reflect the steady value, not the spike")
+	})
+}
+
+func repeat(n int, v float64) []float64 {
+	res := make([]float64, n)
+	for i := range res {
+		res[i] = v
+	}
+	return res
 }
 
 // charge goal for vehicles with and without known capacity/soc, see #32890

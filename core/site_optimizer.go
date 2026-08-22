@@ -33,8 +33,26 @@ const (
 	// eta is the efficiency of the battery charging/discharging
 	eta = 0.9
 
-	// batteryPower is the default power of the battery in W
+	// batteryPower is the fallback charge/discharge power of a battery without a
+	// api.BatteryPowerLimiter and without enough history for batteryPowerLimits to derive a
+	// plausible limit from, in W.
 	batteryPower = 6000
+
+	// batteryPowerLookback is the trailing window of energy history batteryPowerLimits draws
+	// its percentile from.
+	batteryPowerLookback = 30 * 24 * time.Hour
+
+	// batteryPowerMinSamples is the minimum number of qualifying (non-zero, non-recovered,
+	// non-incomplete) 15min slots required before batteryPowerLimits trusts a percentile over
+	// the batteryPower fallback. A newly added battery, or one that has barely charged or
+	// discharged yet, stays on the fallback until it has a real track record.
+	batteryPowerMinSamples = 20
+
+	// batteryPowerPercentile is the percentile of observed per-slot power batteryPowerLimits
+	// uses as the limit - deliberately not the historical max, so a single anomalous spike
+	// (a brief inrush, a misread) does not set the limit for every future optimizer run,
+	// while staying high enough to reflect what the battery has actually demonstrated.
+	batteryPowerPercentile = 0.95
 
 	// pMaxImpOvershootPenalty scales the peak forecast import price (currency/Wh) into a
 	// one-time, demand-charge-style penalty (currency/W) for GridConfig.PrcPExcImp. 1000x
@@ -1377,10 +1395,46 @@ func clearDemandWhenFull(demand []float32, headroom float32) []float32 {
 	return res
 }
 
+// batteryPowerLimits derives plausible charge/discharge power limits (W) for a battery meter
+// that does not implement api.BatteryPowerLimiter, from the meter's own observed energy
+// history instead of the flat batteryPower constant every such battery was otherwise stuck
+// with regardless of its real size - every "can the battery absorb this cheap hour" answer
+// scales linearly with this value. Uses batteryPowerPercentile of non-zero per-slot power
+// over batteryPowerLookback, not the historical max, so one anomalous spike does not set the
+// limit for every future optimizer run. Falls back to batteryPower per direction when there
+// is not enough history (batteryPowerMinSamples) - a newly added battery, or one that has
+// only ever charged (or only ever discharged) so far.
+func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit float64) {
+	chargeLimit, dischargeLimit = batteryPower, batteryPower
+
+	c, ok := site.collectors[name]
+	if !ok {
+		return
+	}
+
+	charge, discharge, err := c.BatteryPowerSamples(time.Now().Add(-batteryPowerLookback))
+	if err != nil {
+		site.log.ERROR.Printf("battery power limits: %v", err)
+		return
+	}
+
+	// kWh observed in one 15min slot -> average W sustained over that slot
+	if p, ok := percentileOf(charge, batteryPowerPercentile, batteryPowerMinSamples); ok {
+		chargeLimit = p * 1e3 * slotsPerHour
+	}
+	if p, ok := percentileOf(discharge, batteryPowerPercentile, batteryPowerMinSamples); ok {
+		dischargeLimit = p * 1e3 * slotsPerHour
+	}
+
+	return chargeLimit, dischargeLimit
+}
+
 func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measurement, grid api.Rates, minLen int, firstSlotDuration time.Duration) (optimizer.BatteryConfig, batteryDetail) {
+	chargeLimit, dischargeLimit := site.batteryPowerLimits(dev.Config().Name)
+
 	bat := optimizer.BatteryConfig{
-		CMax:      batteryPower,
-		DMax:      batteryPower,
+		CMax:      float32(chargeLimit),
+		DMax:      float32(dischargeLimit),
 		SCapacity: float32(*b.Capacity * 1e3),         // Wh
 		SInitial:  float32(*b.Capacity * *b.Soc * 10), // Wh
 		CPriority: homeBatteryCPriority,
