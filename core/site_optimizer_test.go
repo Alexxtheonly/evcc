@@ -504,21 +504,6 @@ func TestGridExportLimit(t *testing.T) {
 	assert.Equal(t, 7000.0, site.GetGridExportLimit())
 }
 
-func TestGridImportOvershootPenalty(t *testing.T) {
-	// no price data at all: PrcPExcImp stays 0, PMaxImp remains a hard constraint
-	assert.Equal(t, float32(0), gridImportOvershootPenalty(nil))
-	assert.Equal(t, float32(0), gridImportOvershootPenalty([]float32{}))
-
-	// all-zero or negative prices (e.g. no tariff, or a negative-price event): still 0
-	assert.Equal(t, float32(0), gridImportOvershootPenalty([]float32{0, 0, 0}))
-	assert.Equal(t, float32(0), gridImportOvershootPenalty([]float32{-0.0001, -0.0002}))
-
-	// scales with the peak price in the series, not the average, and dominates it
-	got := gridImportOvershootPenalty([]float32{0.0001, 0.0004, 0.0002})
-	assert.Equal(t, float32(0.0004)*pMaxImpOvershootPenalty, got)
-	assert.Greater(t, got, float32(0.0004))
-}
-
 func TestEffectivePriorityToCPriority(t *testing.T) {
 	// low third, including the common default of 0: no preference over other batteries
 	for _, p := range []int{-5, 0, 1, 2, 3} {
@@ -728,8 +713,8 @@ func TestDiffSuggestions(t *testing.T) {
 
 func TestNewOptimizerDiagnosticsPublish(t *testing.T) {
 	// overshoot is summed across the whole horizon, not just the current slot -
-	// this is the diagnostic that makes a PMaxImp overshoot (see
-	// gridImportOvershootPenalty) visible instead of vanishing into a discarded result
+	// this is the diagnostic that makes a PMaxImp overshoot (priced per slot by the
+	// solver regardless of PrcPExcImp) visible instead of vanishing unreported
 	got := newOptimizerDiagnosticsPublish(optimizer.OptimizationResult{
 		ObjectiveValue:      1.2345,
 		GridImportOvershoot: []float32{0, 150, 50},
