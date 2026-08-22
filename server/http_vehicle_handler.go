@@ -242,6 +242,32 @@ func removeAdaptivePlansHandler(site site.API) http.HandlerFunc {
 	}
 }
 
+// adaptivePlanLearningHandler enables or disables adaptive plan learning
+func adaptivePlanLearningHandler(site site.API) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+
+		v, err := site.Vehicles().ByName(vars["name"])
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		enabled, err := strconv.ParseBool(vars["value"])
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		if err := v.SetAdaptivePlanLearning(enabled); err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		jsonWrite(w, enabled)
+	}
+}
+
 // planSocRemoveHandler removes plan soc and time
 func planSocRemoveHandler(site site.API) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

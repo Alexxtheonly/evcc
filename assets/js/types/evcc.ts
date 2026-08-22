@@ -1245,6 +1245,8 @@ export interface Vehicle {
   adaptivePlans?: RepeatingPlan[] | null;
   /** Whether adaptive plans currently drive charging. */
   adaptivePlansActive?: boolean;
+  /** Whether adaptive plans are learned from session history. */
+  adaptivePlanLearning?: boolean;
   /** Charging plan strategy. */
   planStrategy: PlanStrategy;
   /** Vehicle title for UI display. */

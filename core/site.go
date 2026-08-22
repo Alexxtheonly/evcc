@@ -119,6 +119,8 @@ type Site struct {
 	suggestions              map[string]types.Suggestion // Optimizer suggestions by device key
 	suggestionActions        map[string]string           // last notified actionable optimizer action by device key
 
+	adaptivePlansUpdated time.Time // last adaptive plan learning run, guarded by RWMutex
+
 	optimizerMu      sync.Mutex // guards optimizer runs
 	optimizerUpdated time.Time  // last optimizer run, guarded by optimizerMu
 
@@ -1240,6 +1242,8 @@ func (site *Site) update(lp updater) {
 		site.log.ERROR.Println(err)
 	} else {
 		go site.optimizerUpdateAsync(tariff.SlotDuration)
+
+		site.updateAdaptivePlansAsync()
 
 		site.updatePower(lp, state, totalChargePower, consumption, feedin)
 	}

@@ -114,3 +114,24 @@ func (v *adapter) GetEffectiveRepeatingPlans() []api.RepeatingPlan {
 
 	return plans
 }
+
+// GetAdaptivePlanLearning returns whether adaptive plans are learned from session history
+func (v *adapter) GetAdaptivePlanLearning() bool {
+	res, err := settings.Bool(v.key() + keys.AdaptivePlanLearning)
+	return err == nil && res
+}
+
+// SetAdaptivePlanLearning enables or disables learning adaptive plans from
+// session history. Disabling clears the stored plans so they stop driving
+// charging immediately.
+func (v *adapter) SetAdaptivePlanLearning(enabled bool) error {
+	settings.SetBool(v.key()+keys.AdaptivePlanLearning, enabled)
+
+	if !enabled {
+		return v.SetAdaptivePlans(nil)
+	}
+
+	v.publish()
+
+	return nil
+}

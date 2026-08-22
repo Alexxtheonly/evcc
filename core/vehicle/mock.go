@@ -41,6 +41,20 @@ func (m *MockAPI) EXPECT() *MockAPIMockRecorder {
 	return m.recorder
 }
 
+// GetAdaptivePlanLearning mocks base method.
+func (m *MockAPI) GetAdaptivePlanLearning() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAdaptivePlanLearning")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// GetAdaptivePlanLearning indicates an expected call of GetAdaptivePlanLearning.
+func (mr *MockAPIMockRecorder) GetAdaptivePlanLearning() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAdaptivePlanLearning", reflect.TypeOf((*MockAPI)(nil).GetAdaptivePlanLearning))
+}
+
 // GetAdaptivePlans mocks base method.
 func (m *MockAPI) GetAdaptivePlans() ([]api.RepeatingPlan, time.Time) {
 	m.ctrl.T.Helper()
@@ -181,6 +195,20 @@ func (m *MockAPI) Name() string {
 func (mr *MockAPIMockRecorder) Name() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Name", reflect.TypeOf((*MockAPI)(nil).Name))
+}
+
+// SetAdaptivePlanLearning mocks base method.
+func (m *MockAPI) SetAdaptivePlanLearning(arg0 bool) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetAdaptivePlanLearning", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetAdaptivePlanLearning indicates an expected call of SetAdaptivePlanLearning.
+func (mr *MockAPIMockRecorder) SetAdaptivePlanLearning(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetAdaptivePlanLearning", reflect.TypeOf((*MockAPI)(nil).SetAdaptivePlanLearning), arg0)
 }
 
 // SetAdaptivePlans mocks base method.

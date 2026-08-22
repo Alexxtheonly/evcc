@@ -98,8 +98,9 @@ const (
 	PlanStrategy       = "planStrategy"       // charge plan strategy (precondition, continuous)
 
 	// repeating plans
-	RepeatingPlans = "repeatingPlans" // key to access all repeating plans in db
-	AdaptivePlans  = "adaptivePlans"  // key to access the adaptive (learned) repeating plans in db
+	RepeatingPlans       = "repeatingPlans"       // key to access all repeating plans in db
+	AdaptivePlans        = "adaptivePlans"        // key to access the adaptive (learned) repeating plans in db
+	AdaptivePlanLearning = "adaptivePlanLearning" // whether evcc learns adaptive plans from session history
 
 	// remote control
 	RemoteDisabled       = "remoteDisabled"       // remote disabled
