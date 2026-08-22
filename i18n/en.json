@@ -1162,7 +1162,7 @@
     "optimizer": {
       "legendBatteryCharge": "Battery grid charge",
       "legendBatteryDischarge": "Battery discharge",
-      "legendBatterySoc": "Battery SoC (forecast)",
+      "legendBatterySoc": "{title} SoC (forecast)",
       "modeCharge": "Grid charging",
       "modeHold": "Discharge locked",
       "modeHoldcharge": "Charge locked",

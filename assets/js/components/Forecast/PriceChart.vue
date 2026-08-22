@@ -263,11 +263,13 @@ export default defineComponent({
 		},
 
 		legends(): Legend[] {
+			// area swatches mirror overlayMarkArea, which shades at dimColor(...);
+			// a full-opacity swatch would not match what is actually drawn
 			const legends: Legend[] = [];
 			if (this.batteryChargeWindows.length) {
 				legends.push({
 					label: this.$t("forecast.optimizer.legendBatteryCharge"),
-					color: colors.grid || "",
+					color: dimColor(colors.grid) || "",
 					value: "",
 					type: "area",
 				});
@@ -275,7 +277,7 @@ export default defineComponent({
 			if (this.batteryDischargeWindows.length) {
 				legends.push({
 					label: this.$t("forecast.optimizer.legendBatteryDischarge"),
-					color: batteryColor(0),
+					color: dimColor(batteryColor(0)) || "",
 					value: "",
 					type: "area",
 				});
@@ -283,20 +285,32 @@ export default defineComponent({
 			this.vehicleWindows.forEach(({ key, title }) => {
 				legends.push({
 					label: title,
-					color: this.vehicleColors[key] || "",
+					color: dimColor(this.vehicleColors[key] || null) || "",
 					value: "",
 					type: "area",
 				});
 			});
-			if (this.hasSocSeries) {
-				legends.push({
-					label: this.$t("forecast.optimizer.legendBatterySoc"),
-					color: colors.text || "",
-					value: "",
-					type: "line",
-				});
-			}
+			legends.push(...this.socLegends);
 			return legends;
+		},
+
+		// one legend entry per drawn SoC line, colored to match batteryDeviceColors -
+		// a single generic entry would misrepresent N differently-colored lines
+		socLegends(): Legend[] {
+			return this.socSeries
+				.filter((s) => s.points.length > 0)
+				.map((s) => {
+					const detail = this.batteryDetails.find(
+						(d) => d.type === "battery" && d.name === s.key
+					);
+					const title = detail?.title || detail?.name || s.key;
+					return {
+						label: this.$t("forecast.optimizer.legendBatterySoc", { title }),
+						color: this.batteryDeviceColors[s.key] || colors.text || "",
+						value: "",
+						type: "line",
+					};
+				});
 		},
 
 		chartOption(): Record<string, unknown> {
