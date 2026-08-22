@@ -1517,6 +1517,8 @@ export interface OptimizerDecision {
   price?: number;
   /** @format date-time */
   updated: string;
+  /** Ms the decision stays valid from {@link updated} - mirrors the backend's optimizerBatteryModeValidity, after which the decision is dropped from control and must not be annotated as current. */
+  validFor: number;
 }
 
 // Tariff zone configuration

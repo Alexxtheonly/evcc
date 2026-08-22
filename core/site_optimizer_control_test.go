@@ -314,6 +314,7 @@ func TestOptimizerDecisionPublish(t *testing.T) {
 	d = lastOptimizerDecision(t, params)
 	assert.True(t, d.ChargeVetoed, "veto round-trips through publish")
 	assert.Equal(t, vetoReasonPayback, d.VetoReason, "veto reason round-trips through publish")
+	assert.Equal(t, optimizerBatteryModeValidity.Milliseconds(), d.ValidFor, "validity horizon published so the UI can honor it without a hardcoded constant")
 }
 
 func TestUpdateOptimizerLiveRateVeto(t *testing.T) {

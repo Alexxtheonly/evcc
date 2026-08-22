@@ -487,6 +487,7 @@ type optimizerDecisionPublish struct {
 	VetoReason   optimizerVetoReason `json:"vetoReason,omitempty"`
 	Price        float64             `json:"price,omitempty"`
 	Updated      time.Time           `json:"updated"`
+	ValidFor     int64               `json:"validFor"` // ms Updated stays current, mirrors optimizerBatteryModeValidity
 }
 
 // publishOptimizerDecisionLocked publishes the current optimizer decision.
@@ -498,6 +499,7 @@ func (site *Site) publishOptimizerDecisionLocked() {
 		VetoReason:   site.optimizerVetoReason,
 		Price:        site.optimizerChargePrice,
 		Updated:      site.optimizerBatteryModeUpdated,
+		ValidFor:     optimizerBatteryModeValidity.Milliseconds(),
 	})
 }
 

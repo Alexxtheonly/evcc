@@ -5,8 +5,10 @@ import {
   vehicleChargeWindows,
   nextRepeatingOccurrence,
   adaptivePlanMarkers,
+  shouldAnnotateOptimizerDecision,
 } from "./optimizerOverlay";
-import type { EvOpt, RepeatingPlan } from "@/types/evcc";
+import type { EvOpt, OptimizerDecision, RepeatingPlan } from "@/types/evcc";
+import { BATTERY_MODE, OPTIMIZER_VETO_REASON } from "@/types/evcc";
 
 const t = (iso: string) => new Date(iso).getTime();
 
@@ -305,5 +307,55 @@ describe("adaptivePlanMarkers", () => {
       { name: "car", title: "EV", adaptivePlans: [plan], adaptivePlansActive: false },
     ];
     expect(adaptivePlanMarkers(vehicles, from, horizon)).toEqual([]);
+  });
+});
+
+describe("shouldAnnotateOptimizerDecision", () => {
+  const now = t("2026-01-01T00:10:00Z");
+  const base: OptimizerDecision = {
+    mode: BATTERY_MODE.CHARGE,
+    chargeVetoed: false,
+    updated: "2026-01-01T00:00:00Z", // 10 min before now
+    validFor: 20 * 60 * 1000, // 20 min, mirrors optimizerBatteryModeValidity
+  };
+
+  it("renders for a fresh decision while control is enabled", () => {
+    expect(shouldAnnotateOptimizerDecision(base, true, now)).toBe(true);
+  });
+
+  it("does not render when optimizer battery control is off", () => {
+    // the backend still publishes (mode Unknown) whenever control is off -
+    // the UI must gate on it, not assume an absent decision
+    expect(shouldAnnotateOptimizerDecision(base, false, now)).toBe(false);
+  });
+
+  it("does not render when there is no decision", () => {
+    expect(shouldAnnotateOptimizerDecision(undefined, true, now)).toBe(false);
+  });
+
+  it("does not render a decision older than its validity horizon", () => {
+    const stale: OptimizerDecision = { ...base, updated: "2026-01-01T00:00:00Z" };
+    const later = t("2026-01-01T00:21:00Z"); // 21 min after updated, past validFor
+    expect(shouldAnnotateOptimizerDecision(stale, true, later)).toBe(false);
+  });
+
+  it("renders a decision exactly at its validity horizon", () => {
+    const edge = t("2026-01-01T00:20:00Z"); // exactly validFor after updated
+    expect(shouldAnnotateOptimizerDecision(base, true, edge)).toBe(true);
+  });
+
+  it("does not render an Unknown mode with no veto reason", () => {
+    const d: OptimizerDecision = { ...base, mode: BATTERY_MODE.UNKNOWN };
+    expect(shouldAnnotateOptimizerDecision(d, true, now)).toBe(false);
+  });
+
+  it("renders an Unknown mode when a veto reason explains it", () => {
+    const d: OptimizerDecision = {
+      ...base,
+      mode: BATTERY_MODE.UNKNOWN,
+      chargeVetoed: true,
+      vetoReason: OPTIMIZER_VETO_REASON.FORCED_IDLE,
+    };
+    expect(shouldAnnotateOptimizerDecision(d, true, now)).toBe(true);
   });
 });

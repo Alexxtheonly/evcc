@@ -1,7 +1,8 @@
 // Pure transforms that turn the evopt optimizer result and vehicle adaptive plans into the
 // timeline overlays the price chart renders. Kept framework-free for unit testing.
 
-import type { EvOpt, RepeatingPlan } from "@/types/evcc";
+import type { EvOpt, OptimizerDecision, RepeatingPlan } from "@/types/evcc";
+import { BATTERY_MODE } from "@/types/evcc";
 import { loadpointTitle } from "../Optimize/chart";
 
 export interface TimeWindow {
@@ -252,4 +253,26 @@ export function adaptivePlanMarkers(
       ];
     });
   });
+}
+
+// shouldAnnotateOptimizerDecision reports whether the slot-0 decision annotation
+// should render. Three conditions must hold:
+//  - optimizer battery control must actually be enabled: the backend keeps
+//    publishing a decision (mode Unknown) whenever control is off, so the UI
+//    - not the publish path - is what must gate on it.
+//  - the decision must still be within the same validity horizon the backend
+//    applies before dropping a decision from control (see validFor), so a stale
+//    decision (e.g. the optimizer stuck retrying errOptimizerNotReady, which
+//    never republishes) doesn't linger on screen as if still in effect.
+//  - an Unknown mode with no veto reason has nothing to say and must not render
+//    as a "No plan" annotation.
+export function shouldAnnotateOptimizerDecision(
+  d: OptimizerDecision | undefined,
+  batteryControlEnabled: boolean,
+  nowMs: number
+): boolean {
+  if (!d || !batteryControlEnabled) return false;
+  if (nowMs - new Date(d.updated).getTime() > d.validFor) return false;
+  if (d.mode === BATTERY_MODE.UNKNOWN && !d.vetoReason) return false;
+  return true;
 }

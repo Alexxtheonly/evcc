@@ -96,6 +96,7 @@
 							:vehicles="vehicles"
 							:device-colors="deviceColors"
 							:optimizer-decision="optimizerDecision"
+							:optimizer-battery-control="optimizerBatteryControl"
 							@scroll="onChartScroll"
 						/>
 					</div>
@@ -254,6 +255,9 @@ export default defineComponent({
 		},
 		optimizerDecision() {
 			return store.state?.optimizerDecision;
+		},
+		optimizerBatteryControl() {
+			return !!store.state?.optimizerBatteryControl;
 		},
 		solarAdjusted() {
 			return store.state?.solarAdjusted;
