@@ -229,6 +229,56 @@ describe("nextRepeatingOccurrence", () => {
     const horizon = t("2026-01-10T00:00:00Z");
     expect(nextRepeatingOccurrence({ ...base, active: false }, from, horizon)).toBeNull();
   });
+
+  describe("DST transitions (Europe/Berlin)", () => {
+    // 2026-03-29: clocks spring forward 02:00 CET -> 03:00 CEST, so 02:00-03:00
+    // local does not exist. 2026-10-25: clocks fall back 03:00 CEST -> 02:00 CET,
+    // so 02:00-03:00 local occurs twice. Both dates are Sundays (weekday 0).
+
+    it("advances a nonexistent spring-forward local time past the gap", () => {
+      const plan: RepeatingPlan = {
+        weekdays: [0],
+        time: "02:30",
+        tz: "Europe/Berlin",
+        soc: 80,
+        active: true,
+      };
+      const from = t("2026-03-29T00:00:00Z");
+      const horizon = t("2026-03-30T00:00:00Z");
+      // 02:30 doesn't exist; resolves to the post-transition clock, 03:30 CEST
+      expect(nextRepeatingOccurrence(plan, from, horizon)).toBe(t("2026-03-29T01:30:00Z"));
+    });
+
+    it("resolves an ambiguous fall-back local time to its later occurrence", () => {
+      const plan: RepeatingPlan = {
+        weekdays: [0],
+        time: "02:30",
+        tz: "Europe/Berlin",
+        soc: 80,
+        active: true,
+      };
+      const from = t("2026-10-25T00:00:00Z");
+      const horizon = t("2026-10-26T00:00:00Z");
+      // 02:30 occurs twice; resolves to the later (CET, post-transition) reading
+      expect(nextRepeatingOccurrence(plan, from, horizon)).toBe(t("2026-10-25T01:30:00Z"));
+    });
+
+    it("resolves an unambiguous local time close to a fall-back transition correctly", () => {
+      const plan: RepeatingPlan = {
+        weekdays: [0],
+        time: "01:30",
+        tz: "Europe/Berlin",
+        soc: 80,
+        active: true,
+      };
+      const from = t("2026-10-24T00:00:00Z");
+      const horizon = t("2026-10-26T00:00:00Z");
+      // 01:30 CEST (pre-transition, UTC+2) - a one-shot correction resolves this
+      // one hour late, to 02:30 local, since offset at the naive guess already
+      // reads post-transition
+      expect(nextRepeatingOccurrence(plan, from, horizon)).toBe(t("2026-10-24T23:30:00Z"));
+    });
+  });
 });
 
 describe("adaptivePlanMarkers", () => {

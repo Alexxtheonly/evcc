@@ -122,18 +122,9 @@ export interface PlanMarker {
   soc: number;
 }
 
-// zonedTimeToUtc returns the epoch ms for the given wall-clock date/time in tz.
-// Standard one-shot correction: format an initial UTC guess in tz, then shift the
-// guess by however far that reading differs from it.
-function zonedTimeToUtc(
-  year: number,
-  month: number, // 1-12
-  day: number,
-  hour: number,
-  minute: number,
-  tz: string
-): number {
-  const guess = Date.UTC(year, month - 1, day, hour, minute);
+// tzOffsetMs returns the offset (ms) between utcMs and how utcMs's wall-clock
+// reading in tz would be numbered if read as UTC - i.e. formatToParts(utcMs) - utcMs.
+function tzOffsetMs(utcMs: number, tz: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     hourCycle: "h23",
@@ -143,17 +134,45 @@ function zonedTimeToUtc(
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-  }).formatToParts(new Date(guess));
+  }).formatToParts(new Date(utcMs));
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value || 0);
   const asUtc = Date.UTC(
     get("year"),
     get("month") - 1,
     get("day"),
-    get("hour") === 24 ? 0 : get("hour"),
+    get("hour"),
     get("minute"),
     get("second")
   );
-  return guess - (asUtc - guess);
+  return asUtc - utcMs;
+}
+
+// zonedTimeToUtc returns the epoch ms for the given wall-clock date/time in tz.
+// Two-pass correction: a one-shot correction (offset observed at the naive
+// guess) is exact only when that offset also holds at the answer, which fails
+// right around a DST transition. The offset is re-derived at the first
+// candidate and, if it disagrees with the guess's offset, the candidate is
+// redone with the re-derived offset - which is always consistent with itself
+// (re-deriving a third time never disagrees again).
+//
+// Convention: this always converges on the offset that applies strictly after
+// the transition instant. So an ambiguous local time (fall-back repeat, e.g.
+// 02:30 occurring twice) resolves to its later occurrence, and a nonexistent
+// local time (spring-forward gap, e.g. 02:30 when clocks jump 02:00->03:00)
+// resolves by advancing past the gap to the post-transition clock.
+function zonedTimeToUtc(
+  year: number,
+  month: number, // 1-12
+  day: number,
+  hour: number,
+  minute: number,
+  tz: string
+): number {
+  const wallAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+  const offset1 = tzOffsetMs(wallAsUtc, tz);
+  const candidate = wallAsUtc - offset1;
+  const offset2 = tzOffsetMs(candidate, tz);
+  return offset2 === offset1 ? candidate : wallAsUtc - offset2;
 }
 
 // nextRepeatingOccurrence returns the next epoch ms the plan applies within
