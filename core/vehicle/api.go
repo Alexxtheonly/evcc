@@ -55,4 +55,9 @@ type API interface {
 	GetPlanStrategy() api.PlanStrategy
 	// SetPlanStrategy sets the plan strategy
 	SetPlanStrategy(api.PlanStrategy) error
+
+	// GetSocGradient returns the learned energy per soc step (Wh) and whether one is stored
+	GetSocGradient() (float64, bool)
+	// SetSocGradient stores the learned energy per soc step (Wh)
+	SetSocGradient(float64) error
 }

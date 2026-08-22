@@ -11,8 +11,11 @@ import (
 	"github.com/evcc-io/evcc/core/coordinator"
 	"github.com/evcc-io/evcc/core/settings"
 	"github.com/evcc-io/evcc/core/soc"
+	"github.com/evcc-io/evcc/core/vehicle"
 	"github.com/evcc-io/evcc/util"
+	"github.com/evcc-io/evcc/util/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
 
@@ -587,4 +590,91 @@ func TestReconnectVehicle(t *testing.T) {
 			assert.Equal(t, vehicle, lp.vehicle, "vehicle should be detected")
 		})
 	}
+}
+
+// TestPersistSocGradient verifies that an estimator's learned energy-per-soc-step survives
+// past the estimator's own lifetime: persistSocGradient must store it against the vehicle,
+// and a fresh estimator seeded via seedSocGradient must pick it back up - closing the loop
+// that setActiveVehicle otherwise breaks on every unplug (a fresh soc.Estimator per attach).
+func TestPersistSocGradient(t *testing.T) {
+	config.Reset()
+	t.Cleanup(config.Reset)
+
+	ctrl := gomock.NewController(t)
+	v := api.NewMockVehicle(ctrl)
+	v.EXPECT().Capacity().Return(50.0).AnyTimes() // 50 kWh -> 50000 Wh
+	v.EXPECT().GetTitle().Return("vehicle").AnyTimes()
+
+	const name = "vehicle"
+	require.NoError(t, config.Vehicles().Add(
+		config.NewStaticDevice(config.Named{Name: name}, api.Vehicle(v)),
+	))
+
+	lp := NewLoadpoint(util.NewLogger("foo"), nil)
+
+	// nothing learned yet: persisting is a no-op
+	lp.socEstimator = soc.NewEstimator(lp.log, v)
+	lp.persistSocGradient(v)
+	_, ok := vehicle.Settings(lp.log, v).GetSocGradient()
+	assert.False(t, ok, "untouched estimator must not be persisted")
+
+	// drive the estimator through a real soc swing so it learns a gradient
+	s := 20.0
+	lp.socEstimator.Soc(&s, 0)
+	s = 40.0 // socDiff 20 > 10: energyPerSocStep = 6000/20 = 300 Wh/%
+	lp.socEstimator.Soc(&s, 6000)
+	require.True(t, lp.socEstimator.Learned())
+
+	lp.persistSocGradient(v)
+
+	stored, ok := vehicle.Settings(lp.log, v).GetSocGradient()
+	require.True(t, ok)
+	assert.InDelta(t, 300.0, stored, 1e-9, "first-ever session is stored outright, nothing to blend with")
+
+	// a second session blends with the stored value rather than overwriting it
+	lp.socEstimator = soc.NewEstimator(lp.log, v)
+	s = 20.0
+	lp.socEstimator.Soc(&s, 0)
+	s = 40.0
+	lp.socEstimator.Soc(&s, 8000) // this session alone would learn 400 Wh/%
+
+	lp.persistSocGradient(v)
+
+	blended, ok := vehicle.Settings(lp.log, v).GetSocGradient()
+	require.True(t, ok)
+	assert.InDelta(t, 330.0, blended, 1e-9, "0.7*300 + 0.3*400")
+	assert.NotEqual(t, 400.0, blended, "second session must not fully overwrite the first")
+
+	// a fresh estimator picks the persisted gradient back up instead of starting over
+	fresh := soc.NewEstimator(lp.log, v)
+	require.NotEqual(t, blended, fresh.EnergyPerSocStep())
+	lp.socEstimator = fresh
+	lp.seedSocGradient(v)
+	assert.Equal(t, blended, lp.socEstimator.EnergyPerSocStep())
+}
+
+// TestPersistSocGradientUnknownVehicle verifies persistSocGradient/seedSocGradient tolerate a
+// vehicle that isn't a registered config device (vehicle.Settings falls back to a no-op
+// dummy) and a nil db.Instance (no session history available) without panicking.
+func TestPersistSocGradientUnknownVehicle(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	v := api.NewMockVehicle(ctrl)
+	v.EXPECT().Capacity().Return(50.0).AnyTimes()
+	v.EXPECT().GetTitle().Return("unregistered").AnyTimes()
+
+	lp := NewLoadpoint(util.NewLogger("foo"), nil)
+	lp.socEstimator = soc.NewEstimator(lp.log, v)
+
+	s := 20.0
+	lp.socEstimator.Soc(&s, 0)
+	s = 40.0
+	lp.socEstimator.Soc(&s, 6000)
+	require.True(t, lp.socEstimator.Learned())
+
+	assert.NotPanics(t, func() { lp.persistSocGradient(v) })
+
+	fresh := soc.NewEstimator(lp.log, v)
+	lp.socEstimator = fresh
+	assert.NotPanics(t, func() { lp.seedSocGradient(v) })
+	assert.Equal(t, fresh.EnergyPerSocStep(), lp.socEstimator.EnergyPerSocStep(), "no db, no stored value: default is kept")
 }

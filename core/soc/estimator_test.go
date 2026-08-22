@@ -131,3 +131,68 @@ func TestImprovedEstimatorRemainingChargeDuration(t *testing.T) {
 		assert.Equal(t, tc.duration, ce.RemainingChargeDuration(tc.targetsoc, tc.chargePower))
 	}
 }
+
+func TestPlausibleEnergyPerSocStep(t *testing.T) {
+	const capacity = 50000.0 // 50 kWh
+
+	// implausible: non-positive
+	assert.False(t, PlausibleEnergyPerSocStep(0, capacity))
+	assert.False(t, PlausibleEnergyPerSocStep(-100, capacity))
+	assert.False(t, PlausibleEnergyPerSocStep(500, 0))
+
+	// plausible: 100% efficiency (capacity/100) up to 50% efficiency (2x capacity/100)
+	assert.True(t, PlausibleEnergyPerSocStep(500, capacity))  // 100% efficiency
+	assert.True(t, PlausibleEnergyPerSocStep(600, capacity))  // ~83% efficiency
+	assert.True(t, PlausibleEnergyPerSocStep(1000, capacity)) // 50% efficiency, at the floor
+
+	// implausible: below the 50% floor (250, the mirror of the 1000 ceiling) or above it
+	assert.False(t, PlausibleEnergyPerSocStep(200, capacity))  // implies >100% efficiency
+	assert.False(t, PlausibleEnergyPerSocStep(1001, capacity)) // just under 50% efficiency
+	assert.False(t, PlausibleEnergyPerSocStep(5000, capacity)) // wildly implausible
+}
+
+func TestBlendEnergyPerSocStep(t *testing.T) {
+	// a single session moves the estimate by at most 30%, never fully overwrites it
+	assert.InDelta(t, 100.0, BlendEnergyPerSocStep(100, 100), 1e-9)
+	assert.InDelta(t, 103.0, BlendEnergyPerSocStep(100, 110), 1e-9)
+	assert.InDelta(t, 70.0, BlendEnergyPerSocStep(100, 0), 1e-9)
+}
+
+func TestEstimatorSeed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	vehicle := api.NewMockVehicle(ctrl)
+	vehicle.EXPECT().Capacity().Return(50.0).AnyTimes() // 50 kWh -> 50000 Wh
+
+	ce := NewEstimator(util.NewLogger("foo"), vehicle)
+	def := ce.EnergyPerSocStep()
+	assert.False(t, ce.Learned())
+
+	// implausible seed is ignored, default is kept
+	ce.Seed(1)
+	assert.Equal(t, def, ce.EnergyPerSocStep())
+
+	// plausible seed is adopted
+	ce.Seed(600)
+	assert.Equal(t, 600.0, ce.EnergyPerSocStep())
+
+	// seeding is not the same as learning from a live session
+	assert.False(t, ce.Learned())
+}
+
+func TestEstimatorLearned(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	vehicle := api.NewMockVehicle(ctrl)
+	vehicle.EXPECT().Capacity().Return(10.0).AnyTimes() // 10 kWh
+
+	ce := NewEstimator(util.NewLogger("foo"), vehicle)
+	assert.False(t, ce.Learned())
+
+	soc := 20.0
+	ce.Soc(&soc, 0)
+	assert.False(t, ce.Learned(), "socDiff not yet above the recalculation threshold")
+
+	soc = 35.0 // socDiff 15 > 10
+	ce.Soc(&soc, 1500)
+	assert.True(t, ce.Learned())
+	assert.InDelta(t, 1500.0/15, ce.EnergyPerSocStep(), 1e-9)
+}

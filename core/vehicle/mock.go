@@ -169,6 +169,21 @@ func (mr *MockAPIMockRecorder) GetRepeatingPlans() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRepeatingPlans", reflect.TypeOf((*MockAPI)(nil).GetRepeatingPlans))
 }
 
+// GetSocGradient mocks base method.
+func (m *MockAPI) GetSocGradient() (float64, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSocGradient")
+	ret0, _ := ret[0].(float64)
+	ret1, _ := ret[1].(bool)
+	return ret0, ret1
+}
+
+// GetSocGradient indicates an expected call of GetSocGradient.
+func (mr *MockAPIMockRecorder) GetSocGradient() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSocGradient", reflect.TypeOf((*MockAPI)(nil).GetSocGradient))
+}
+
 // Instance mocks base method.
 func (m *MockAPI) Instance() api.Vehicle {
 	m.ctrl.T.Helper()
@@ -301,4 +316,18 @@ func (m *MockAPI) SetRepeatingPlans(arg0 []api.RepeatingPlan) error {
 func (mr *MockAPIMockRecorder) SetRepeatingPlans(arg0 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetRepeatingPlans", reflect.TypeOf((*MockAPI)(nil).SetRepeatingPlans), arg0)
+}
+
+// SetSocGradient mocks base method.
+func (m *MockAPI) SetSocGradient(arg0 float64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetSocGradient", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetSocGradient indicates an expected call of SetSocGradient.
+func (mr *MockAPIMockRecorder) SetSocGradient(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSocGradient", reflect.TypeOf((*MockAPI)(nil).SetSocGradient), arg0)
 }

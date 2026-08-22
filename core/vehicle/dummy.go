@@ -93,3 +93,11 @@ func (v *dummy) GetPlanStrategy() api.PlanStrategy {
 func (v *dummy) SetPlanStrategy(strategy api.PlanStrategy) error {
 	return nil
 }
+
+func (v *dummy) GetSocGradient() (float64, bool) {
+	return 0, false
+}
+
+func (v *dummy) SetSocGradient(wh float64) error {
+	return nil
+}

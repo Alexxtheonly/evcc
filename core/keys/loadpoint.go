@@ -104,6 +104,9 @@ const (
 	AdaptivePlans        = "adaptivePlans"        // key to access the adaptive (learned) repeating plans in db
 	AdaptivePlanLearning = "adaptivePlanLearning" // whether evcc learns adaptive plans from session history
 
+	// learned vehicle state
+	SocGradient = "socGradient" // learned energy per soc step (Wh), see core/soc.Estimator
+
 	// remote control
 	RemoteDisabled       = "remoteDisabled"       // remote disabled
 	RemoteDisabledSource = "remoteDisabledSource" // remote disabled source

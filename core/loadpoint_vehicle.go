@@ -13,6 +13,7 @@ import (
 	"github.com/evcc-io/evcc/core/session"
 	"github.com/evcc-io/evcc/core/soc"
 	"github.com/evcc-io/evcc/core/vehicle"
+	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/util"
 )
 
@@ -160,12 +161,20 @@ func (lp *Loadpoint) setActiveVehicle(v api.Vehicle) {
 		lp.log.INFO.Printf("vehicle updated: %s -> %s", from, to)
 	}
 
+	// persist what the outgoing estimator learned this session before it is replaced or
+	// cleared below - a fresh estimator otherwise discards it on every unplug (see
+	// persistSocGradient)
+	if prev != nil {
+		lp.persistSocGradient(prev)
+	}
+
 	if v != nil {
 		lp.socUpdated = time.Time{}
 
 		// resolve optional config
 		if v.Capacity() > 0 && (lp.Soc.Estimate == nil || *lp.Soc.Estimate) {
 			lp.socEstimator = soc.NewEstimator(lp.log, v)
+			lp.seedSocGradient(v)
 		}
 
 		lp.publish(keys.VehicleName, vehicle.Settings(lp.log, v).Name())
@@ -208,6 +217,71 @@ func (lp *Loadpoint) setActiveVehicle(v api.Vehicle) {
 			session.Vehicle = v.GetTitle()
 		}
 	})
+}
+
+// persistSocGradient saves the current estimator's learned energy-per-soc-step (Wh) against
+// v, if it learned anything plausible during this attachment. Without this, the gradient the
+// estimator worked out over a whole charging session is thrown away every time the vehicle
+// unplugs (soc.Estimator is recreated fresh in setActiveVehicle), and every next session has
+// to relearn it from the constant-efficiency default.
+//
+// Blends with any previously persisted value (soc.BlendEnergyPerSocStep) instead of
+// overwriting it outright, so one unusual session (a partial charge, a cold-weather outlier)
+// can only nudge the estimate, not replace it.
+func (lp *Loadpoint) persistSocGradient(v api.Vehicle) {
+	if lp.socEstimator == nil || !lp.socEstimator.Learned() {
+		return
+	}
+
+	learned := lp.socEstimator.EnergyPerSocStep()
+	capacity := v.Capacity() * 1e3
+	if !soc.PlausibleEnergyPerSocStep(learned, capacity) {
+		return
+	}
+
+	settingsAPI := vehicle.Settings(lp.log, v)
+
+	value := learned
+	if prior, ok := settingsAPI.GetSocGradient(); ok && soc.PlausibleEnergyPerSocStep(prior, capacity) {
+		value = soc.BlendEnergyPerSocStep(prior, learned)
+	}
+
+	if err := settingsAPI.SetSocGradient(value); err != nil {
+		lp.log.ERROR.Println("persist soc gradient:", err)
+		return
+	}
+
+	lp.log.DEBUG.Printf("persisted soc gradient for %s: %.1fWh/%%", v.GetTitle(), value)
+}
+
+// seedSocGradient seeds a freshly created estimator's energy-per-soc-step from a previously
+// learned value: the vehicle's own persisted gradient if present, otherwise a prior derived
+// from its session history (median across qualifying sessions, see session.PriorSocGradient)
+// so learning does not have to wait for the first live session on a vehicle evcc already has
+// history for. Falls back to the estimator's own constant-efficiency default (see
+// soc.NewEstimator) when neither is available or plausible - Seed silently ignores an
+// implausible value.
+func (lp *Loadpoint) seedSocGradient(v api.Vehicle) {
+	settingsAPI := vehicle.Settings(lp.log, v)
+
+	if stored, ok := settingsAPI.GetSocGradient(); ok {
+		lp.socEstimator.Seed(stored)
+		return
+	}
+
+	if db.Instance == nil {
+		return
+	}
+
+	sessions, err := session.VehicleSessions(db.Instance, v.GetTitle())
+	if err != nil {
+		lp.log.ERROR.Println("soc gradient prior:", err)
+		return
+	}
+
+	if prior, ok := session.PriorSocGradient(sessions); ok {
+		lp.socEstimator.Seed(prior)
+	}
 }
 
 func (lp *Loadpoint) wakeUpVehicle() {

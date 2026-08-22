@@ -178,3 +178,19 @@ func (v *adapter) SetPlanStrategy(planStrategy api.PlanStrategy) error {
 
 	return nil
 }
+
+// GetSocGradient returns the learned energy per soc step (Wh) and whether one is stored.
+// The value is not published: it is an internal estimator input, not user-facing state.
+func (v *adapter) GetSocGradient() (float64, bool) {
+	val, err := settings.Float(v.key() + keys.SocGradient)
+	return val, err == nil
+}
+
+// SetSocGradient stores the learned energy per soc step (Wh). Bounds-checking and blending
+// against any prior value happen in the caller (core.Loadpoint), which alone knows the
+// vehicle's capacity and the estimator's session state; this is a thin persistence layer,
+// matching the other Get/Set pairs above.
+func (v *adapter) SetSocGradient(wh float64) error {
+	settings.SetFloat(v.key()+keys.SocGradient, wh)
+	return nil
+}
