@@ -128,6 +128,7 @@ type Site struct {
 	optimizerBatteryModeConfirmedAt  time.Time       // time optimizerBatteryMode was last (re)confirmed
 	optimizerBatteryModePending      api.BatteryMode // candidate mode awaiting confirmation
 	optimizerBatteryModePendingSince time.Time       // time the pending candidate was first observed
+	optimizerChargePrice             float64         // price (currency/kWh) the active charge decision was based on
 
 	optimizerMu      sync.Mutex                     // guards optimizer runs
 	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu

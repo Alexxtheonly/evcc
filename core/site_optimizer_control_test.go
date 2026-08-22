@@ -7,6 +7,7 @@ import (
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/util"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // backdatePending ages a pending mode candidate past optimizerBatteryModeConfirmDelay
@@ -52,7 +53,7 @@ func TestOptimizerBatteryModeFlapping(t *testing.T) {
 	switches := 0
 	prev := site.optimizerBatteryMode
 	for _, m := range sequence {
-		site.setOptimizerBatteryMode(m)
+		site.setOptimizerBatteryMode(m, 0)
 		// age the pending candidate so confirmation is never blocked on time alone
 		backdatePending(site)
 		if site.optimizerBatteryMode != prev {
@@ -69,15 +70,15 @@ func TestOptimizerBatteryModeFlapping(t *testing.T) {
 	site.optimizerBatteryModeConfirmedAt = time.Now()
 
 	for _, m := range []api.BatteryMode{api.BatteryNormal, api.BatteryHold, api.BatteryNormal, api.BatteryHold} {
-		site.setOptimizerBatteryMode(m)
+		site.setOptimizerBatteryMode(m, 0)
 		backdatePending(site)
 		assert.Equal(t, api.BatteryHold, site.optimizerBatteryMode, "applied idle mode stays put during flap")
 	}
 
 	// a genuine regime change still lands, once two runs agree
-	site.setOptimizerBatteryMode(api.BatteryNormal)
+	site.setOptimizerBatteryMode(api.BatteryNormal, 0)
 	backdatePending(site)
-	site.setOptimizerBatteryMode(api.BatteryNormal)
+	site.setOptimizerBatteryMode(api.BatteryNormal, 0)
 	assert.Equal(t, api.BatteryNormal, site.optimizerBatteryMode, "two agreeing runs change the mode")
 }
 
@@ -88,7 +89,7 @@ func TestOptimizerBatteryModePendingCleared(t *testing.T) {
 	enableAutomatic(t)
 
 	site := &Site{log: util.NewLogger("foo")}
-	site.setOptimizerBatteryMode(api.BatteryCharge)
+	site.setOptimizerBatteryMode(api.BatteryCharge, 0)
 	assert.Equal(t, api.BatteryCharge, site.optimizerBatteryModePending)
 
 	site.ResetOptimizerBatteryMode()
@@ -98,6 +99,49 @@ func TestOptimizerBatteryModePendingCleared(t *testing.T) {
 
 	// a stale pending candidate from before the reset does not immediately
 	// confirm just because a fresh run happens to agree with it
-	site.setOptimizerBatteryMode(api.BatteryCharge)
+	site.setOptimizerBatteryMode(api.BatteryCharge, 0)
 	assert.Equal(t, api.BatteryUnknown, site.optimizerBatteryMode, "first post-reset run only re-opens the pending window")
+}
+
+// TestBatterySuggestionModeChargeStaleness covers the charge-only staleness
+// guard: a charge decision carries the price it was based on, and a live rate
+// that has stepped past it invalidates the decision immediately — well before
+// the generic optimizerBatteryModeValidity window would. A stale hold is
+// free, so no equivalent guard exists for it.
+func TestBatterySuggestionModeChargeStaleness(t *testing.T) {
+	enableAutomatic(t)
+
+	site := &Site{log: util.NewLogger("foo")}
+	site.setOptimizerBatteryMode(api.BatteryCharge, 0.10)
+
+	// confirm the mode so it is actually applied, not just pending
+	backdatePending(site)
+	site.setOptimizerBatteryMode(api.BatteryCharge, 0.10)
+	require.Equal(t, api.BatteryCharge, site.optimizerBatteryMode)
+
+	// the rate the decision was based on: still followed
+	mode, ok := site.batterySuggestionMode(api.Rate{Value: 0.10})
+	assert.True(t, ok)
+	assert.Equal(t, api.BatteryCharge, mode)
+
+	// within tolerance: still followed
+	mode, ok = site.batterySuggestionMode(api.Rate{Value: 0.10 + optimizerChargePriceTolerance/2})
+	assert.True(t, ok)
+	assert.Equal(t, api.BatteryCharge, mode)
+
+	// the live rate stepped past the price the decision was based on: dropped,
+	// even though the decision itself is still fresh (optimizerBatteryModeUpdated
+	// was just set above)
+	mode, ok = site.batterySuggestionMode(api.Rate{Value: 0.20})
+	assert.False(t, ok)
+	assert.Equal(t, api.BatteryUnknown, mode)
+
+	// a hold decision is not price-gated: a stale hold is free
+	site = &Site{log: util.NewLogger("foo")}
+	site.setOptimizerBatteryMode(api.BatteryHold, 0)
+	backdatePending(site)
+	site.setOptimizerBatteryMode(api.BatteryHold, 0)
+	mode, ok = site.batterySuggestionMode(api.Rate{Value: 999})
+	assert.True(t, ok)
+	assert.Equal(t, api.BatteryHold, mode)
 }

@@ -108,7 +108,7 @@ func (site *Site) requiredBatteryMode(batteryGridChargeActive bool, rate api.Rat
 		res = keepUnlessModified(api.BatteryHold)
 	case site.Automatic():
 		// optimizer decides, replacing grid charge limit and discharge control
-		if mode, ok := site.batterySuggestionMode(); ok {
+		if mode, ok := site.batterySuggestionMode(rate); ok {
 			res = keepUnlessModified(mode)
 		} else if batteryModeModified(batMode) {
 			// no suggestion: release the battery
@@ -148,7 +148,13 @@ func (site *Site) unmodelledCharging() bool {
 // setOptimizerBatteryMode; this only reads it, since requiredBatteryMode (and
 // hence this function) runs at control-loop cadence and must not treat every
 // call as a fresh, independent observation — see setOptimizerBatteryMode.
-func (site *Site) batterySuggestionMode() (api.BatteryMode, bool) {
+//
+// A Charge decision is additionally re-validated against the live rate on
+// every call: suggestionMaxAge/optimizerBatteryModeValidity bound how long a
+// stalled optimizer may go without a fresh run, but a charge decision can go
+// bad well inside that window if the price itself steps between runs — a
+// stale hold is free, a stale charge costs money.
+func (site *Site) batterySuggestionMode(rate api.Rate) (api.BatteryMode, bool) {
 	site.RLock()
 	defer site.RUnlock()
 
@@ -157,6 +163,10 @@ func (site *Site) batterySuggestionMode() (api.BatteryMode, bool) {
 	}
 
 	if time.Since(site.optimizerBatteryModeUpdated) > optimizerBatteryModeValidity {
+		return api.BatteryUnknown, false
+	}
+
+	if site.optimizerBatteryMode == api.BatteryCharge && rate.Value > site.optimizerChargePrice+optimizerChargePriceTolerance {
 		return api.BatteryUnknown, false
 	}
 

@@ -249,11 +249,16 @@ const optimizerBatteryModeValidity = optimizerBatteryModeConfirmDelay + time.Min
 // new (much tighter) validity instead of keeping the old absolute value.
 const optimizerBatteryModeDisagreementLimit = 2 * optimizerBatteryModeValidity
 
+// optimizerChargePriceTolerance (currency/kWh) absorbs float jitter when
+// comparing the live rate against the price a charge decision was based on;
+// it is not an economic margin.
+const optimizerChargePriceTolerance = 0.001
+
 // batteryModeCandidate maps the suggestions from the current optimizer run
 // onto a raw (undamped) battery-mode candidate for the first controllable
-// battery.
+// battery, plus the price (currency/kWh) a Charge candidate was based on.
 // TODO apply per battery once the site tracks more than a single battery mode
-func (site *Site) batteryModeCandidate(suggestions map[string]types.Suggestion) api.BatteryMode {
+func (site *Site) batteryModeCandidate(suggestions map[string]types.Suggestion, pn []float32) (api.BatteryMode, float64) {
 	for _, dev := range site.batteryMeters {
 		if dev == nil {
 			continue
@@ -267,13 +272,19 @@ func (site *Site) batteryModeCandidate(suggestions map[string]types.Suggestion) 
 		mode, err := api.BatteryModeString(s.Action)
 		if err != nil {
 			// discharging to grid has no matching battery mode
-			return api.BatteryNormal
+			return api.BatteryNormal, 0
 		}
 
-		return mode
+		var price float64
+		if mode == api.BatteryCharge && len(pn) > 0 {
+			// pn is currency/Wh
+			price = float64(pn[0]) * 1e3
+		}
+
+		return mode, price
 	}
 
-	return api.BatteryUnknown
+	return api.BatteryUnknown, 0
 }
 
 // setOptimizerBatteryMode stores the damped battery-mode decision derived
@@ -289,7 +300,12 @@ func (site *Site) batteryModeCandidate(suggestions map[string]types.Suggestion) 
 // more often than that and must not re-trigger this logic, or every read
 // would look like a fresh, independent observation and the confirmation
 // delay would never bind.
-func (site *Site) setOptimizerBatteryMode(candidate api.BatteryMode) {
+//
+// price (currency/kWh) is the price the candidate was based on when it is
+// api.BatteryCharge; batterySuggestionMode re-validates it against the live
+// rate on every read, since a stale charge decision costs money in a way a
+// stale hold does not and must not wait out the generic staleness window.
+func (site *Site) setOptimizerBatteryMode(candidate api.BatteryMode, price float64) {
 	site.Lock()
 	defer site.Unlock()
 
@@ -299,6 +315,7 @@ func (site *Site) setOptimizerBatteryMode(candidate api.BatteryMode) {
 		site.optimizerBatteryMode = mode
 		site.optimizerBatteryModeConfirmedAt = now
 		site.optimizerBatteryModePending = api.BatteryUnknown
+		site.optimizerChargePrice = price
 	}
 
 	site.optimizerBatteryModeUpdated = now
@@ -347,6 +364,7 @@ func (site *Site) ResetOptimizerBatteryMode() {
 	site.optimizerBatteryModeConfirmedAt = time.Time{}
 	site.optimizerBatteryModePending = api.BatteryUnknown
 	site.optimizerBatteryModePendingSince = time.Time{}
+	site.optimizerChargePrice = 0
 }
 
 // loadpointCurrentAction returns the loadpoint's current operating mode for
@@ -429,7 +447,7 @@ func (site *Site) publishSuggestions() {
 func (site *Site) clearSuggestions() {
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
-	site.setOptimizerBatteryMode(api.BatteryUnknown)
+	site.setOptimizerBatteryMode(api.BatteryUnknown, 0)
 
 	site.publishBattery()
 	site.publishSuggestions()
@@ -848,7 +866,8 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 
 	// derive and damp the battery mode to apply from the home battery
 	// suggestions; setOptimizerBatteryMode re-checks Automatic() under lock
-	site.setOptimizerBatteryMode(site.batteryModeCandidate(suggestions))
+	mode, price := site.batteryModeCandidate(suggestions, req.TimeSeries.PN)
+	site.setOptimizerBatteryMode(mode, price)
 
 	site.publishBattery()
 
