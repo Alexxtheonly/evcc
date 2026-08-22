@@ -93,7 +93,12 @@ export function batteryDischargeWindows(evopt: EvOpt | undefined): TimeWindow[] 
   return collapse(slots, active);
 }
 
-// vehicleChargeWindows returns the charging slots per vehicle (loadpoint) entry
+// vehicleChargeWindows returns the charging slots per vehicle (loadpoint) entry.
+// Keyed by the vehicle's own config name - the same key space state.vehicles
+// (and therefore adaptivePlanMarkers below) uses - so a slot's color and a
+// vehicle's plan marker resolve to the same color. Falls back to the loadpoint
+// title only for entries the optimizer couldn't attribute to a config'd vehicle
+// (e.g. a guest vehicle), which never carry adaptive plans anyway.
 export function vehicleChargeWindows(evopt: EvOpt | undefined): KeyedWindows[] {
   if (!evopt?.res?.batteries || !evopt.details?.batteryDetails) return [];
   const slots = slotBounds(evopt);
@@ -105,7 +110,8 @@ export function vehicleChargeWindows(evopt: EvOpt | undefined): KeyedWindows[] {
     );
     const windows = collapse(slots, active);
     if (!windows.length) return [];
-    return [{ key: loadpointTitle(detail), title: detail.title || detail.name, windows }];
+    const key = detail.name || loadpointTitle(detail);
+    return [{ key, title: detail.title || detail.name, windows }];
   });
 }
 

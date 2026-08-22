@@ -137,7 +137,7 @@ describe("batteryDischargeWindows", () => {
 });
 
 describe("vehicleChargeWindows", () => {
-  it("keys windows by loadpoint title, stripped of the vehicle suffix", () => {
+  it("keys windows by the vehicle's config name, same key space as adaptivePlanMarkers", () => {
     const e = evopt({
       res: {
         batteries: [{ charging_power: [500, 500, 0, 500], discharging_power: [0, 0, 0, 0] }],
@@ -154,12 +154,30 @@ describe("vehicleChargeWindows", () => {
 
     const res = vehicleChargeWindows(e);
     expect(res).toHaveLength(1);
-    expect(res[0]!.key).toBe("Carport");
+    expect(res[0]!.key).toBe("car");
     expect(res[0]!.title).toBe("Carport (blue e-Golf)");
     expect(res[0]!.windows).toEqual([
       { start: t(timestamp[0]!), end: t(timestamp[2]!) },
       { start: t(timestamp[3]!), end: t(new Date(t(timestamp[3]!) + 900_000).toISOString()) },
     ]);
+  });
+
+  it("falls back to the loadpoint title when the optimizer couldn't attribute a config'd vehicle", () => {
+    const e = evopt({
+      res: {
+        batteries: [{ charging_power: [500, 0, 0, 0], discharging_power: [0, 0, 0, 0] }],
+        grid_import: [0, 0, 0, 0],
+        grid_export: [0, 0, 0, 0],
+      },
+      details: {
+        timestamp,
+        batteryDetails: [{ type: "vehicle", name: "", title: "Carport (guest)", capacity: 60 }],
+      },
+    } as unknown as Partial<EvOpt>);
+
+    const res = vehicleChargeWindows(e);
+    expect(res).toHaveLength(1);
+    expect(res[0]!.key).toBe("Carport");
   });
 
   it("omits vehicles with no active charging slot", () => {
