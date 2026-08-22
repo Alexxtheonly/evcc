@@ -384,6 +384,7 @@ func TestLoadpointRequestChargeGoal(t *testing.T) {
 			lp.EXPECT().GetSmartCostLimit().Return(nil).AnyTimes()
 			lp.EXPECT().EffectivePlanStrategy().Return(api.PlanStrategy{}).AnyTimes()
 			lp.EXPECT().GetPlanGoal().Return(0.0, false).AnyTimes()
+			lp.EXPECT().EffectivePriority().Return(0).AnyTimes()
 
 			req, _ := site.loadpointRequest(lp, 8, 15*time.Minute, nil)
 
@@ -435,6 +436,28 @@ func TestGridImportOvershootPenalty(t *testing.T) {
 	got := gridImportOvershootPenalty([]float32{0.0001, 0.0004, 0.0002})
 	assert.Equal(t, float32(0.0004)*pMaxImpOvershootPenalty, got)
 	assert.Greater(t, got, float32(0.0004))
+}
+
+func TestEffectivePriorityToCPriority(t *testing.T) {
+	// low third, including the common default of 0: no preference over other batteries
+	for _, p := range []int{-5, 0, 1, 2, 3} {
+		assert.Equal(t, 0, effectivePriorityToCPriority(p), "priority %d", p)
+	}
+
+	// middle third
+	for _, p := range []int{4, 5, 6, 7} {
+		assert.Equal(t, 1, effectivePriorityToCPriority(p), "priority %d", p)
+	}
+
+	// top third, including out-of-range values above the UI's 0..10 scale
+	for _, p := range []int{8, 9, 10, 20} {
+		assert.Equal(t, 2, effectivePriorityToCPriority(p), "priority %d", p)
+	}
+
+	// a default-priority loadpoint never outranks the home battery's fixed CPriority,
+	// but an explicitly high-priority one does
+	assert.Less(t, effectivePriorityToCPriority(0), homeBatteryCPriority)
+	assert.Greater(t, effectivePriorityToCPriority(10), homeBatteryCPriority)
 }
 
 func TestBlendMeasured(t *testing.T) {

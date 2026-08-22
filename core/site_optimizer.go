@@ -187,6 +187,27 @@ func gridImportOvershootPenalty(pn []float32) float32 {
 	return 0
 }
 
+// homeBatteryCPriority is the CPriority (see BatteryConfig.CPriority) given to the home
+// battery. It sits in the middle of the 0..2 scale: above a loadpoint left at its default,
+// unset priority (0, the common case - effectivePriorityToCPriority also maps that to 0, so
+// without this the home battery would tie with every vehicle instead of the solver preferring
+// to fill the shared household battery first), but below a vehicle the user explicitly raised
+// into the top third of the loadpoint priority scale (e.g. "this car must leave charged").
+// CPriority is a tie-break preference between cost-equivalent solver choices only - it never
+// changes the priced objective - so getting this exactly right is low stakes.
+const homeBatteryCPriority = 1
+
+// effectivePriorityToCPriority maps a loadpoint's EffectivePriority - 0..10 in the UI
+// (config.loadpoint.priorityLabel), unbounded if set directly in config - onto the optimizer's
+// CPriority scale (0..2, "2 = highest priority"). CPriority only breaks ties between
+// cost-equivalent solver choices (see the optimizer's preference objective), so a coarse
+// three-way split is enough: the low third, including the common default of 0, keeps the
+// previous unweighted behavior at 0; the top third (8..10, "highest" in the UI) gets the
+// solver's top preference; everything in between lands in the middle.
+func effectivePriorityToCPriority(priority int) int {
+	return min(max(priority, 0), 10) * 3 / 11
+}
+
 // currentSlotSuggestion maps the optimizer's first-slot corner result onto an advisory action.
 // Because the optimization is linear, the first slot is at an operating-range extreme, so it
 // maps cleanly onto the discrete battery mode / loadpoint intent that control would later apply.
@@ -1215,6 +1236,7 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 		CMax:           float32(lp.EffectiveMaxPower()),
 		DMax:           0,
 		SMin:           0,
+		CPriority:      effectivePriorityToCPriority(lp.EffectivePriority()),
 		// PA:             pa,
 	}
 
@@ -1325,6 +1347,7 @@ func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measureme
 		DMax:      batteryPower,
 		SCapacity: float32(*b.Capacity * 1e3),         // Wh
 		SInitial:  float32(*b.Capacity * *b.Soc * 10), // Wh
+		CPriority: homeBatteryCPriority,
 		// PA:       pa,
 	}
 
