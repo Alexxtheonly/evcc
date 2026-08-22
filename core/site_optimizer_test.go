@@ -644,3 +644,31 @@ func TestDiffSuggestions(t *testing.T) {
 	assert.Empty(t, site.diffSuggestions(map[string]pendingSuggestion{}))
 	assert.Len(t, site.diffSuggestions(pending(stop)), 1)
 }
+
+func TestNewOptimizerDiagnosticsPublish(t *testing.T) {
+	// overshoot is summed across the whole horizon, not just the current slot -
+	// this is the diagnostic that makes a PMaxImp overshoot (see
+	// gridImportOvershootPenalty) visible instead of vanishing into a discarded result
+	got := newOptimizerDiagnosticsPublish(optimizer.OptimizationResult{
+		ObjectiveValue:      1.2345,
+		GridImportOvershoot: []float32{0, 150, 50},
+		GridExportOvershoot: []float32{0, 0, 25},
+		LimitViolations: optimizer.LimitViolationResult{
+			GridImportLimitExceeded: true,
+		},
+	})
+
+	assert.InDelta(t, 1.2345, got.ObjectiveValue, 1e-4)
+	assert.InDelta(t, 200, got.GridImportOvershoot, 1e-6)
+	assert.InDelta(t, 25, got.GridExportOvershoot, 1e-6)
+	assert.True(t, got.LimitViolations.GridImportLimitExceeded)
+	assert.False(t, got.LimitViolations.GridExportLimitHit)
+
+	// no overshoot at all: zero values throughout, not omitted
+	empty := newOptimizerDiagnosticsPublish(optimizer.OptimizationResult{})
+	assert.Zero(t, empty.ObjectiveValue)
+	assert.Zero(t, empty.GridImportOvershoot)
+	assert.Zero(t, empty.GridExportOvershoot)
+	assert.False(t, empty.LimitViolations.GridImportLimitExceeded)
+	assert.False(t, empty.LimitViolations.GridExportLimitHit)
+}

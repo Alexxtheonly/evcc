@@ -1124,6 +1124,7 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 	}
 
 	site.publish("evopt-batteries", batteries)
+	site.publish(keys.OptimizerDiagnostics, newOptimizerDiagnosticsPublish(res))
 
 	site.setSuggestions(suggestions)
 	site.setBatteryForecast(site.addBatteryForecastTotals(req.Batteries, res.Batteries))
@@ -1140,6 +1141,41 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 	// notify on actionable suggestion changes (advisory only, see #31903)
 	for _, ev := range site.diffSuggestions(site.pendingSuggestions(details)) {
 		site.pushEvent(ev)
+	}
+}
+
+// optimizerLimitViolations is the wire format of optimizer.LimitViolationResult, renamed to
+// the site's camelCase publish convention (see optimizerDecisionPublish).
+type optimizerLimitViolations struct {
+	GridImportLimitExceeded bool `json:"gridImportLimitExceeded"`
+	GridExportLimitHit      bool `json:"gridExportLimitHit"`
+}
+
+// optimizerDiagnosticsPublish is the wire format of the last optimizer run's economic and
+// constraint diagnostics - the cheapest input to a "is the optimizer earning anything" ledger,
+// and the place a GridConfig.PMaxImp overshoot (see gridImportOvershootPenalty) becomes
+// visible instead of silently vanishing into a discarded Infeasible result. Kept separate from
+// the raw evopt payload (see optimizerResult) so consumers don't need the optimizer's
+// snake_case wire format.
+type optimizerDiagnosticsPublish struct {
+	// ObjectiveValue is the run's economic benefit in the site's configured currency.
+	ObjectiveValue float64 `json:"objectiveValue"`
+	// GridImportOvershoot is the total energy imported above PMaxImp across the horizon (Wh).
+	GridImportOvershoot float64 `json:"gridImportOvershoot"`
+	// GridExportOvershoot is the total energy curtailed above PMaxExp across the horizon (Wh).
+	GridExportOvershoot float64                  `json:"gridExportOvershoot"`
+	LimitViolations     optimizerLimitViolations `json:"limitViolations"`
+}
+
+func newOptimizerDiagnosticsPublish(res optimizer.OptimizationResult) optimizerDiagnosticsPublish {
+	return optimizerDiagnosticsPublish{
+		ObjectiveValue:      float64(res.ObjectiveValue),
+		GridImportOvershoot: float64(lo.Sum(res.GridImportOvershoot)),
+		GridExportOvershoot: float64(lo.Sum(res.GridExportOvershoot)),
+		LimitViolations: optimizerLimitViolations{
+			GridImportLimitExceeded: res.LimitViolations.GridImportLimitExceeded,
+			GridExportLimitHit:      res.LimitViolations.GridExportLimitHit,
+		},
 	}
 }
 

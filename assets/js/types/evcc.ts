@@ -176,6 +176,8 @@ export interface State {
   evopt?: EvOpt;
   /** @internal */
   optimizerDecision?: OptimizerDecision;
+  /** @internal */
+  optimizerDiagnostics?: OptimizerDiagnostics;
   /** Running evcc version. */
   version?: string;
   /** Latest available evcc version. */
@@ -1468,7 +1470,16 @@ export interface OptimizationResult {
   batteries: BatteryResult[]; // Results per battery
   grid_import: number[]; // Grid import per step (Wh)
   grid_export: number[]; // Grid export per step (Wh)
+  grid_import_overshoot?: number[]; // Energy above the import power limit per step (Wh)
+  grid_export_overshoot?: number[]; // Energy not exported due to the export power limit per step (Wh)
+  limit_violations?: LimitViolationResult;
   flow_direction: FlowDirection[]; // Flow direction per step (0=import, 1=export)
+}
+
+// Whether either grid power limit had to be violated somewhere in the horizon
+export interface LimitViolationResult {
+  grid_import_limit_exceeded?: boolean; // Household demand could only be met by exceeding the import limit
+  grid_export_limit_hit?: boolean; // Solar yield was reduced due to the export limit
 }
 
 // Battery optimization results
@@ -1519,6 +1530,23 @@ export interface OptimizerDecision {
   updated: string;
   /** Ms the decision stays valid from {@link updated} - mirrors the backend's optimizerBatteryModeValidity, after which the decision is dropped from control and must not be annotated as current. */
   validFor: number;
+}
+
+/** Whether a grid power limit had to be violated somewhere in the optimizer's horizon. */
+export interface OptimizerLimitViolations {
+  gridImportLimitExceeded: boolean;
+  gridExportLimitHit: boolean;
+}
+
+/** Economic benefit and constraint diagnostics of the last optimizer run. */
+export interface OptimizerDiagnostics {
+  /** Economic benefit of the run, in the site's configured currency. */
+  objectiveValue: number;
+  /** Total energy imported above the grid import limit across the horizon (Wh). */
+  gridImportOvershoot: number;
+  /** Total energy curtailed above the grid export limit across the horizon (Wh). */
+  gridExportOvershoot: number;
+  limitViolations: OptimizerLimitViolations;
 }
 
 // Tariff zone configuration
