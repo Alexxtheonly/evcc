@@ -20,19 +20,19 @@ func TestCollectorAddEnergy(t *testing.T) {
 	require.True(t, col.accu.updated.IsZero())
 
 	clock.Add(5 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 	require.False(t, col.accu.updated.IsZero())
 
 	clock.Add(5 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 	require.Equal(t, 1e3*5/60/1e3, col.accu.Energy) // kWh
 
 	clock.Add(5 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 	require.Equal(t, 0.0, col.accu.Energy) // accumulator reset after 15 minutes
 
 	clock.Add(15 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 	require.Equal(t, 0.0, col.accu.Energy) // accumulator reset after 15 minutes
 }
 
@@ -47,17 +47,17 @@ func TestCollectorAddEnergyWithEnergyMeter(t *testing.T) {
 
 	// first call: seeds meter, no delta yet
 	clock.Add(5 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(50000.0), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(50000.0), nil, 1e3, false))
 	require.Equal(t, 0.0, col.accu.Energy)
 
 	// second call: meter delta of 0.5 kWh, power ignored for energy
 	clock.Add(5 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(50000.5), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(50000.5), nil, 1e3, false))
 	require.Equal(t, 0.5, col.accu.Energy)
 
 	// implausible reading (decreased): ignored by guard
 	clock.Add(5 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(49000.0), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(49000.0), nil, 1e3, false))
 	require.Equal(t, 0.0, col.accu.Energy) // reset at slot boundary
 }
 
@@ -72,17 +72,17 @@ func TestCollectorAddEnergyWithEnergyMeterAndReturn(t *testing.T) {
 
 	// seed energy meter
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(1000.0), nil, 0))
+	require.NoError(t, col.AddEnergy(new(1000.0), nil, 0, false))
 
 	// positive power: energy via meter delta, no return energy
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(1000.3), nil, 500))
+	require.NoError(t, col.AddEnergy(new(1000.3), nil, 500, false))
 	require.InDelta(t, 0.3, col.accu.Energy, 1e-10)
 	require.Equal(t, 0.0, col.accu.ReturnEnergy)
 
 	// negative power: energy via meter (no change), return energy via power integration
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(1000.3), nil, -600))
+	require.NoError(t, col.AddEnergy(new(1000.3), nil, -600, false))
 	require.InDelta(t, 0.3, col.accu.Energy, 1e-10)
 	require.InDelta(t, 600.0*3/60/1e3, col.accu.ReturnEnergy, 1e-10) // 0.03 kWh
 }
@@ -98,17 +98,17 @@ func TestCollectorAddEnergyWithReturnEnergyMeterAndEnergy(t *testing.T) {
 
 	// seed return energy meter
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, new(1000.0), 0))
+	require.NoError(t, col.AddEnergy(nil, new(1000.0), 0, false))
 
 	// negative power: return energy via meter delta, no energy
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, new(1000.3), -500))
+	require.NoError(t, col.AddEnergy(nil, new(1000.3), -500, false))
 	require.InDelta(t, 0.3, col.accu.ReturnEnergy, 1e-10)
 	require.Equal(t, 0.0, col.accu.Energy)
 
 	// positive power: return energy via meter (no change), energy via power integration
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, new(1000.3), 600))
+	require.NoError(t, col.AddEnergy(nil, new(1000.3), 600, false))
 	require.InDelta(t, 0.3, col.accu.ReturnEnergy, 1e-10)
 	require.InDelta(t, 600.0*3/60/1e3, col.accu.Energy, 1e-10) // 0.03 kWh
 }
@@ -124,11 +124,11 @@ func TestCollectorAddEnergyWithBothMeters(t *testing.T) {
 
 	// seed both meters
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(1000.0), new(2000.0), 0))
+	require.NoError(t, col.AddEnergy(new(1000.0), new(2000.0), 0, false))
 
 	// both deltas used, power ignored
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(1000.3), new(2000.7), 999))
+	require.NoError(t, col.AddEnergy(new(1000.3), new(2000.7), 999, false))
 	require.InDelta(t, 0.3, col.accu.Energy, 1e-10)
 	require.InDelta(t, 0.7, col.accu.ReturnEnergy, 1e-10)
 }
@@ -170,21 +170,21 @@ func TestCollectorRecoversAfterFullMeterFailure(t *testing.T) {
 
 	// seed energy meter at 10 kWh, constant 1 kW
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(10.0), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(10.0), nil, 1e3, false))
 	require.Equal(t, 0.0, col.accu.Energy)
 
 	// good read: meter advanced 0.05 kWh (3 min @ 1 kW)
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(10.05), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(10.05), nil, 1e3, false))
 	require.InDelta(t, 0.05, col.accu.Energy, 1e-9)
 
 	// both reads fail: power 0, energy nil -> AddPower(0) contributes nothing
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 0))
+	require.NoError(t, col.AddEnergy(nil, nil, 0, false))
 
 	// recovered read: meter advanced to 10.15 (real 0.10 kWh since last good read)
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(10.15), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(10.15), nil, 1e3, false))
 
 	// 9 min @ 1 kW = 0.15 kWh delivered; meter 10.00 -> 10.15 = 0.15 kWh
 	require.InDelta(t, 0.15, col.accu.Energy, 1e-9)
@@ -206,23 +206,23 @@ func TestCollectorRecoversAfterFailedEnergyRead(t *testing.T) {
 
 	// seed energy meter at 10 kWh, constant 1 kW
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(10.0), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(10.0), nil, 1e3, false))
 	require.Equal(t, 0.0, col.accu.Energy)
 
 	// good read: meter advanced 0.05 kWh (3 min @ 1 kW)
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(10.05), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(10.05), nil, 1e3, false))
 	require.InDelta(t, 0.05, col.accu.Energy, 1e-9)
 
 	// energy read fails (nil) while power is still reported: the gap is not
 	// power-integrated because the meter has reported a total before
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 	require.InDelta(t, 0.05, col.accu.Energy, 1e-9)
 
 	// recovered read: meter advanced to 10.15 (real 0.10 kWh since last good read)
 	clock.Add(3 * time.Minute)
-	require.NoError(t, col.AddEnergy(new(10.15), nil, 1e3))
+	require.NoError(t, col.AddEnergy(new(10.15), nil, 1e3, false))
 
 	// 9 min @ 1 kW = 0.15 kWh delivered (meter 10.00 -> 10.15). The recovery
 	// delta (10.15 - 10.05) captures the gap exactly, without double-counting.
@@ -242,13 +242,13 @@ func TestCollectorSkipsPartialFirstSlot(t *testing.T) {
 
 	// first update mid-slot (00:05) - slot 00:00 is only partially covered
 	clk.Add(5 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 	clk.Add(5 * time.Minute) // 00:10
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 
 	// cross into slot 00:15 - the partial slot 00:00 must not be persisted
 	clk.Add(5 * time.Minute) // 00:15
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 
 	var count int64
 	require.NoError(t, db.Instance.Model(new(meter)).Count(&count).Error)
@@ -256,7 +256,7 @@ func TestCollectorSkipsPartialFirstSlot(t *testing.T) {
 
 	// cross into slot 00:30 - the fully covered slot 00:15 must be persisted
 	clk.Add(15 * time.Minute) // 00:30
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 
 	require.NoError(t, db.Instance.Model(new(meter)).Count(&count).Error)
 	require.EqualValues(t, 1, count, "first full slot must be persisted")
@@ -279,13 +279,13 @@ func TestCollectorRecoversDowntimeViaMeterReadings(t *testing.T) {
 	require.False(t, col.restored, "fresh entity must not restore")
 
 	// seed meters at slot start, advance within slot
-	require.NoError(t, col.AddEnergy(new(100.0), new(200.0), 0))
+	require.NoError(t, col.AddEnergy(new(100.0), new(200.0), 0, false))
 	clk.Add(15 * time.Minute) // 00:15
-	require.NoError(t, col.AddEnergy(new(100.5), new(200.2), 0))
+	require.NoError(t, col.AddEnergy(new(100.5), new(200.2), 0, false))
 
 	// cross into 00:30: slot 00:15 persisted, readings saved on entity
 	clk.Add(15 * time.Minute) // 00:30
-	require.NoError(t, col.AddEnergy(new(101.0), new(200.4), 0))
+	require.NoError(t, col.AddEnergy(new(101.0), new(200.4), 0, false))
 
 	var e entity
 	require.NoError(t, db.Instance.First(&e, col.entity.Id).Error)
@@ -303,14 +303,14 @@ func TestCollectorRecoversDowntimeViaMeterReadings(t *testing.T) {
 	require.True(t, col2.restored)
 
 	// first reading yields the delta across the downtime
-	require.NoError(t, col2.AddEnergy(new(103.0), new(201.4), 0))
+	require.NoError(t, col2.AddEnergy(new(103.0), new(201.4), 0, false))
 	require.InDelta(t, 2.0, col2.accu.Energy, 1e-10)
 	require.InDelta(t, 1.0, col2.accu.ReturnEnergy, 1e-10)
 
 	// cross into 01:45: catchup slot 01:30 persisted despite mid-slot start,
 	// downtime delta plus the 0.5 kWh accrued since restart
 	clk.Add(10 * time.Minute) // 01:45
-	require.NoError(t, col2.AddEnergy(new(103.5), new(201.4), 0))
+	require.NoError(t, col2.AddEnergy(new(103.5), new(201.4), 0, false))
 
 	var m meter
 	require.NoError(t, db.Instance.Where("meter = ? AND ts = ?", col2.entity.Id, 90*60).First(&m).Error)
@@ -344,11 +344,11 @@ func TestCollectorRecoveryWithinCurrentSlot(t *testing.T) {
 	require.NoError(t, err)
 
 	// seed meters, advance a slot, cross into 00:30 to persist slot 00:15
-	require.NoError(t, col.AddEnergy(new(100.0), new(200.0), 0))
+	require.NoError(t, col.AddEnergy(new(100.0), new(200.0), 0, false))
 	clk.Add(15 * time.Minute) // 00:15
-	require.NoError(t, col.AddEnergy(new(100.5), new(200.2), 0))
+	require.NoError(t, col.AddEnergy(new(100.5), new(200.2), 0, false))
 	clk.Add(15 * time.Minute) // 00:30
-	require.NoError(t, col.AddEnergy(new(101.0), new(200.4), 0))
+	require.NoError(t, col.AddEnergy(new(101.0), new(200.4), 0, false))
 
 	// restart 10min into slot 00:30 - the slot right after the last persisted
 	clk.Add(10 * time.Minute) // 00:40
@@ -359,7 +359,7 @@ func TestCollectorRecoveryWithinCurrentSlot(t *testing.T) {
 
 	// recovery happens during the current slot: the meter delta is applied but
 	// no boundary was skipped, so nothing is persisted yet
-	require.NoError(t, col2.AddEnergy(new(103.0), new(201.4), 0))
+	require.NoError(t, col2.AddEnergy(new(103.0), new(201.4), 0, false))
 	require.InDelta(t, 2.0, col2.accu.Energy, 1e-10)
 	var count int64
 	require.NoError(t, db.Instance.Model(new(meter)).Where("meter = ?", col2.entity.Id).Count(&count).Error)
@@ -367,7 +367,7 @@ func TestCollectorRecoveryWithinCurrentSlot(t *testing.T) {
 
 	// cross into 00:45: slot 00:30 persisted with the full slot delta, not recovered
 	clk.Add(5 * time.Minute) // 00:45
-	require.NoError(t, col2.AddEnergy(new(103.5), new(201.4), 0))
+	require.NoError(t, col2.AddEnergy(new(103.5), new(201.4), 0, false))
 
 	var m meter
 	require.NoError(t, db.Instance.Where("meter = ? AND ts = ?", col2.entity.Id, 30*60).First(&m).Error)
@@ -433,14 +433,14 @@ func TestCollectorSetSocTemp(t *testing.T) {
 	col, err := NewCollector(Battery, "bat", "", WithClock(clk))
 	require.NoError(t, err)
 
-	require.NoError(t, col.AddEnergy(nil, nil, 0))
+	require.NoError(t, col.AddEnergy(nil, nil, 0, false))
 	require.NoError(t, col.SetSocTemp(50, false))
 	require.NoError(t, col.SetSocTemp(60, false)) // first reading per slot wins
 	require.Equal(t, 50.0, *col.accu.SocTemp)
 
 	// cross into the next slot: prior slot persisted, snapshot cleared
 	clk.Add(15 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 0))
+	require.NoError(t, col.AddEnergy(nil, nil, 0, false))
 	require.Nil(t, col.accu.SocTemp)
 
 	var m meter
@@ -464,12 +464,12 @@ func TestCollectorSetSocTempHeating(t *testing.T) {
 	col, err := NewCollector(Loadpoint, "lp", "", WithClock(clk))
 	require.NoError(t, err)
 
-	require.NoError(t, col.AddEnergy(nil, nil, 0))
+	require.NoError(t, col.AddEnergy(nil, nil, 0, false))
 	require.NoError(t, col.SetSocTemp(21.5, true)) // heating charger: value is temperature
 	require.Equal(t, 21.5, *col.accu.SocTemp)
 
 	clk.Add(15 * time.Minute)
-	require.NoError(t, col.AddEnergy(nil, nil, 0))
+	require.NoError(t, col.AddEnergy(nil, nil, 0, false))
 
 	var m meter
 	require.NoError(t, db.Instance.Where("meter = ?", col.entity.Id).First(&m).Error)
@@ -489,7 +489,7 @@ func TestCreateEntityReconcilesExtToConsumer(t *testing.T) {
 	// ext meter with a persisted history slot
 	ext, err := createEntity(Meter, "db:5", "Fridge")
 	require.NoError(t, err)
-	require.NoError(t, persist(ext, time.Unix(15*60, 0), 0.3, 0, nil, false))
+	require.NoError(t, persist(ext, time.Unix(15*60, 0), 0.3, 0, nil, false, false))
 
 	// reconfigured as consumer: same row relabeled, history intact
 	con, err := createEntity(Consumer, "db:5", "Fridge")
@@ -548,11 +548,11 @@ func TestCollectorLastSlotEnergy(t *testing.T) {
 	require.False(t, ok)
 
 	// constant 1 kW: crossing into 00:30 persists slot 00:15
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 	clk.Add(15 * time.Minute) // 00:15
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 	clk.Add(15 * time.Minute) // 00:30
-	require.NoError(t, col.AddEnergy(nil, nil, 1e3))
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
 
 	v, ok := col.LastSlotEnergy()
 	require.True(t, ok)
@@ -568,6 +568,63 @@ func TestCollectorLastSlotEnergy(t *testing.T) {
 	require.NoError(t, db.Instance.Model(new(meter)).Where("meter = ? AND ts = ?", col.entity.Id, 15*60).Update("recovered", true).Error)
 	_, ok = col.LastSlotEnergy()
 	require.False(t, ok)
+}
+
+// TestCollectorAddEnergyIncomplete verifies that a single failed read within a slot (e.g. a
+// transient Modbus timeout on a PV or battery meter, see core/site.go) taints the whole slot:
+// it is persisted with Incomplete set and excluded from LastSlotEnergy, the same way a
+// recovered downtime slot already is - a transient failure must not be silently averaged into
+// the profile the optimizer forecasts household demand from.
+func TestCollectorAddEnergyIncomplete(t *testing.T) {
+	clk := clock.NewMock() // 1970-01-01 00:00:00 UTC, on a slot boundary
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	col, err := NewCollector(Home, "incomplete", "", WithClock(clk))
+	require.NoError(t, err)
+
+	// constant 1 kW, but one read within slot 00:00-00:15 failed
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
+	clk.Add(5 * time.Minute)                             // 00:05
+	require.NoError(t, col.AddEnergy(nil, nil, 0, true)) // failed read: power 0, flagged incomplete
+	clk.Add(10 * time.Minute)                            // 00:15: crosses the boundary, persisting slot 00:00
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
+
+	var m meter
+	require.Equal(t, int64(1), db.Instance.Where("meter = ? AND ts = ?", col.entity.Id, 0).Find(&m).RowsAffected)
+	require.True(t, m.Incomplete, "slot with a failed read must be flagged incomplete")
+
+	// excluded from LastSlotEnergy just like a recovered slot
+	_, ok := col.LastSlotEnergy()
+	require.False(t, ok)
+}
+
+// TestCollectorAddEnergyIncompleteDoesNotLeakIntoNextSlot verifies the incomplete flag is
+// scoped to the slot it occurred in and does not taint the following, fully-good slot.
+func TestCollectorAddEnergyIncompleteDoesNotLeakIntoNextSlot(t *testing.T) {
+	clk := clock.NewMock()
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	col, err := NewCollector(Home, "no-leak", "", WithClock(clk))
+	require.NoError(t, err)
+
+	// slot 1 (00:00-00:15): one failed read
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
+	clk.Add(15 * time.Minute)
+	require.NoError(t, col.AddEnergy(nil, nil, 0, true))
+
+	// slot 2 (00:15-00:30): all good
+	clk.Add(15 * time.Minute)
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
+	clk.Add(15 * time.Minute)
+	require.NoError(t, col.AddEnergy(nil, nil, 1e3, false))
+
+	v, ok := col.LastSlotEnergy()
+	require.True(t, ok, "the following good slot must not inherit the earlier taint")
+	require.InDelta(t, 0.25, v, 1e-10)
 }
 
 func TestCollectorSetEnergy(t *testing.T) {

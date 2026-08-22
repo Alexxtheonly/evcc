@@ -20,7 +20,7 @@ func TestSqliteTimestamp(t *testing.T) {
 	entity := entity{Name: "foo"}
 	require.NoError(t, db.Instance.FirstOrCreate(&entity).Error)
 
-	persist(entity, clock.Now(), 0, 0, nil, false)
+	persist(entity, clock.Now(), 0, 0, nil, false, false)
 
 	db, err := db.Instance.DB()
 	require.NoError(t, err)
@@ -55,8 +55,8 @@ func TestQueryEnergyUTCFilter(t *testing.T) {
 	loc := time.Now().Location()
 	base := time.Date(2026, 4, 15, 16, 0, 0, 0, loc)
 
-	require.NoError(t, persist(e, base, 0, 1, nil, false))
-	require.NoError(t, persist(e, base.Add(time.Hour), 0, 2, nil, false))
+	require.NoError(t, persist(e, base, 0, 1, nil, false, false))
+	require.NoError(t, persist(e, base.Add(time.Hour), 0, 2, nil, false, false))
 
 	// query with UTC times spanning both slots
 	from := base.Add(-time.Hour).UTC()
@@ -83,10 +83,10 @@ func TestQueryEnergyGrouped(t *testing.T) {
 	loc := time.Now().Location()
 	base := time.Date(2026, 4, 15, 16, 0, 0, 0, loc)
 
-	require.NoError(t, persist(e1, base, 1, 0, nil, false))
-	require.NoError(t, persist(e2, base, 2, 0, nil, false))
-	require.NoError(t, persist(e1, base.Add(time.Hour), 3, 0, nil, false))
-	require.NoError(t, persist(e2, base.Add(time.Hour), 4, 0, nil, false))
+	require.NoError(t, persist(e1, base, 1, 0, nil, false, false))
+	require.NoError(t, persist(e2, base, 2, 0, nil, false, false))
+	require.NoError(t, persist(e1, base.Add(time.Hour), 3, 0, nil, false, false))
+	require.NoError(t, persist(e2, base.Add(time.Hour), 4, 0, nil, false, false))
 
 	from := base.Add(-time.Hour).UTC()
 	to := base.Add(3 * time.Hour).UTC()
@@ -125,9 +125,9 @@ func TestQueryEnergyMultipleSeries(t *testing.T) {
 	// 2 hourly slots per entity
 	for i := range 2 {
 		ts := base.Add(time.Duration(i) * time.Hour)
-		require.NoError(t, persist(eGrid, ts, float64(1+i), 0, nil, false))
-		require.NoError(t, persist(ePv1, ts, 0, float64(10+i), nil, false))
-		require.NoError(t, persist(ePv2, ts, 0, float64(20+i), nil, false))
+		require.NoError(t, persist(eGrid, ts, float64(1+i), 0, nil, false, false))
+		require.NoError(t, persist(ePv1, ts, 0, float64(10+i), nil, false, false))
+		require.NoError(t, persist(ePv2, ts, 0, float64(20+i), nil, false, false))
 	}
 
 	from := base.Add(-time.Hour).UTC()
@@ -187,9 +187,9 @@ func TestQueryEnergyFilter(t *testing.T) {
 	base := time.Date(2026, 4, 15, 16, 0, 0, 0, loc)
 	for i := range 2 {
 		ts := base.Add(time.Duration(i) * time.Hour)
-		require.NoError(t, persist(eGrid, ts, float64(1+i), 0, nil, false))
-		require.NoError(t, persist(ePv, ts, 0, float64(10+i), nil, false))
-		require.NoError(t, persist(eBat, ts, float64(5+i), 0, nil, false))
+		require.NoError(t, persist(eGrid, ts, float64(1+i), 0, nil, false, false))
+		require.NoError(t, persist(ePv, ts, 0, float64(10+i), nil, false, false))
+		require.NoError(t, persist(eBat, ts, float64(5+i), 0, nil, false, false))
 	}
 
 	from := base.Add(-time.Hour).UTC()
@@ -237,7 +237,7 @@ func TestUpdateProfile(t *testing.T) {
 	// day 1:   0 ...  95
 	// day 2:  96 ... 181
 	for i := range 4 * 2 * 24 {
-		persist(entity, clock.Now(), float64(i), float64(i), nil, false)
+		persist(entity, clock.Now(), float64(i), float64(i), nil, false, false)
 		clock.Add(15 * time.Minute)
 	}
 
@@ -277,6 +277,41 @@ func TestUpdateProfile(t *testing.T) {
 
 		require.Equal(t, expected, *prof, "full profile: expected %v, got %v", expected, *prof)
 	}
+}
+
+// TestUpdateProfileExcludesIncomplete verifies that a slot flagged Incomplete (a reading
+// feeding it failed, see Collector.AddEnergy) is excluded from energyProfile the same way a
+// recovered downtime slot already is - a single transient meter failure must not be silently
+// averaged into the 30-day profile the optimizer forecasts household demand from.
+func TestUpdateProfileExcludesIncomplete(t *testing.T) {
+	clock := clock.NewMock()
+	_, o := clock.Now().Zone()
+	clock.Add(-time.Duration(o) * time.Second)
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	entity := entity{Id: 2, Name: "foo"}
+	require.NoError(t, db.Instance.FirstOrCreate(&entity).Error)
+
+	from := clock.Now()
+
+	// exactly one day: 96 slots, none recovered
+	for range 4 * 24 {
+		persist(entity, clock.Now(), 1, 0, nil, false, false)
+		clock.Add(15 * time.Minute)
+	}
+
+	// baseline: a full day yields a complete 96-slot profile
+	_, err := energyProfile(entity, from)
+	require.NoError(t, err)
+
+	// flag one slot incomplete: with only 96 rows total and one excluded, the
+	// profile can no longer produce all 96 time-of-day buckets
+	require.NoError(t, db.Instance.Model(new(meter)).Where("meter = ? AND ts = ?", entity.Id, from.Unix()).Update("incomplete", true).Error)
+
+	_, err = energyProfile(entity, from)
+	require.ErrorIs(t, err, ErrIncomplete)
 }
 
 func TestTimeMigration(t *testing.T) {

@@ -148,6 +148,11 @@ type siteState struct {
 	excessDCPower float64            // PV excess DC charge power (hybrid only)
 	auxPower      float64            // Aux power
 	battery       types.BatteryState // Battery cached and published state
+
+	// demandIncomplete is true when a PV or battery power read failed this cycle, so the
+	// homePower derived from pvPower/battery.Power below is not trustworthy for learning.
+	// See collectMeters and Collector.AddEnergy's incomplete flag.
+	demandIncomplete bool
 }
 
 // state returns a copy of the cached measurement state
@@ -642,8 +647,17 @@ func (site *Site) clearPlanLocks() {
 	}
 }
 
-func (site *Site) collectMeters(key string, meters []config.Device[api.Meter]) []types.Measurement {
+// collectMeters reads power and energy from meters in parallel. The returned failed slice
+// flags, per meter, whether the power read failed (excluding api.ErrNotAvailable, a
+// permanent capability gap rather than a transient failure): unlike the grid meter (see
+// updateGridMeter), a failed PV or battery read does not abort the update - mm[i].Power is
+// left at its zero value and the caller carries on with a value that looks like "no power"
+// instead of "unknown power". Callers that persist mm into anything the optimizer learns
+// from must pass the corresponding failed[i] through as AddEnergy's incomplete flag, or a
+// transient Modbus timeout gets silently averaged into the demand forecast.
+func (site *Site) collectMeters(key string, meters []config.Device[api.Meter]) ([]types.Measurement, []bool) {
 	mm := make([]types.Measurement, len(meters))
+	failed := make([]bool, len(meters))
 
 	fun := func(i int, dev config.Device[api.Meter]) {
 		meter := dev.Instance()
@@ -666,6 +680,7 @@ func (site *Site) collectMeters(key string, meters []config.Device[api.Meter]) [
 				site.log.ERROR.Println("\n" + b.String())
 			}
 			site.log.ERROR.Printf("%s %d power: %v", key, i+1, err)
+			failed[i] = true
 		}
 
 		// energy (production); ignore spurious zero readings (NaN-derived or nightly reset, #30950)
@@ -696,7 +711,7 @@ func (site *Site) collectMeters(key string, meters []config.Device[api.Meter]) [
 	}
 	wg.Wait()
 
-	return mm
+	return mm, failed
 }
 
 // updatePvMeters updates pv meters. All measurements are optional.
@@ -705,7 +720,8 @@ func (site *Site) updatePvMeters() {
 		return
 	}
 
-	mm := site.collectMeters("pv", site.pvMeters)
+	mm, failed := site.collectMeters("pv", site.pvMeters)
+	anyFailed := lo.Contains(failed, true)
 
 	for i, dev := range site.pvMeters {
 		meter := dev.Instance()
@@ -740,6 +756,7 @@ func (site *Site) updatePvMeters() {
 
 	site.Lock()
 	site.pvPower, site.excessDCPower = pvPower, excessDCPower
+	site.demandIncomplete = site.demandIncomplete || anyFailed
 	site.Unlock()
 
 	if len(site.pvMeters) > 1 {
@@ -758,7 +775,7 @@ func (site *Site) updatePvMeters() {
 	// persist per-meter PV energy slots (used for history and forecast scaling)
 	for i, dev := range site.pvMeters {
 		c := site.collectors[dev.Config().Name]
-		if err := c.AddEnergy(mm[i].Energy, mm[i].ReturnEnergy, mm[i].Power); err != nil {
+		if err := c.AddEnergy(mm[i].Energy, mm[i].ReturnEnergy, mm[i].Power, failed[i]); err != nil {
 			site.log.ERROR.Printf("persist pv %d energy: %v", i+1, err)
 		}
 	}
@@ -770,7 +787,8 @@ func (site *Site) updateBatteryMeters() {
 		return
 	}
 
-	mm := site.collectMeters("battery", site.batteryMeters)
+	mm, failed := site.collectMeters("battery", site.batteryMeters)
+	anyFailed := lo.Contains(failed, true)
 
 	var maxDischargePower float64
 	for i, dev := range site.batteryMeters {
@@ -854,6 +872,7 @@ func (site *Site) updateBatteryMeters() {
 		return *m.Energy
 	})
 	site.battery.Devices = mm
+	site.demandIncomplete = site.demandIncomplete || anyFailed
 
 	battery := site.battery
 	site.Unlock()
@@ -874,7 +893,7 @@ func (site *Site) updateBatteryMeters() {
 		if !ok {
 			continue
 		}
-		if err := c.AddEnergy(mm[i].ReturnEnergy, mm[i].Energy, -mm[i].Power); err != nil {
+		if err := c.AddEnergy(mm[i].ReturnEnergy, mm[i].Energy, -mm[i].Power, failed[i]); err != nil {
 			site.log.ERROR.Printf("persist battery %d energy: %v", i+1, err)
 		}
 		if mm[i].Soc != nil {
@@ -924,7 +943,9 @@ func (site *Site) addMeterEnergy(meters []config.Device[api.Meter], mm []types.M
 		if !ok {
 			continue
 		}
-		if err := c.AddEnergy(mm[i].Energy, mm[i].ReturnEnergy, mm[i].Power); err != nil {
+		// aux/consumer/ext meters are diagnostic only and do not feed anything that
+		// learns (see updatePvMeters/updateBatteryMeters for meters that do)
+		if err := c.AddEnergy(mm[i].Energy, mm[i].ReturnEnergy, mm[i].Power, false); err != nil {
 			site.log.ERROR.Printf("persist meter %s energy: %v", ref, err)
 		}
 	}
@@ -936,7 +957,7 @@ func (site *Site) updateAuxMeters() {
 		return
 	}
 
-	mm := site.collectMeters("aux", site.auxMeters)
+	mm, _ := site.collectMeters("aux", site.auxMeters)
 	auxPower := lo.SumBy(mm, func(m types.Measurement) float64 {
 		return m.Power
 	})
@@ -961,7 +982,7 @@ func (site *Site) updateConsumerMeters() {
 		return
 	}
 
-	mm := site.collectMeters("consumer", site.consumerMeters)
+	mm, _ := site.collectMeters("consumer", site.consumerMeters)
 
 	site.addMeterEnergy(site.consumerMeters, mm)
 
@@ -974,7 +995,7 @@ func (site *Site) updateExtMeters() {
 		return
 	}
 
-	mm := site.collectMeters("ext", site.extMeters)
+	mm, _ := site.collectMeters("ext", site.extMeters)
 
 	site.addMeterEnergy(site.extMeters, mm)
 
@@ -1046,7 +1067,9 @@ func (site *Site) updateGridMeter() error {
 	}
 
 	if c, ok := site.collectors[site.gridMeter.Config().Name]; ok {
-		c.AddEnergy(mm.Energy, mm.ReturnEnergy, mm.Power)
+		// a failed power read aborted this update above, so the grid meter never
+		// reaches here with an incomplete reading
+		c.AddEnergy(mm.Energy, mm.ReturnEnergy, mm.Power, false)
 	}
 
 	site.publish(keys.Grid, mm)
@@ -1056,6 +1079,11 @@ func (site *Site) updateGridMeter() error {
 
 // updateMeters reads all meters and returns the updated measurement state
 func (site *Site) updateMeters() (siteState, error) {
+	// reset for this cycle - updatePvMeters/updateBatteryMeters OR their own result in below
+	site.Lock()
+	site.demandIncomplete = false
+	site.Unlock()
+
 	var eg errgroup.Group
 
 	eg.Go(func() error { site.updatePvMeters(); return nil })
@@ -1292,7 +1320,10 @@ func (site *Site) updatePower(lp updater, state siteState, totalChargePower floa
 	site.publish(keys.HomePower, homePower)
 
 	if homePower > 0 {
-		if err := site.collectors[metrics.Home].AddEnergy(nil, nil, homePower); err != nil {
+		// a failed PV or battery read this cycle leaves the corresponding term at its zero
+		// value above, so homePower looks plausible but is not - keep the slot out of the
+		// profile the optimizer forecasts household demand from (see state.demandIncomplete)
+		if err := site.collectors[metrics.Home].AddEnergy(nil, nil, homePower, state.demandIncomplete); err != nil {
 			site.log.ERROR.Printf("persist home consumption: %v", err)
 		}
 	}

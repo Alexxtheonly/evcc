@@ -21,8 +21,8 @@ func TestDeleteEnergy(t *testing.T) {
 	base := time.Date(2026, 4, 15, 16, 0, 0, 0, loc)
 	for i := range 4 {
 		ts := base.Add(time.Duration(i) * 15 * time.Minute)
-		require.NoError(t, persist(ePv, ts, 1, 0, nil, false))
-		require.NoError(t, persist(eFc, ts, 2, 0, nil, false))
+		require.NoError(t, persist(ePv, ts, 1, 0, nil, false, false))
+		require.NoError(t, persist(eFc, ts, 2, 0, nil, false, false))
 	}
 
 	count := func() int64 {

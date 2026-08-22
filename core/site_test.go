@@ -1,8 +1,10 @@
 package core
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/types"
 	"github.com/evcc-io/evcc/util"
@@ -220,4 +222,40 @@ func TestRequiredBatteryMode(t *testing.T) {
 		res := s.requiredBatteryMode(tc.gridChargeActive, api.Rate{})
 		assert.Equal(t, tc.res, res, "expected %s, got %s", tc.res, res)
 	}
+}
+
+// TestCollectMetersFlagsFailedPower verifies collectMeters' failed slice: a real power read
+// failure is flagged so callers can mark the resulting measurement incomplete (see
+// updatePvMeters/updateBatteryMeters), while a meter that simply does not implement power
+// (api.ErrNotAvailable, a permanent capability gap) is not - that is expected, not a failure.
+func TestCollectMetersFlagsFailedPower(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	site := &Site{log: util.NewLogger("foo")}
+
+	ok := api.NewMockMeter(ctrl)
+	ok.EXPECT().CurrentPower().Return(1000.0, nil).AnyTimes()
+
+	failed := api.NewMockMeter(ctrl)
+	failed.EXPECT().CurrentPower().Return(0.0, backoff.Permanent(errors.New("comm timeout"))).AnyTimes()
+
+	notAvailable := api.NewMockMeter(ctrl)
+	notAvailable.EXPECT().CurrentPower().Return(0.0, backoff.Permanent(api.ErrNotAvailable)).AnyTimes()
+
+	mm, failedFlags := site.collectMeters("pv", []config.Device[api.Meter]{
+		config.NewStaticDevice(config.Named{}, api.Meter(ok)),
+		config.NewStaticDevice(config.Named{}, api.Meter(failed)),
+		config.NewStaticDevice(config.Named{}, api.Meter(notAvailable)),
+	})
+
+	require.Len(t, mm, 3)
+	require.Len(t, failedFlags, 3)
+
+	assert.Equal(t, 1000.0, mm[0].Power)
+	assert.False(t, failedFlags[0], "successful read must not be flagged")
+
+	assert.Equal(t, 0.0, mm[1].Power, "failed read leaves power at its zero value")
+	assert.True(t, failedFlags[1], "a real read failure must be flagged")
+
+	assert.Equal(t, 0.0, mm[2].Power)
+	assert.False(t, failedFlags[2], "ErrNotAvailable is a permanent capability gap, not a failure")
 }

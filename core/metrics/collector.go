@@ -26,6 +26,7 @@ type Collector struct {
 	started    time.Time
 	restored   bool      // meter readings seeded from db
 	lastSlot   time.Time // last persisted slot at restore, for contiguity check
+	incomplete bool      // a reading feeding the current slot failed, see AddEnergy
 	statsCache EnergyStats
 }
 
@@ -130,7 +131,7 @@ func (c *Collector) advanceSlot(now time.Time) error {
 			// this single slot, inflating it - a contiguous restart keeps the
 			// slot's meter delta time-correct, so only the former is recovered
 			recovered := c.restored && !c.started.Equal(c.lastSlot.Add(tariff.SlotDuration))
-			if err := c.persist(recovered); err != nil {
+			if err := c.persist(recovered, c.incomplete); err != nil {
 				return err
 			}
 		}
@@ -145,11 +146,12 @@ func (c *Collector) advanceSlot(now time.Time) error {
 	c.accu.Energy = 0
 	c.accu.ReturnEnergy = 0
 	c.accu.SocTemp = nil
+	c.incomplete = false
 	return nil
 }
 
-func (c *Collector) persist(recovered bool) error {
-	if err := persist(c.entity, c.started, c.accu.Energy, c.accu.ReturnEnergy, c.accu.SocTemp, recovered); err != nil {
+func (c *Collector) persist(recovered, incomplete bool) error {
+	if err := persist(c.entity, c.started, c.accu.Energy, c.accu.ReturnEnergy, c.accu.SocTemp, recovered, incomplete); err != nil {
 		return err
 	}
 
@@ -183,7 +185,7 @@ func (c *Collector) LastSlotEnergy() (float64, bool) {
 	ts := c.accu.clock.Now().Truncate(tariff.SlotDuration).Add(-tariff.SlotDuration)
 
 	var m meter
-	if db.Instance.Where("meter = ? AND ts = ? AND COALESCE(recovered, 0) = 0", c.entity.Id, ts.Unix()).Limit(1).Find(&m).RowsAffected == 0 {
+	if db.Instance.Where("meter = ? AND ts = ? AND COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0", c.entity.Id, ts.Unix()).Limit(1).Find(&m).RowsAffected == 0 {
 		return 0, false
 	}
 	return m.Energy, true
@@ -218,7 +220,18 @@ func (c *Collector) SetReturnEnergyMeterTotal(v float64) error {
 // integration only for directions without an energy meter. A direction that has
 // reported a total before keeps using meter deltas even if a single read fails,
 // so a transient failure is recovered via the next delta and not double-counted.
-func (c *Collector) AddEnergy(energyTotal, returnEnergyTotal *float64, power float64) error {
+//
+// incomplete flags that one of the readings feeding this call failed (e.g. a
+// meter timeout left power at its zero value instead of the real reading). It
+// sticks for the whole slot: any call within the slot can taint it, and once
+// tainted the persisted slot is marked Incomplete and excluded from
+// LastSlotEnergy and the learned profile (see db_profile.go), the same way a
+// recovered downtime slot already is. A single transient read failure must
+// not get silently averaged into the 30-day profile the optimizer forecasts
+// household demand from.
+func (c *Collector) AddEnergy(energyTotal, returnEnergyTotal *float64, power float64, incomplete bool) error {
+	c.incomplete = c.incomplete || incomplete
+
 	return c.process(func() {
 		// a direction that ever reported a total is metered, so a nil read is a
 		// transient failure rather than a power-only meter

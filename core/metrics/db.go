@@ -17,8 +17,9 @@ type meter struct {
 	Entity       entity   `json:"-" gorm:"foreignkey:Meter;references:Id"`
 	Energy       float64  `json:"energy" gorm:"column:energy"`
 	ReturnEnergy float64  `json:"returnEnergy" gorm:"column:return_energy"`
-	SocTemp      *float64 `json:"socTemp,omitempty" gorm:"column:soc_temp"`    // at start of slot
-	Recovered    bool     `json:"recovered,omitempty" gorm:"column:recovered"` // downtime catchup slot, excluded from profile
+	SocTemp      *float64 `json:"socTemp,omitempty" gorm:"column:soc_temp"`      // at start of slot
+	Recovered    bool     `json:"recovered,omitempty" gorm:"column:recovered"`   // downtime catchup slot, excluded from profile
+	Incomplete   bool     `json:"incomplete,omitempty" gorm:"column:incomplete"` // a reading feeding this slot failed, excluded from profile
 }
 
 type entity struct {
@@ -137,7 +138,7 @@ func SetupSchema() error {
 var OnPersist func(slot time.Time)
 
 // persist stores a completed 15min slot
-func persist(entity entity, ts time.Time, energy, returnEnergy float64, socTemp *float64, recovered bool) error {
+func persist(entity entity, ts time.Time, energy, returnEnergy float64, socTemp *float64, recovered, incomplete bool) error {
 	slot := ts.Truncate(tariff.SlotDuration)
 	if err := db.Instance.Create(&meter{
 		Meter:        entity.Id,
@@ -146,6 +147,7 @@ func persist(entity entity, ts time.Time, energy, returnEnergy float64, socTemp 
 		ReturnEnergy: returnEnergy,
 		SocTemp:      socTemp,
 		Recovered:    recovered,
+		Incomplete:   incomplete,
 	}).Error; err != nil {
 		return err
 	}
