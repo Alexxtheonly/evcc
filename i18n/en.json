@@ -1159,6 +1159,21 @@
     },
     "hideLine": "hide line",
     "modalTitle": "Forecast",
+    "optimizer": {
+      "legendBatteryCharge": "Battery grid charge",
+      "legendBatteryDischarge": "Battery discharge",
+      "legendBatterySoc": "Battery SoC (forecast)",
+      "modeCharge": "Grid charging",
+      "modeHold": "Discharge locked",
+      "modeHoldcharge": "Charge locked",
+      "modeNormal": "Normal operation",
+      "modeUnknown": "No plan",
+      "planReadyBy": "{vehicle} ready by {soc}",
+      "reasonDamping": "pending confirmation",
+      "reasonForcedIdle": "batteries disagree",
+      "reasonLiveRate": "price moved",
+      "reasonPayback": "would not pay back"
+    },
     "price": {
       "average": "Average",
       "constant": "Price",

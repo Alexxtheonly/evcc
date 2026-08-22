@@ -92,6 +92,10 @@
 							:chart-width="chartWidth"
 							:end-date="chartEndDate"
 							:scroll-left="scrollLeft"
+							:evopt="evopt"
+							:vehicles="vehicles"
+							:device-colors="deviceColors"
+							:optimizer-decision="optimizerDecision"
 							@scroll="onChartScroll"
 						/>
 					</div>
@@ -147,6 +151,8 @@ import api from "@/api";
 import settings from "@/settings";
 import store from "../store";
 import { adjustedSolar, ForecastType, isStaticTariff } from "@/utils/forecast";
+import vehicleList from "@/utils/vehicleList";
+import { deviceColorMap } from "@/colors";
 
 const MIN_HOURS = 76;
 const MAX_HOURS = 96;
@@ -236,6 +242,18 @@ export default defineComponent({
 		},
 		experimental() {
 			return store.state?.experimental;
+		},
+		evopt() {
+			return store.state?.evopt;
+		},
+		vehicles() {
+			return vehicleList(store.state?.vehicles);
+		},
+		deviceColors() {
+			return deviceColorMap(store.state?.deviceColors);
+		},
+		optimizerDecision() {
+			return store.state?.optimizerDecision;
 		},
 		solarAdjusted() {
 			return store.state?.solarAdjusted;
