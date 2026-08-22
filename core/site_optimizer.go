@@ -35,6 +35,14 @@ const (
 
 	// batteryPower is the default power of the battery in W
 	batteryPower = 6000
+
+	// pMaxImpOvershootPenalty scales the peak forecast import price (currency/Wh) into a
+	// one-time, demand-charge-style penalty (currency/W) for GridConfig.PrcPExcImp. 1000x
+	// keeps it several orders of magnitude above any realistic single-slot arbitrage gain
+	// (a handful of currency units for a typical battery cycle) while remaining finite, so
+	// an unavoidable overshoot still returns a usable schedule instead of an Infeasible
+	// result that discards every suggestion.
+	pMaxImpOvershootPenalty = 1000
 )
 
 // optimizerChargingStrategies are the valid grid charging strategies; the first
@@ -167,6 +175,16 @@ func suggestionEvent(detail batteryDetail, s types.Suggestion) messenger.Event {
 // its SoC bounds, in Wh relative to its capacity.
 func socBoundEpsilon(cfg optimizer.BatteryConfig) float32 {
 	return max(cfg.SCapacity*0.01, 10)
+}
+
+// gridImportOvershootPenalty derives GridConfig.PrcPExcImp from the peak forecast import
+// price. It returns 0 (no penalty, PMaxImp stays a hard constraint) when the price series
+// carries no positive price, e.g. no grid tariff is configured.
+func gridImportOvershootPenalty(pn []float32) float32 {
+	if peak := lo.Max(pn); peak > 0 {
+		return pMaxImpOvershootPenalty * peak
+	}
+	return 0
 }
 
 // currentSlotSuggestion maps the optimizer's first-slot corner result onto an advisory action.
@@ -887,8 +905,21 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 
 	if site.circuit != nil {
 		if pMaxImp := site.circuit.GetMaxPower(); pMaxImp > 0 {
-			// hard grid import limit if no price penalty is set by PrcPExcImp
 			req.Grid.PMaxImp = float32(pMaxImp)
+
+			// Soften the import limit into a demand-charge-style penalty instead of leaving
+			// it a hard constraint: a hard PMaxImp makes the whole request Infeasible whenever
+			// the forecast household load alone exceeds it (e.g. an uncontrollable appliance
+			// spike), and an Infeasible/Not-Solved result discards every suggestion, not just
+			// the grid slot. The solver charges PrcPExcImp once for the single worst overshoot
+			// in the horizon, not per slot, so it only has to outweigh the best realistic
+			// arbitrage gain from that one slot, not the horizon's whole turnover. Deriving it
+			// from the site's own peak forecast price keeps the penalty meaningful whatever
+			// currency or denomination (EUR, ct, USD, ...) the configured tariff reports in,
+			// instead of a fixed amount that could be negligible or absurd depending on scale.
+			// If there is no positive price at all, PrcPExcImp stays zero (omitted from the
+			// request) and PMaxImp falls back to the previous hard-constraint behavior.
+			req.Grid.PrcPExcImp = gridImportOvershootPenalty(req.TimeSeries.PN)
 		}
 	}
 

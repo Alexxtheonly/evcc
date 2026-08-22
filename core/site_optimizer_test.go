@@ -422,6 +422,21 @@ func TestGridExportLimit(t *testing.T) {
 	assert.Equal(t, 7000.0, site.GetGridExportLimit())
 }
 
+func TestGridImportOvershootPenalty(t *testing.T) {
+	// no price data at all: PrcPExcImp stays 0, PMaxImp remains a hard constraint
+	assert.Equal(t, float32(0), gridImportOvershootPenalty(nil))
+	assert.Equal(t, float32(0), gridImportOvershootPenalty([]float32{}))
+
+	// all-zero or negative prices (e.g. no tariff, or a negative-price event): still 0
+	assert.Equal(t, float32(0), gridImportOvershootPenalty([]float32{0, 0, 0}))
+	assert.Equal(t, float32(0), gridImportOvershootPenalty([]float32{-0.0001, -0.0002}))
+
+	// scales with the peak price in the series, not the average, and dominates it
+	got := gridImportOvershootPenalty([]float32{0.0001, 0.0004, 0.0002})
+	assert.Equal(t, float32(0.0004)*pMaxImpOvershootPenalty, got)
+	assert.Greater(t, got, float32(0.0004))
+}
+
 func TestBlendMeasured(t *testing.T) {
 	slots := []float64{100, 100, 100, 100, 100, 100}
 	blendMeasured(slots, 200, 4)
