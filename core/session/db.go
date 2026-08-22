@@ -66,6 +66,14 @@ func (s *DB) Sessions() (Sessions, error) {
 	return res, tx.Error
 }
 
+// VehicleSessions returns all sessions for the given vehicle across
+// loadpoints, ordered by creation time
+func VehicleSessions(db *gorm.DB, vehicle string) (Sessions, error) {
+	var res Sessions
+	tx := db.Order("created").Find(&res, "vehicle = ?", vehicle)
+	return res, tx.Error
+}
+
 func (s *DB) ClosePendingSessionsInHistory(chargeMeterTotal float64) error {
 	var res Sessions
 	if tx := s.db.Find(&res, map[string]any{"finished": "0001-01-01 00:00:00+00:00", "Loadpoint": s.name}); tx.Error != nil {

@@ -46,6 +46,11 @@ type API interface {
 	// GetEffectiveRepeatingPlans returns user repeating plans or, when none are stored, fresh adaptive plans
 	GetEffectiveRepeatingPlans() []api.RepeatingPlan
 
+	// GetAdaptivePlanLearning returns whether adaptive plans are learned from session history
+	GetAdaptivePlanLearning() bool
+	// SetAdaptivePlanLearning enables or disables learning adaptive plans from session history
+	SetAdaptivePlanLearning(bool) error
+
 	// GetPlanStrategy returns the plan strategy
 	GetPlanStrategy() api.PlanStrategy
 	// SetPlanStrategy sets the plan strategy
