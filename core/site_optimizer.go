@@ -236,6 +236,91 @@ func (site *Site) setBatteryForecast(forecast *types.BatteryForecast) {
 	site.battery.Forecast = forecast
 }
 
+// optimizerBatteryModeValidity is how long a vetted optimizer battery mode may be
+// acted upon. Runs are slot-cadenced, so anything older than a slot plus grace
+// means the optimizer is stale and battery control falls back to normal operation.
+const optimizerBatteryModeValidity = tariff.SlotDuration + 5*time.Minute
+
+// setOptimizerBatteryMode stores the vetted battery mode derived from the last optimizer run
+func (site *Site) setOptimizerBatteryMode(mode api.BatteryMode) {
+	site.Lock()
+	defer site.Unlock()
+
+	site.optimizerBatteryMode = mode
+	site.optimizerBatteryModeUpdated = time.Now()
+}
+
+// optimizerBatteryModeActive returns the battery mode to apply while optimizer
+// battery control is enabled and the last run is fresh, api.BatteryUnknown otherwise.
+func (site *Site) optimizerBatteryModeActive() api.BatteryMode {
+	site.RLock()
+	defer site.RUnlock()
+
+	if !site.optimizerBatteryControl || site.optimizerBatteryMode == api.BatteryUnknown {
+		return api.BatteryUnknown
+	}
+	if time.Since(site.optimizerBatteryModeUpdated) > optimizerBatteryModeValidity {
+		return api.BatteryUnknown
+	}
+	return site.optimizerBatteryMode
+}
+
+// optimizerBatteryModeFromSuggestions maps the home battery suggestions onto the
+// battery mode to apply. Only controllable home batteries carry suggestions; when
+// they disagree no mode is derived. Grid charging is additionally gated on the
+// forecast containing a slot expensive enough to recover the round-trip losses,
+// and on the configured grid charge limit when set.
+func optimizerBatteryModeFromSuggestions(suggestions map[string]types.Suggestion, details []batteryDetail, pn []float32, gridChargeLimit *float64) api.BatteryMode {
+	mode := api.BatteryUnknown
+
+	for _, detail := range details {
+		if detail.Type != batteryTypeBattery || !detail.controllable {
+			continue
+		}
+
+		s, ok := suggestions[detail.key()]
+		if !ok {
+			continue
+		}
+
+		m, err := api.BatteryModeString(s.Action)
+		if err != nil {
+			// battery-to-grid discharge has no matching battery mode; the battery
+			// serves the house in normal mode anyway
+			m = api.BatteryNormal
+		}
+
+		if mode != api.BatteryUnknown && m != mode {
+			// batteries disagree: don't act
+			return api.BatteryUnknown
+		}
+		mode = m
+	}
+
+	if mode == api.BatteryCharge && !gridChargeJustified(pn, gridChargeLimit) {
+		return api.BatteryUnknown
+	}
+
+	return mode
+}
+
+// gridChargeJustified checks that grid-charging the battery now is worth it: a
+// later slot must be expensive enough to recover the round-trip losses, and the
+// current price must not exceed the configured grid charge limit when one is set.
+func gridChargeJustified(pn []float32, limit *float64) bool {
+	if len(pn) < 2 {
+		return false
+	}
+
+	// pn is currency/Wh
+	price := float64(pn[0]) * 1e3
+	if limit != nil && price > *limit {
+		return false
+	}
+
+	return float64(lo.Max(pn[1:]))*1e3 >= price/(eta*eta)
+}
+
 // suggestion returns the optimizer suggestion for the given device key.
 // The actionable flag is evaluated on read against the device's current
 // action since that changes between optimizer runs.
@@ -273,6 +358,7 @@ func (site *Site) publishSuggestions() {
 func (site *Site) clearSuggestions() {
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
+	site.setOptimizerBatteryMode(api.BatteryUnknown)
 
 	site.publishBattery()
 	site.publishSuggestions()
@@ -677,6 +763,11 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 
 	site.setSuggestions(suggestions)
 	site.setBatteryForecast(site.addBatteryForecastTotals(req.Batteries, res.Batteries))
+
+	// derive the battery mode to apply from the home battery suggestions
+	if site.GetOptimizerBatteryControl() {
+		site.setOptimizerBatteryMode(optimizerBatteryModeFromSuggestions(suggestions, details, req.TimeSeries.PN, site.GetBatteryGridChargeLimit()))
+	}
 
 	site.publishBattery()
 

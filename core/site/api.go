@@ -65,6 +65,11 @@ type API interface {
 	// SetOptimizerChargingStrategy sets the optimizer grid charging strategy
 	SetOptimizerChargingStrategy(strategy string) error
 
+	// GetOptimizerBatteryControl gets whether optimizer battery suggestions are applied to the home battery
+	GetOptimizerBatteryControl() bool
+	// SetOptimizerBatteryControl sets whether optimizer battery suggestions are applied to the home battery
+	SetOptimizerBatteryControl(bool) error
+
 	//
 	// power and energy
 	//

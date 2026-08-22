@@ -209,6 +209,7 @@ func (s *HTTPd) RegisterSiteHandlers(site site.API) {
 		"devicecolors":            {"PUT", "/devicecolors", updateDeviceColor(site)},
 
 		"optimizerchargingstrategy": {"POST", "/optimizerchargingstrategy/{value:[a-z_]+}", stringHandler(site.SetOptimizerChargingStrategy, site.GetOptimizerChargingStrategy)},
+		"optimizerbatterycontrol":   {"POST", "/optimizerbatterycontrol/{value:[01truefalse]+}", boolHandler(site.SetOptimizerBatteryControl, site.GetOptimizerBatteryControl)},
 	}
 
 	for _, r := range routes {
