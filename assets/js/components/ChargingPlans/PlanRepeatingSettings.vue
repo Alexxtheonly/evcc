@@ -48,6 +48,7 @@
 					:value="selectedWeekdays"
 					:options="dayOptions"
 					:selectAllLabel="$t('main.chargingPlan.selectAll')"
+					:disabled="readonly"
 					data-testid="repeating-plan-weekdays"
 					@update:model-value="changeSelectedWeekdays"
 				>
@@ -67,6 +68,7 @@
 					class="form-control mx-0 text-start"
 					data-testid="repeating-plan-time"
 					required
+					:disabled="readonly"
 					@change="update()"
 				/>
 			</div>
@@ -81,6 +83,7 @@
 					v-model="selectedSoc"
 					class="form-select mx-0"
 					data-testid="repeating-plan-soc"
+					:disabled="readonly"
 					@change="update()"
 				>
 					<option v-for="opt in socOptions" :key="opt.value" :value="opt.value">
@@ -103,12 +106,14 @@
 						role="switch"
 						data-testid="repeating-plan-active"
 						:checked="selectedActive"
+						:disabled="readonly"
 						tabindex="0"
 						@change="update(true)"
 					/>
 				</div>
 			</div>
 			<div
+				v-if="!readonly"
 				class="col-4 col-lg-2 d-flex align-items-center justify-content-end justify-content-lg-start"
 			>
 				<button
@@ -160,6 +165,10 @@ export default defineComponent({
 		active: Boolean,
 		rangePerSoc: Number,
 		formIdPrefix: String,
+		// true for a learned plan shown read-only: inputs are disabled and no
+		// change is ever emitted, so it can never be silently converted into a
+		// user plan
+		readonly: Boolean,
 	},
 	emits: ["updated", "removed"],
 	data() {
@@ -216,6 +225,7 @@ export default defineComponent({
 			return this.number || 0;
 		},
 		changeSelectedWeekdays(weekdays: number[]): void {
+			if (this.readonly) return;
 			this.selectedWeekdays = weekdays;
 			this.update();
 		},
@@ -227,6 +237,8 @@ export default defineComponent({
 			return { value, name };
 		},
 		update(forceSave = false): void {
+			if (this.readonly) return;
+
 			const plan = {
 				weekdays: this.selectedWeekdays,
 				time: this.selectedTime,

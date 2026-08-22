@@ -31,6 +31,7 @@
 					:vehicleLimitSoc="loadpoint?.vehicleLimitSoc"
 					:planOverrun="loadpoint?.planOverrun"
 					:forecast="forecast"
+					:repeatingPlansReadonly="repeatingPlansReadonly"
 					@static-plan-updated="updateStaticPlan"
 					@static-plan-removed="removeStaticPlan"
 					@repeating-plans-updated="updateRepeatingPlans"
@@ -117,13 +118,21 @@ export default defineComponent({
 		apiLoadpoint(): string {
 			return `loadpoints/${this.id}/`;
 		},
+		hasUserRepeatingPlans(): boolean {
+			return !!this.vehicle?.repeatingPlans && this.vehicle.repeatingPlans.length > 0;
+		},
+		// learned plans are shown read-only only while the vehicle has no user
+		// repeating plans of its own - a user plan always wins and is never
+		// silently converted from a learned one
+		repeatingPlansReadonly(): boolean {
+			return !this.hasUserRepeatingPlans && !!this.vehicle?.adaptivePlansActive;
+		},
 		repeatingPlans(): RepeatingPlan[] {
-			if (
-				this.vehicle &&
-				this.vehicle.repeatingPlans &&
-				this.vehicle.repeatingPlans.length > 0
-			) {
-				return this.vehicle.repeatingPlans || [];
+			if (this.hasUserRepeatingPlans) {
+				return this.vehicle?.repeatingPlans || [];
+			}
+			if (this.repeatingPlansReadonly) {
+				return this.vehicle?.adaptivePlans || [];
 			}
 			return [];
 		},

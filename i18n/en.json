@@ -1311,6 +1311,8 @@
   "main": {
     "chargingPlan": {
       "active": "Active",
+      "adaptivePlanReadonly": "Learned from charging history. Create a plan to override.",
+      "adaptivePlanReadonlyLink": "Change learning setting",
       "addRepeatingPlan": "Add repeating plan",
       "day": "Day",
       "goal": "Charging goal",

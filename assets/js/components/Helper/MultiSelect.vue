@@ -4,6 +4,7 @@
 			:id="id"
 			class="form-select text-start text-nowrap"
 			type="button"
+			:disabled="disabled"
 			data-bs-toggle="dropdown"
 			aria-expanded="false"
 			data-bs-auto-close="outside"
@@ -68,6 +69,7 @@ export default defineComponent({
 		options: { type: Array as PropType<SelectOption<string | number>[]>, default: () => [] },
 		selectAllLabel: String,
 		isTopLevel: Boolean,
+		disabled: Boolean,
 	},
 	emits: ["open", "update:modelValue"],
 	data() {

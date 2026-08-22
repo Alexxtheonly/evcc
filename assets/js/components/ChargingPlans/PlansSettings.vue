@@ -29,6 +29,8 @@
 						:id="id"
 						:rangePerSoc="rangePerSoc"
 						:plans="repeatingPlans"
+						:readonly="repeatingPlansReadonly"
+						:vehicle="vehicle"
 						@updated="updateRepeatingPlans"
 					/>
 				</div>
@@ -99,6 +101,7 @@ export default defineComponent({
 		id: [String, Number],
 		staticPlan: Object as PropType<StaticPlan>,
 		repeatingPlans: { type: Array as PropType<RepeatingPlan[]>, default: () => [] },
+		repeatingPlansReadonly: Boolean,
 		effectiveLimitSoc: Number,
 		effectivePlanTime: String,
 		effectivePlanSoc: Number,

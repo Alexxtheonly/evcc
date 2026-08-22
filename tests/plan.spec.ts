@@ -687,6 +687,59 @@ test.describe("repeating", async () => {
   });
 });
 
+test.describe("adaptive plans", async () => {
+  test("active adaptive plan renders read-only and the add button posts nothing", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    // select by title, not position: assigning a vehicle changes the loadpoint's
+    // priority score, which can reorder the loadpoint list
+    const lp1 = await page
+      .getByTestId("loadpoint")
+      .filter({ has: page.getByText("Loadpoint", { exact: true }) });
+    await lp1
+      .getByTestId("change-vehicle")
+      .locator("select")
+      .selectOption("Vehicle with SoC with Capacity");
+    await expect(lp1.getByTestId("vehicle-name")).toHaveText("Vehicle with SoC with Capacity");
+
+    // seed a learned plan the same way the adaptive learner would
+    const response = await page.request.post("/api/vehicles/vehicleSocCapacity/plan/adaptive", {
+      data: [{ weekdays: [1, 2, 3, 4, 5], time: "07:00", tz: "UTC", soc: 80, active: true }],
+    });
+    expect(response.status()).toBe(200);
+
+    await lp1.getByTestId("charging-plan-button").click();
+    const modal = await page.getByTestId("charging-plan-modal").first();
+
+    // learned plan is visible, but the whole row is read-only
+    await expect(modal.getByTestId("repeating-plan-readonly-hint")).toBeVisible();
+    // index 0 is the static plan editor; the learned repeating plan is index 1
+    const plan = modal.getByTestId("plan-entry").nth(1);
+    await expect(plan.getByTestId("repeating-plan-soc")).toBeDisabled();
+    await expect(plan.getByTestId("repeating-plan-time")).toBeDisabled();
+    await expect(plan.getByTestId("repeating-plan-active")).toBeDisabled();
+    await expect(plan.getByTestId("repeating-plan-weekdays").locator("button")).toBeDisabled();
+    await expect(plan.getByTestId("repeating-plan-apply")).not.toBeVisible();
+
+    // no path to create a user plan from here
+    await expect(modal.getByTestId("repeating-plan-add")).not.toBeVisible();
+
+    // belt and braces: nothing writes the plan while the modal is open
+    let repeatingPlanPosted = false;
+    page.on("request", (req) => {
+      if (req.method() === "POST" && req.url().includes("/plan/repeating")) {
+        repeatingPlanPosted = true;
+      }
+    });
+    await page.waitForTimeout(200);
+    expect(repeatingPlanPosted).toBe(false);
+
+    await modal.getByRole("button", { name: "Close", exact: true }).click();
+  });
+});
+
 // add test for precondition, start with basic.evcc.yaml and verify that precondition toggle element is not visible. make dedicated describe block
 test.describe("plan strategy", async () => {
   test("only if dynamic tariff exists", async ({ page }) => {
