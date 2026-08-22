@@ -132,23 +132,36 @@ func TestImprovedEstimatorRemainingChargeDuration(t *testing.T) {
 	}
 }
 
+// TestPlausibleEnergyPerSocStep tests the contract: step (Wh metered per soc%) is plausible
+// only for an implied efficiency of capacity/(100*step) within [50%, 100%]. Efficiency can
+// never exceed 100% (delivered energy can't be less than what the battery actually stores,
+// so step can never go below capacity/100), and evcc treats anything below a 50%-efficiency
+// session as more likely a bad reading than a real vehicle.
 func TestPlausibleEnergyPerSocStep(t *testing.T) {
-	const capacity = 50000.0 // 50 kWh
+	const capacity = 50000.0               // 50 kWh
+	const perStepAt100 = capacity / 100    // 500 Wh: the 100%-efficiency floor
+	const perStepAt50 = perStepAt100 / 0.5 // 1000 Wh: the 50%-efficiency ceiling
 
-	// implausible: non-positive
+	// implausible: non-positive step or capacity
 	assert.False(t, PlausibleEnergyPerSocStep(0, capacity))
 	assert.False(t, PlausibleEnergyPerSocStep(-100, capacity))
 	assert.False(t, PlausibleEnergyPerSocStep(500, 0))
 
-	// plausible: 100% efficiency (capacity/100) up to 50% efficiency (2x capacity/100)
-	assert.True(t, PlausibleEnergyPerSocStep(500, capacity))  // 100% efficiency
-	assert.True(t, PlausibleEnergyPerSocStep(600, capacity))  // ~83% efficiency
-	assert.True(t, PlausibleEnergyPerSocStep(1000, capacity)) // 50% efficiency, at the floor
+	// plausible: efficiency from 100% (the floor, perStepAt100) down to 50% (the ceiling,
+	// perStepAt50)
+	assert.True(t, PlausibleEnergyPerSocStep(perStepAt100, capacity)) // 100% efficiency
+	assert.True(t, PlausibleEnergyPerSocStep(600, capacity))          // ~83% efficiency
+	assert.True(t, PlausibleEnergyPerSocStep(perStepAt50, capacity))  // 50% efficiency, at the ceiling
 
-	// implausible: below the 50% floor (250, the mirror of the 1000 ceiling) or above it
-	assert.False(t, PlausibleEnergyPerSocStep(200, capacity))  // implies >100% efficiency
-	assert.False(t, PlausibleEnergyPerSocStep(1001, capacity)) // just under 50% efficiency
-	assert.False(t, PlausibleEnergyPerSocStep(5000, capacity)) // wildly implausible
+	// implausible: below the 100%-efficiency floor - a real regression case (50 kWh vehicle,
+	// energyPerSocStep=300 implies 167% efficiency) that a buggy bound of
+	// perStepAt100*minPlausibleEfficiency (250, not perStepAt100 itself) used to accept
+	assert.False(t, PlausibleEnergyPerSocStep(300, capacity))
+	assert.False(t, PlausibleEnergyPerSocStep(perStepAt100-1, capacity)) // just over 100% efficiency
+
+	// implausible: above the 50%-efficiency ceiling
+	assert.False(t, PlausibleEnergyPerSocStep(perStepAt50+1, capacity)) // just under 50% efficiency
+	assert.False(t, PlausibleEnergyPerSocStep(5000, capacity))          // wildly implausible
 }
 
 func TestBlendEnergyPerSocStep(t *testing.T) {

@@ -29,12 +29,19 @@ const (
 // PlausibleEnergyPerSocStep reports whether step (Wh per soc percent) implies a charge
 // efficiency within [minPlausibleEfficiency, maxPlausibleEfficiency] for the given capacity
 // (Wh). Used to sanity-bound both live gradient learning and a seeded prior.
+//
+// step is metered (delivered) energy per soc%, while capacity/100 is the energy that actually
+// ends up in the battery per soc% - a fixed physical quantity. efficiency = (capacity/100) /
+// step, so step = (capacity/100) / efficiency: step is a *decreasing* function of efficiency.
+// The highest plausible efficiency (100%, nothing lost) gives the *lowest* plausible step -
+// delivered energy can never be less than what the battery actually stores, so step can never
+// go below capacity/100. The lowest plausible efficiency gives the highest plausible step.
 func PlausibleEnergyPerSocStep(step, capacity float64) bool {
 	if step <= 0 || capacity <= 0 {
 		return false
 	}
 	perStepAt100 := capacity / 100
-	return step >= perStepAt100*minPlausibleEfficiency && step <= perStepAt100/minPlausibleEfficiency
+	return step >= perStepAt100/maxPlausibleEfficiency && step <= perStepAt100/minPlausibleEfficiency
 }
 
 // BlendEnergyPerSocStep folds a newly learned gradient into a previously persisted one. A

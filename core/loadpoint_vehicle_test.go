@@ -618,32 +618,34 @@ func TestPersistSocGradient(t *testing.T) {
 	_, ok := vehicle.Settings(lp.log, v).GetSocGradient()
 	assert.False(t, ok, "untouched estimator must not be persisted")
 
-	// drive the estimator through a real soc swing so it learns a gradient
+	// drive the estimator through a real soc swing so it learns a gradient. Capacity is 50 kWh
+	// (perStepAt100 = 500 Wh/%), so both sessions below must land in [500, 1000] Wh/% to be
+	// plausible (50%-100% implied efficiency) - see soc.PlausibleEnergyPerSocStep.
 	s := 20.0
 	lp.socEstimator.Soc(&s, 0)
-	s = 40.0 // socDiff 20 > 10: energyPerSocStep = 6000/20 = 300 Wh/%
-	lp.socEstimator.Soc(&s, 6000)
+	s = 40.0 // socDiff 20 > 10: energyPerSocStep = 12000/20 = 600 Wh/% (~83% efficiency)
+	lp.socEstimator.Soc(&s, 12000)
 	require.True(t, lp.socEstimator.Learned())
 
 	lp.persistSocGradient(v)
 
 	stored, ok := vehicle.Settings(lp.log, v).GetSocGradient()
 	require.True(t, ok)
-	assert.InDelta(t, 300.0, stored, 1e-9, "first-ever session is stored outright, nothing to blend with")
+	assert.InDelta(t, 600.0, stored, 1e-9, "first-ever session is stored outright, nothing to blend with")
 
 	// a second session blends with the stored value rather than overwriting it
 	lp.socEstimator = soc.NewEstimator(lp.log, v)
 	s = 20.0
 	lp.socEstimator.Soc(&s, 0)
 	s = 40.0
-	lp.socEstimator.Soc(&s, 8000) // this session alone would learn 400 Wh/%
+	lp.socEstimator.Soc(&s, 16000) // this session alone would learn 800 Wh/% (75% efficiency)
 
 	lp.persistSocGradient(v)
 
 	blended, ok := vehicle.Settings(lp.log, v).GetSocGradient()
 	require.True(t, ok)
-	assert.InDelta(t, 330.0, blended, 1e-9, "0.7*300 + 0.3*400")
-	assert.NotEqual(t, 400.0, blended, "second session must not fully overwrite the first")
+	assert.InDelta(t, 660.0, blended, 1e-9, "0.7*600 + 0.3*800")
+	assert.NotEqual(t, 800.0, blended, "second session must not fully overwrite the first")
 
 	// a fresh estimator picks the persisted gradient back up instead of starting over
 	fresh := soc.NewEstimator(lp.log, v)
@@ -651,6 +653,57 @@ func TestPersistSocGradient(t *testing.T) {
 	lp.socEstimator = fresh
 	lp.seedSocGradient(v)
 	assert.Equal(t, blended, lp.socEstimator.EnergyPerSocStep())
+}
+
+// TestPersistSocGradientRejectsImplausibleGradient asserts that a learned gradient implying an
+// impossible efficiency is never persisted or blended in, and never corrupts an existing good
+// value. Regression for a 50 kWh vehicle whose energyPerSocStep=300 implies 167% efficiency
+// (capacity/100=500 is the 100%-efficiency floor) - see soc.PlausibleEnergyPerSocStep.
+func TestPersistSocGradientRejectsImplausibleGradient(t *testing.T) {
+	config.Reset()
+	t.Cleanup(config.Reset)
+
+	ctrl := gomock.NewController(t)
+	v := api.NewMockVehicle(ctrl)
+	v.EXPECT().Capacity().Return(50.0).AnyTimes() // 50 kWh -> 50000 Wh
+	v.EXPECT().GetTitle().Return("implausible-vehicle").AnyTimes()
+
+	// distinct device name from TestPersistSocGradient: server/db/settings persists globally
+	// keyed by name (vehicle.<name>.), independent of config.Reset(), so sharing a name would
+	// leak that test's persisted gradient into this one's "first plausible session" baseline
+	const name = "implausible-vehicle"
+	require.NoError(t, config.Vehicles().Add(
+		config.NewStaticDevice(config.Named{Name: name}, api.Vehicle(v)),
+	))
+
+	lp := NewLoadpoint(util.NewLogger("foo"), nil)
+
+	// first, persist one plausible session so there is a good value to protect
+	lp.socEstimator = soc.NewEstimator(lp.log, v)
+	s := 20.0
+	lp.socEstimator.Soc(&s, 0)
+	s = 40.0
+	lp.socEstimator.Soc(&s, 12000) // 600 Wh/%, ~83% efficiency: plausible
+	require.True(t, lp.socEstimator.Learned())
+	lp.persistSocGradient(v)
+
+	good, ok := vehicle.Settings(lp.log, v).GetSocGradient()
+	require.True(t, ok)
+	assert.InDelta(t, 600.0, good, 1e-9)
+
+	// a second session learns an implausible gradient (167% implied efficiency)
+	lp.socEstimator = soc.NewEstimator(lp.log, v)
+	s = 20.0
+	lp.socEstimator.Soc(&s, 0)
+	s = 40.0
+	lp.socEstimator.Soc(&s, 6000) // 300 Wh/%, 167% efficiency: implausible
+	require.True(t, lp.socEstimator.Learned())
+	lp.persistSocGradient(v)
+
+	// the implausible session must be dropped outright, not blended in
+	unchanged, ok := vehicle.Settings(lp.log, v).GetSocGradient()
+	require.True(t, ok)
+	assert.InDelta(t, 600.0, unchanged, 1e-9, "implausible gradient must not be persisted or blended")
 }
 
 // TestPersistSocGradientUnknownVehicle verifies persistSocGradient/seedSocGradient tolerate a
