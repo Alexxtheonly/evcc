@@ -20,7 +20,8 @@ func (c *Collector) BatteryPowerSamples(from time.Time) (charge, discharge []flo
 		return nil, nil, err
 	}
 
-	rows, err := sqlDB.Query(`SELECT energy, return_energy FROM meters
+	// COALESCE guards against legacy rows with NULL energy/return_energy (see db_profile.go)
+	rows, err := sqlDB.Query(`SELECT COALESCE(energy, 0), COALESCE(return_energy, 0) FROM meters
 		WHERE meter = ? AND ts >= ? AND COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0`,
 		c.entity.Id, from.Unix())
 	if err != nil {

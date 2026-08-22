@@ -46,6 +46,36 @@ func TestBatteryPowerSamples(t *testing.T) {
 	require.ElementsMatch(t, []float64{1000, 500}, discharge)
 }
 
+// TestBatteryPowerSamplesToleratesNullColumns regresses against a raw Scan into float64
+// failing on legacy rows with NULL energy/return_energy (see the same guard in
+// energyProfile, db_profile.go) - without COALESCE, rows.Scan errors with "converting NULL
+// to float64 is unsupported" on every run, on exactly the installations with the most
+// history.
+func TestBatteryPowerSamplesToleratesNullColumns(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	entity, err := createEntity(Battery, "test-battery-null", "")
+	require.NoError(t, err)
+
+	base := time.Unix(0, 0)
+	require.NoError(t, persist(entity, base, 1000, 2000, nil, false, false))
+	require.NoError(t, persist(entity, base.Add(15*time.Minute), 500, 1500, nil, false, false))
+
+	sqlDB, err := db.Instance.DB()
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(`UPDATE meters SET energy = NULL, return_energy = NULL WHERE meter = ? AND ts = ?`,
+		entity.Id, base.Unix())
+	require.NoError(t, err)
+
+	c := &Collector{entity: entity}
+	charge, discharge, err := c.BatteryPowerSamples(base)
+	require.NoError(t, err, "NULL legacy row must not fail the scan")
+
+	require.ElementsMatch(t, []float64{1500}, charge)
+	require.ElementsMatch(t, []float64{500}, discharge)
+}
+
 func TestBatteryPowerSamplesRespectsFrom(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
