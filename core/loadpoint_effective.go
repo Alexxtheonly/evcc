@@ -143,8 +143,8 @@ func (lp *Loadpoint) nextVehiclePlan() (time.Time, int, int) {
 			plans = append(plans, plan{Id: 1, Soc: soc, End: planTime})
 		}
 
-		// repeating plans
-		for index, rp := range vehicle.Settings(lp.log, v).GetRepeatingPlans() {
+		// repeating plans: user plans, or fresh adaptive plans when none are stored
+		for index, rp := range vehicle.Settings(lp.log, v).GetEffectiveRepeatingPlans() {
 			if !rp.Active || len(rp.Weekdays) == 0 {
 				continue
 			}

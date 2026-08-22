@@ -66,6 +66,18 @@ func (v *dummy) GetRepeatingPlans() []api.RepeatingPlan {
 	return nil
 }
 
+func (v *dummy) GetAdaptivePlans() ([]api.RepeatingPlan, time.Time) {
+	return nil, time.Time{}
+}
+
+func (v *dummy) SetAdaptivePlans(plans []api.RepeatingPlan) error {
+	return nil
+}
+
+func (v *dummy) GetEffectiveRepeatingPlans() []api.RepeatingPlan {
+	return nil
+}
+
 func (v *dummy) GetPlanStrategy() api.PlanStrategy {
 	return api.PlanStrategy{}
 }

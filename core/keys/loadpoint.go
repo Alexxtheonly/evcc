@@ -100,6 +100,7 @@ const (
 
 	// repeating plans
 	RepeatingPlans = "repeatingPlans" // key to access all repeating plans in db
+	AdaptivePlans  = "adaptivePlans"  // key to access the adaptive (learned) repeating plans in db
 
 	// remote control
 	RemoteDisabled       = "remoteDisabled"       // remote disabled
