@@ -542,7 +542,7 @@ type Chain struct {
 // for what counts as a valid slot and ErrBeforeTariffStart/ErrSocGap for the two ways
 // this refuses rather than fabricates.
 func ComputeChain(ctx context.Context, from, to time.Time) (*Chain, error) {
-	set, err := buildLedgerSlots(ctx, from, to, true)
+	set, err := buildLedgerSlots(ctx, from, to, true, true)
 	if err != nil {
 		return nil, err
 	}

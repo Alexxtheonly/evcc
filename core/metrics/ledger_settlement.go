@@ -83,7 +83,7 @@ type RealisedCost struct {
 // ComputeChain, so a caller can get the realised figure even when the battery-physics
 // derivation ComputeChain needs for W2 fails, or the site has no battery at all.
 func ComputeRealisedCost(ctx context.Context, from, to time.Time) (*RealisedCost, error) {
-	set, err := buildLedgerSlots(ctx, from, to, false)
+	set, err := buildLedgerSlots(ctx, from, to, false, false)
 	if err != nil {
 		return nil, err
 	}

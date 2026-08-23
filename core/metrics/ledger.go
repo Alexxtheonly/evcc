@@ -36,7 +36,7 @@ func ComputeLedger(ctx context.Context, from, to time.Time) (*Ledger, error) {
 
 	// re-derive the same slot set the chain used so the decision replay lines up
 	// with exactly the slots the chain priced - see DecisionDeltas' doc comment.
-	set, err := buildLedgerSlots(ctx, from, to, true)
+	set, err := buildLedgerSlots(ctx, from, to, true, true)
 	if err != nil {
 		return nil, err
 	}

@@ -255,21 +255,28 @@ func verifyLoadpointChargeMeters(ctx context.Context, ids []int) error {
 // (including its SoC) all have a usable, non-excluded reading for that slot. Anything
 // less and the slot is dropped, never interpolated (ADR-011 rules 3 and 5).
 //
-// includeLoadpoint gates both the loadpoint-charge-meter refusal
-// (ErrLoadpointNoChargeMeter) and LoadpointKWh's inclusion in the returned slots.
-// ComputeRealisedCost passes false: it prices only the grid meter against tariffs (see
-// its own doc comment), so a loadpoint's missing charge meter is none of its business,
-// and gating it on that refusal would repeat the same "one filter serves every
-// computation" problem this parameter exists to avoid (ADR-011 Priority-4 finding).
-// ComputeChain and ComputeLedger pass true: W0-W2 and the decision replay price
-// slotData.modelledLoadKWh(), which needs LoadpointKWh to be honest, not silently
-// zero.
+// includeLoadpoint and includeBattery each gate one computation's worth of extra
+// requirements, so a caller that doesn't need a signal isn't filtered by it - one
+// shared filter previously served every computation, so a week of BYD SoC read
+// failures deleted a week from ComputeRealisedCost even though its own doc comment
+// says it's independent of the battery entirely (ADR-011 Priority-4 finding).
+//
+//   - includeLoadpoint gates the loadpoint-charge-meter refusal
+//     (ErrLoadpointNoChargeMeter) and LoadpointKWh's inclusion in the returned slots.
+//   - includeBattery gates the battery query and the per-slot requirement that a
+//     battery-configured site have a valid, non-excluded SoC reading before a slot
+//     is included at all.
+//
+// ComputeRealisedCost passes false for both: it prices only the grid meter against
+// tariffs (see its own doc comment). ComputeChain and ComputeLedger pass true for
+// both: W0-W2, the routing/timing split and the decision replay all need
+// slotData.modelledLoadKWh() and BatterySocFrac to be honest, not silently zero/nil.
 //
 // from must not precede the earliest priced tariff slot; see ErrBeforeTariffStart. The
 // window is also capped at MaxLedgerRangeDays (ErrLedgerRangeTooLarge), and every query
 // runs WithContext(ctx) so a client disconnect (or the range guard) stops work instead
 // of running a query to completion nobody will read.
-func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint bool) (*ledgerSlotSet, error) {
+func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint, includeBattery bool) (*ledgerSlotSet, error) {
 	if !to.After(from) {
 		return nil, errors.New("invalid period: to must be after from")
 	}
@@ -309,9 +316,13 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint 
 		return nil, err
 	}
 
-	batRows, hasBattery, err := queryGroupSlots(ctx, Battery, from, to)
-	if err != nil {
-		return nil, err
+	var batRows map[int64]groupSlotRow
+	var hasBattery bool
+	if includeBattery {
+		batRows, hasBattery, err = queryGroupSlots(ctx, Battery, from, to)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var lpRows map[int64]groupSlotRow

@@ -99,7 +99,7 @@ func TestBuildLedgerSlotsRefusesOversizedRange(t *testing.T) {
 	from := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	_, err := buildLedgerSlots(context.Background(), from, to, false)
+	_, err := buildLedgerSlots(context.Background(), from, to, false, false)
 	require.ErrorIs(t, err, ErrLedgerRangeTooLarge)
 }
 
@@ -123,16 +123,52 @@ func TestBuildLedgerSlotsRefusesUnalignedRange(t *testing.T) {
 	require.NoError(t, persist(home, base, 1, 0, nil, false, false))
 
 	unalignedFrom := base.Add(7 * time.Minute)
-	_, err := buildLedgerSlots(context.Background(), unalignedFrom, unalignedFrom.Add(15*time.Minute), false)
+	_, err := buildLedgerSlots(context.Background(), unalignedFrom, unalignedFrom.Add(15*time.Minute), false, false)
 	require.ErrorIs(t, err, ErrLedgerRangeUnaligned)
 
 	unalignedTo := base.Add(15*time.Minute + 3*time.Second)
-	_, err = buildLedgerSlots(context.Background(), base, unalignedTo, false)
+	_, err = buildLedgerSlots(context.Background(), base, unalignedTo, false, false)
 	require.ErrorIs(t, err, ErrLedgerRangeUnaligned)
 
 	// the aligned equivalent must still work
-	_, err = buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), false)
+	_, err = buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), false, false)
 	require.NoError(t, err)
+}
+
+// TestComputeRealisedCostIgnoresBatterySocFailures covers the Priority-4 finding: one
+// shared filter previously served every ledger computation, so a slot with a missing
+// or invalid battery SoC reading was dropped from EVERY computation - including
+// ComputeRealisedCost, whose own doc comment says it reads only the grid meter and
+// tariffs and is deliberately independent of the battery. A week of BYD SoC read
+// failures must not delete a week from "the one measured number everything hangs
+// off".
+func TestComputeRealisedCostIgnoresBatterySocFailures(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	mustCreateEntity(t, Battery, "bat1") // configured, but no reading this slot
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 12, 0, 0, 0, 0, loc)
+	g, f := 0.30, 0.05
+
+	require.NoError(t, persist(grid, base, 1.0, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 1.0, 0, nil, false, false))
+	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
+	// no battery meter row at all for this slot - a read failure, not a config choice
+
+	res, err := ComputeRealisedCost(context.Background(), base, base.Add(15*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Coverage.ValidSlots, "a battery SoC failure must not exclude a slot from the realised-cost figure")
+	require.InDelta(t, 0.30, res.Settled.PerSlot, 1e-9)
+
+	// the same failure DOES still exclude the slot from a battery-dependent
+	// computation - ComputeChain needs BatterySocFrac for W2.
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), false, true)
+	require.NoError(t, err)
+	require.Empty(t, set.Slots, "a battery-dependent computation must still drop a slot with no SoC reading")
 }
 
 // TestBuildLedgerSlotsEnergyBalance is a data-integrity guard on buildLedgerSlots'
@@ -167,7 +203,7 @@ func TestBuildLedgerSlotsEnergyBalance(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	set, err := buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), true)
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), true, true)
 	require.NoError(t, err)
 	require.Len(t, set.Slots, 1)
 

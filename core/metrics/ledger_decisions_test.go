@@ -50,7 +50,7 @@ func TestDecisionDeltasHindsight(t *testing.T) {
 	from := base
 	to := second.Add(15 * time.Minute)
 
-	set, err := buildLedgerSlots(context.Background(), from, to, true)
+	set, err := buildLedgerSlots(context.Background(), from, to, true, true)
 	require.NoError(t, err)
 
 	phys, err := deriveBatteryPhysics(context.Background())
