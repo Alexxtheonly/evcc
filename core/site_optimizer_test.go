@@ -671,33 +671,6 @@ func TestTerminalStorageValue(t *testing.T) {
 	assert.Equal(t, float32(0), terminalStorageValue(-0.0002), "negative minimum: floored at zero, not a liability")
 }
 
-// TestConservativeSolarRates pins the bounds conservativeSolarRates enforces when
-// substituting a tariff's low-confidence estimate for its central one: the result is
-// never negative and never more optimistic than the estimate it replaces, even when the
-// source data is malformed, and a slot with no band is untouched.
-func TestConservativeSolarRates(t *testing.T) {
-	now := time.Now()
-	low := func(v float64) *float64 { return &v }
-
-	rr := api.Rates{
-		{Start: now, Value: 1000, Low: low(600)},                   // ordinary band: low used
-		{Start: now.Add(time.Hour), Value: 500},                    // no band: untouched
-		{Start: now.Add(2 * time.Hour), Value: 800, Low: low(-50)}, // negative low: clamped to 0
-		{Start: now.Add(3 * time.Hour), Value: 300, Low: low(900)}, // inverted/malformed band: clamped to Value, never more optimistic
-	}
-
-	res := conservativeSolarRates(rr)
-	require.Len(t, res, 4)
-
-	assert.Equal(t, 600.0, res[0].Value, "ordinary band: low value used")
-	assert.Equal(t, 500.0, res[1].Value, "no band: value unchanged")
-	assert.Equal(t, 0.0, res[2].Value, "negative low: floored at zero")
-	assert.Equal(t, 300.0, res[3].Value, "low above value: capped at value, never more optimistic than the estimate")
-
-	// the source slice must not be mutated
-	assert.Equal(t, 1000.0, rr[0].Value)
-}
-
 func TestNextOccurrence(t *testing.T) {
 	now := time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 

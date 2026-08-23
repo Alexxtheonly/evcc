@@ -1052,14 +1052,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 	// allow empty solar forecast
 	ft := lo.RepeatBy(minLen, func(i int) float32 { return float32(0) })
 	if solarTariff != nil && len(solar) > 0 {
-		// ft enters the solver as a hard energy-balance constraint, not a preference
-		// (optimizer.py:522-524): overestimating it forces an unplanned grid import
-		// when the sun doesn't show, underestimating it only means the plan grid-
-		// charges a bit more than turns out to be necessary. Those errors aren't
-		// equally costly, so wherever the tariff supplies a low-confidence estimate
-		// (currently only Solcast's P10), that becomes the Wh input the solver
-		// balances against instead of the central estimate.
-		solarEnergy, err := solarRatesToEnergy(conservativeSolarRates(solar))
+		solarEnergy, err := solarRatesToEnergy(solar)
 		if err != nil {
 			return req, details, err
 		}
@@ -1919,23 +1912,6 @@ func prorate[T constraints.Float](slots []T, firstSlotDuration time.Duration) []
 	return lo.Map(res, func(f T, _ int) float32 {
 		return float32(f)
 	})
-}
-
-// conservativeSolarRates substitutes a rate's low-confidence estimate (e.g. Solcast's
-// pv_estimate10) for its central estimate wherever the tariff supplies one, clamped to
-// [0, Value] so a malformed or inverted band can never end up more optimistic than the
-// plain estimate it's meant to discount. Rates without a Low value pass through
-// unchanged, so a tariff with no band - or a slot within one that happens to be missing
-// it - is unaffected.
-func conservativeSolarRates(rr api.Rates) api.Rates {
-	res := slices.Clone(rr)
-	for i, r := range res {
-		if r.Low == nil {
-			continue
-		}
-		res[i].Value = min(max(*r.Low, 0), r.Value)
-	}
-	return res
 }
 
 func solarRatesToEnergy(rr api.Rates) (api.Rates, error) {
