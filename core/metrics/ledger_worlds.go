@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
+	"github.com/evcc-io/evcc/tariff"
 	"gorm.io/gorm"
 )
 
@@ -449,23 +450,31 @@ func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryP
 }
 
 // ErrSocGap means a day in the requested period has no measured SoC at its first
-// valid slot, so the counterfactual battery has nothing to re-anchor to. ADR-011
-// rule 5 says refuse rather than let a simulation free-run across days on a stale
-// estimate.
+// valid slot, so the counterfactual battery has nothing to re-anchor to. In practice
+// this is currently unreachable through ComputeChain, since buildLedgerSlots already
+// drops any slot missing BatterySocFrac before computeW2 ever sees it - kept as a
+// defensive check (a future caller building slots another way must not silently free-
+// run instead) rather than something the existing test suite can exercise end-to-end.
 var ErrSocGap = errors.New("missing measured SoC at a day boundary")
 
 // computeW2 simulates the "dumb rule" battery (charge from surplus only, discharge to
 // house load only, never from grid) across slots, re-anchoring the simulated SoC to
-// the measured SoC (BatterySocFrac) at the first valid slot of each calendar day. A
-// free-running month-long simulation is not evidence (ADR-011 rule 5); resetting daily
-// bounds how far the simulated and real batteries can have diverged before they're
-// realigned.
+// the measured SoC (BatterySocFrac) at the first slot of each calendar day AND at the
+// first slot after any gap in an otherwise-15-minute-contiguous run. A free-running
+// simulation is not evidence (ADR-011 rule 5): buildLedgerSlots can drop an individual
+// slot (a missing reading, or one flagged recovered/incomplete) while leaving both
+// neighbours in the valid set, so "new day" alone doesn't bound how far the simulated
+// and real batteries can have diverged - a morning PV-read outage, for example, can
+// leave the sim near-empty while the real battery recovered to near-full by the
+// afternoon, inflating that day's simulated cost in the direction that flatters the
+// real controller. Re-anchoring on every gap, not just midnight, bounds that.
 func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, error) {
 	out := make([]worldFlow, len(slots))
 
 	var socKWh float64
 	var haveSoc bool
 	var day string
+	var prevStart time.Time
 
 	for i, s := range slots {
 		if s.BatterySocFrac == nil {
@@ -473,9 +482,12 @@ func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, error) {
 		}
 
 		today := s.Start.Local().Format("2006-01-02")
-		if today != day {
+		gap := !prevStart.IsZero() && !s.Start.Equal(prevStart.Add(tariff.SlotDuration))
+		if today != day || gap {
 			// re-anchor: a new calendar day always resets to the measured SoC,
-			// even if the previous day also had one - drift must not accumulate
+			// even if the previous day also had one - drift must not accumulate.
+			// Same for a gap: whatever divergence built up before the gap is not
+			// evidence of anything after it.
 			socKWh = *s.BatterySocFrac * phys.CapacityKWh
 			haveSoc = true
 			day = today
@@ -487,6 +499,7 @@ func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, error) {
 		newSoc, flow, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
 		socKWh = newSoc
 		out[i] = flow
+		prevStart = s.Start
 	}
 
 	return out, nil

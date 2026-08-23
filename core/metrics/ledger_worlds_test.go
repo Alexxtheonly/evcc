@@ -277,6 +277,39 @@ func TestComputeW2DailyReanchor(t *testing.T) {
 	require.InDelta(t, 2-0.5*phys.EtaD, flows[1].ImportKWh, 1e-9)
 }
 
+// TestComputeW2ReanchorsAcrossIntraDayGap is the intra-day counterpart to
+// TestComputeW2DailyReanchor: buildLedgerSlots can drop a single slot (a missing
+// reading, or one flagged recovered/incomplete) while keeping both its neighbours
+// valid, so the day-only reset left the simulation free-running across that gap - a
+// morning PV-read outage could leave the sim near-empty while the real battery
+// recovered to near-full by the time data resumed, later that same day.
+func TestComputeW2ReanchorsAcrossIntraDayGap(t *testing.T) {
+	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0, MaxChargeKWh: 100, MaxDischargeKWh: 100}
+
+	loc := time.Now().Location()
+	slot0 := time.Date(2026, 8, 10, 9, 0, 0, 0, loc)
+	slot1 := slot0.Add(30 * time.Minute) // the 09:15 slot was dropped upstream - not contiguous
+
+	socAtSlot0 := 0.10 // measured, low
+	socAtSlot1 := 0.80 // measured, high - the real battery moved independently during the gap
+
+	slots := []slotData{
+		{Start: slot0, HomeKWh: 0, PVKWh: 1.0, BatterySocFrac: &socAtSlot0, PriceGrid: 0.30, PriceFeedIn: 0.05},
+		{Start: slot1, HomeKWh: 5.0, PVKWh: 0, BatterySocFrac: &socAtSlot1, PriceGrid: 0.30, PriceFeedIn: 0.05},
+	}
+
+	flows, err := computeW2(slots, phys)
+	require.NoError(t, err)
+	require.Len(t, flows, 2)
+
+	// re-anchored to the measured 8.0kWh at slot1: 5kWh deficit is fully covered
+	// (7.2kWh deliverable). Without the gap re-anchor, the carried-over simulated SoC
+	// from slot0 (~1.9kWh) would only cover 1.71kWh, leaving 3.29kWh to be bought -
+	// the wrong direction (it UNDERSTATES what the counterfactual battery could do,
+	// inflating Cost(W2) and flattering the real controller's Control contribution).
+	require.InDelta(t, 0.0, flows[1].ImportKWh, 1e-9)
+}
+
 func TestComputeW2RefusesOnMissingSoc(t *testing.T) {
 	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9}
 
