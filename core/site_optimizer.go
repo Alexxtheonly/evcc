@@ -1939,6 +1939,8 @@ func (site *Site) homeProfile(minLen int) ([]float64, error) {
 		res = res[:minLen]
 	}
 
+	res = site.applyHeatingDegree(res)
+
 	// convert to Wh
 	return lo.Map(res, func(v float64, i int) float64 {
 		return v * 1e3

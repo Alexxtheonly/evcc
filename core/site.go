@@ -145,8 +145,9 @@ type Site struct {
 	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu
 	optimizerClient  *optimizer.ClientWithResponses // cached api client for connection reuse, guarded by optimizerMu
 
-	solarScaleCached       func() (float64, error)         // util.Cached wrapper around querySolarScale
-	solarScaleByLeadCached func() (map[int]float64, error) // util.Cached wrapper around querySolarScaleByLead
+	solarScaleCached       func() (float64, error)             // util.Cached wrapper around querySolarScale
+	solarScaleByLeadCached func() (map[int]float64, error)     // util.Cached wrapper around querySolarScaleByLead
+	heatingDegreeCached    func() (heatingDegreeResult, error) // util.Cached wrapper around queryHeatingDegreeFit
 }
 
 // siteState is the site's cached measurement state, updated once per meter cycle
@@ -414,6 +415,8 @@ func NewSite() *Site {
 	// same reasoning as solarScaleCached: the underlying history only grows by
 	// completed slots, so a 24h cache does not hide anything from same-day runs
 	site.solarScaleByLeadCached = util.Cached(site.querySolarScaleByLead, 24*time.Hour)
+
+	site.heatingDegreeCached = util.Cached(site.queryHeatingDegreeFit, 24*time.Hour)
 
 	return site
 }
