@@ -1204,7 +1204,14 @@ func (site *Site) sitePower(state siteState, totalChargePower, flexiblePower flo
 			priorityAdjustment += batteryPower + excessDCPower
 			batteryPower = 0
 			excessDCPower = 0
-		} else {
+		} else if state.battery.Soc >= prioritySoc {
+			// buffer/refill relaxation only ever applies at or above prioritySoc - a
+			// battery below prioritySoc that merely isn't charging right now (idle,
+			// or even discharging) must not be treated as buffer-eligible just
+			// because it also fails the "charging below prioritySoc" branch above.
+			// batteryBuffered/batteryStart default to false for that case, same as
+			// the disabled-threshold case below.
+
 			// if battery is above bufferSoc allow using it for charging
 			batteryBuffered = bufferSoc > 0 && state.battery.Soc > bufferSoc
 			batteryStart = bufferStartSoc > 0 && state.battery.Soc >= bufferStartSoc

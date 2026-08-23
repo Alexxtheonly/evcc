@@ -1470,11 +1470,17 @@ func batteryForecastSocExtremes(req []optimizer.BatteryConfig, resp []optimizer.
 // A nil forecast - no optimizer run yet, not sponsored, or the forecast was
 // cleared as stale (see clearSuggestions) - reports false, which is exactly the
 // "fall back to configured static behaviour" case callers need.
+//
+// Highest.Time must still be ahead of asOf: the forecast is computed once per
+// optimizer run and can be stale by up to a run interval, so a peak that
+// already passed is a disproven prediction, not a pending one - without this
+// check, a relaxation granted while the peak was still ahead would keep
+// applying after the battery demonstrably did not refill as forecast.
 func batteryWillRefillToday(forecast *types.BatteryForecast, asOf time.Time) bool {
 	if forecast == nil || forecast.Highest == nil || !forecast.Highest.Limit {
 		return false
 	}
-	return !forecast.Highest.Time.After(now.With(asOf).EndOfDay())
+	return forecast.Highest.Time.After(asOf) && !forecast.Highest.Time.After(now.With(asOf).EndOfDay())
 }
 
 func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDuration time.Duration, grid api.Rates, minImportPrice float32) (optimizer.BatteryConfig, batteryDetail) {

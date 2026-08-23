@@ -130,6 +130,24 @@ func TestSitePowerBatteryBufferRelaxedByForecast(t *testing.T) {
 		assert.True(t, res.batteryBuffered)
 		assert.True(t, res.batteryStart)
 	})
+
+	// prioritySoc 50, bufferSoc 80, battery at 8% and idle: even with a confident
+	// same-day refill forecast, the buffer must never relax below prioritySoc - that
+	// would let a loadpoint drain an 8% home battery toward the inverter floor on
+	// the strength of a forecast, which is exactly what prioritySoc exists to
+	// prevent regardless of what the buffer thresholds say.
+	t.Run("far below prioritySoc and idle: never relaxed, even with a confident forecast", func(t *testing.T) {
+		site := &Site{
+			log:            util.NewLogger("foo"),
+			batteryMeters:  []config.Device[api.Meter]{config.NewStaticDevice(config.Named{}, api.Meter(meter))},
+			prioritySoc:    50,
+			bufferSoc:      80,
+			bufferStartSoc: 80,
+		}
+		res := site.sitePower(state(8, refillsToday), 0, 0)
+		assert.False(t, res.batteryBuffered, "8% is far below prioritySoc 50 - must never be buffer-eligible")
+		assert.False(t, res.batteryStart)
+	})
 }
 
 // TestGetTariffNilTariffs guards a Site that has not been through Configure yet (tariffs

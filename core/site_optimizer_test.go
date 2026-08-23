@@ -313,6 +313,19 @@ func TestBatteryWillRefillToday(t *testing.T) {
 			&types.BatteryForecast{Highest: &types.BatteryForecastPoint{Limit: true, Time: now.With(asOf).EndOfDay()}},
 			true,
 		},
+		{
+			// a stale forecast run: the peak it predicted has already come and gone
+			// without the battery actually refilling, so it must no longer count as
+			// "will refill by evening" even though it is technically still before EOD
+			"reached SMax, but the peak is already in the past",
+			&types.BatteryForecast{Highest: &types.BatteryForecastPoint{Limit: true, Time: asOf.Add(-30 * time.Minute)}},
+			false,
+		},
+		{
+			"peak exactly now does not count as still ahead",
+			&types.BatteryForecast{Highest: &types.BatteryForecastPoint{Limit: true, Time: asOf}},
+			false,
+		},
 	}
 
 	for _, c := range tc {
