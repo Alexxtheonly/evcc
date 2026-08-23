@@ -57,7 +57,7 @@ func ComputeLedger(ctx context.Context, from, to time.Time) (*Ledger, error) {
 	chain, chainErr := computeChainFromSlots(ctx, set)
 	var chainUnavailable string
 	if chainErr != nil {
-		if errors.Is(chainErr, ErrBatteryPhysicsUnavailable) || errors.Is(chainErr, ErrSocGap) {
+		if errors.Is(chainErr, ErrBatteryPhysicsUnavailable) || errors.Is(chainErr, ErrSocGap) || errors.Is(chainErr, ErrBatteryRateCeilingUnavailable) {
 			// a physics refusal, not a request-level failure (ADR-011 rule 4: refuse
 			// rather than fabricate) - degrade to no chain rather than a 500 that
 			// also takes the realised-cost figure down with it.

@@ -112,3 +112,59 @@ func TestComputeLedgerDegradesOnBatteryPhysicsRefusal(t *testing.T) {
 	require.InDelta(t, 2.0*0.30, ledger.Realised.Settled.PerSlot, 1e-9,
 		"the realised-cost figure must survive a chain-only refusal")
 }
+
+// TestComputeLedgerDegradesOnRateCeilingRefusal covers the adversarial finding behind
+// ErrBatteryRateCeilingUnavailable: MaxChargeKWh/MaxDischargeKWh are the p99 of
+// OBSERVED per-slot energy (see rateLimitPercentile's doc comment), and percentile()
+// returns 0 for an empty slice. On a site where the controller has been holding the
+// battery, or where it has simply never discharged, the discharge sample list is
+// empty - before this fix, computeW2 silently used a 0 rate ceiling, the dumb-rule
+// battery could never discharge, W2 collapsed towards W1, and the battery's entire
+// real value was booked to Control with no refusal and no note. This seeds a battery
+// with clean CHARGE-only history (capacity still derives fine via the charge-only
+// fallback) and zero discharge evidence, then a period whose battery must discharge
+// to cover a deficit - the chain must refuse rather than report a misleadingly small
+// Battery contribution.
+func TestComputeLedgerDegradesOnRateCeilingRefusal(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+
+	loc := time.Now().Location()
+
+	// charge-only calibration: 3 clean 1.0kWh charge windows, capacity derives to
+	// 10.0kWh via the charge-only fallback (see deriveBatteryCapacityFromHistory) -
+	// no discharge sample is ever recorded.
+	soc := 20.0
+	ts := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+	for range 3 {
+		s := soc
+		require.NoError(t, persist(bat, ts, 1.0, 0, &s, false, false))
+		soc += 9.0
+		ts = ts.Add(15 * time.Minute)
+	}
+	sFinal := soc
+	require.NoError(t, persist(bat, ts, 0, 0, &sFinal, false, false))
+
+	base := time.Date(2026, 8, 15, 0, 0, 0, 0, loc)
+	require.NoError(t, persist(grid, base, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 2.0, 0, nil, false, false)) // pure deficit: W2 must discharge to model it
+	socNow := 50.0
+	require.NoError(t, persist(bat, base, 0, 0, &socNow, false, false))
+	g, f := 0.30, 0.05
+	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
+
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute))
+	require.NoError(t, err, "a rate-ceiling refusal must degrade, not fail the whole request")
+
+	require.Nil(t, ledger.Chain)
+	require.NotEmpty(t, ledger.ChainUnavailable)
+	require.InDelta(t, 2.0*0.30, ledger.Realised.Settled.PerSlot, 1e-9,
+		"the realised-cost figure must survive a chain-only refusal")
+
+	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	require.ErrorIs(t, err, ErrBatteryRateCeilingUnavailable)
+}

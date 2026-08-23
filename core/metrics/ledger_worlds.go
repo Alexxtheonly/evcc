@@ -116,6 +116,27 @@ type batteryPhysics struct {
 	// binds api.BatteryCharge's grid-forced branch (see simulateSlotStep).
 	MaxChargeKWh    float64 `json:"maxChargeKWh"`
 	MaxDischargeKWh float64 `json:"maxDischargeKWh"`
+
+	// HasChargeEvidence/HasDischargeEvidence are false when the corresponding sample
+	// list handed to percentile() was empty - percentile() returns 0 for an empty
+	// slice, which is indistinguishable from "observed and genuinely tiny" once it's
+	// sitting in MaxChargeKWh/MaxDischargeKWh. A site the controller has been holding
+	// (or one that has simply never discharged) has an empty discharge sample list -
+	// computeChainFromSlots uses these to refuse (ErrBatteryRateCeilingUnavailable)
+	// rather than let computeW2 silently model a battery that can't move in that
+	// direction at all, collapsing towards W1 and booking the battery's entire real
+	// value to Control with nothing to say so.
+	HasChargeEvidence    bool `json:"-"`
+	HasDischargeEvidence bool `json:"-"`
+}
+
+// rateCeilingNote renders MaxChargeKWh/MaxDischargeKWh and their provenance into the
+// chain's Notes (ADR-011 rule 7) - the ceiling silently throttles or unlocks the W2
+// counterfactual battery, so a reader comparing two periods needs to see it, not just
+// the number it produced.
+func (p batteryPhysics) rateCeilingNote() string {
+	return fmt.Sprintf("counterfactual battery rate ceiling: %.3fkWh/slot charge, %.3fkWh/slot discharge - the %.0fth percentile of observed single-slot energy in this battery's history (not a device spec)",
+		p.MaxChargeKWh, p.MaxDischargeKWh, rateLimitPercentile*100)
 }
 
 // rateLimitPercentile is the percentile used to establish MaxChargeKWh/MaxDischargeKWh
@@ -252,15 +273,17 @@ func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
 	}
 
 	return batteryPhysics{
-		CapacityKWh:     capacityKWh,
-		CapacitySource:  capacitySource,
-		EtaC:            batteryEta,
-		EtaD:            batteryEta,
-		EtaSource:       "constant (0.9), not derived - shared with core/site_optimizer.go's eta, see BatteryEta",
-		FloorFrac:       floorFrac,
-		FloorSource:     floorSource,
-		MaxChargeKWh:    maxChargeSlot,
-		MaxDischargeKWh: maxDischargeSlot,
+		CapacityKWh:          capacityKWh,
+		CapacitySource:       capacitySource,
+		EtaC:                 batteryEta,
+		EtaD:                 batteryEta,
+		EtaSource:            "constant (0.9), not derived - shared with core/site_optimizer.go's eta, see BatteryEta",
+		FloorFrac:            floorFrac,
+		FloorSource:          floorSource,
+		MaxChargeKWh:         maxChargeSlot,
+		MaxDischargeKWh:      maxDischargeSlot,
+		HasChargeEvidence:    len(chargeSamples) > 0,
+		HasDischargeEvidence: len(dischargeSamples) > 0,
 	}, nil
 }
 
@@ -491,6 +514,12 @@ func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryP
 // run instead) rather than something the existing test suite can exercise end-to-end.
 var ErrSocGap = errors.New("missing measured SoC at a day boundary")
 
+// ErrBatteryRateCeilingUnavailable means the battery's history has no observed
+// charge or discharge samples in one direction - see batteryPhysics'
+// HasChargeEvidence/HasDischargeEvidence doc comment for why a 0 rate ceiling from an
+// empty sample list must not be handed to computeW2 as if it were physical fact.
+var ErrBatteryRateCeilingUnavailable = errors.New("no observed charge or discharge history to establish the counterfactual battery's rate ceiling")
+
 // computeW2 simulates the "dumb rule" battery (charge from surplus only, discharge to
 // house load only, never from grid) across slots, re-anchoring the simulated SoC to
 // the measured SoC (BatterySocFrac) at the first slot of each calendar day AND at the
@@ -645,6 +674,14 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 		if err != nil {
 			return nil, err
 		}
+		// a 0 rate ceiling from an empty sample list (see HasChargeEvidence's doc
+		// comment) is not the same as a genuinely observed low rate - handing it to
+		// computeW2 would silently make that direction inert, collapsing W2 towards
+		// W1 and booking the battery's real value to Control with no refusal and no
+		// note (see ErrBatteryRateCeilingUnavailable).
+		if !p.HasChargeEvidence || !p.HasDischargeEvidence {
+			return nil, fmt.Errorf("%w: charge evidence=%v, discharge evidence=%v", ErrBatteryRateCeilingUnavailable, p.HasChargeEvidence, p.HasDischargeEvidence)
+		}
 		phys = &p
 
 		w2, err = computeW2(set.Slots, p)
@@ -680,7 +717,7 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	coverage := set.coverage()
 	notes := []string{noteInvoiceComparability}
 	if control != nil {
-		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement)
+		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement, phys.rateCeilingNote())
 	}
 	if coverage.TotalSlots > 0 && coverage.ValidSlots < coverage.TotalSlots {
 		notes = append(notes, notePeriodAverageCoverage(coverage))
