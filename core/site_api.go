@@ -402,6 +402,9 @@ func (site *Site) SetGridExportLimit(power float64) error {
 func (site *Site) GetTariff(tariff api.TariffUsage) api.Tariff {
 	site.RLock()
 	defer site.RUnlock()
+	if site.tariffs == nil {
+		return nil
+	}
 	return site.tariffs.Get(tariff)
 }
 

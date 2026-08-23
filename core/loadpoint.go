@@ -1632,6 +1632,65 @@ func (lp *Loadpoint) boostPower(batteryPower float64) float64 {
 	return res
 }
 
+// solarForecastLookahead is how far ahead effectiveDisableDelay checks the solar forecast to
+// tell a passing cloud from an actual decline (sunset, an incoming front) - short enough to
+// still be about the next half hour, not a day-ahead trend.
+const solarForecastLookahead = 30 * time.Minute
+
+// solarForecastRecoveryFraction is how much of the current slot's forecasted solar the
+// lookahead slot must retain before a dip counts as "recovering soon" rather than
+// "declining".
+const solarForecastRecoveryFraction = 0.7
+
+// maxDisableDelayExtension bounds how much longer effectiveDisableDelay will ever wait beyond
+// the configured Disable.Delay, regardless of how favorable the forecast looks - a forecast
+// is advisory, not a guarantee, and this keeps the worst case (continuing to charge below the
+// disable threshold) bounded even if the forecast turns out wrong.
+const maxDisableDelayExtension = 10 * time.Minute
+
+// effectiveDisableDelay extends the configured Disable.Delay when the short-horizon solar
+// forecast (api.TariffUsageSolar, fetched and published by the site every cycle - see
+// core/site_tariffs.go) suggests the current shortfall is a passing cloud rather than a
+// structural decline: if the forecast half an hour out is still close to what it is right
+// now, the dip looks transient and charging gets extra time to ride it out before pausing.
+//
+// This only ever extends the delay, never shortens it, and only on positive forecast
+// evidence: a forecast that is itself declining, unavailable, or reports the current slot as
+// already near zero (dusk, not a cloud) leaves Disable.Delay untouched - it is always the
+// floor here, never the ceiling. That asymmetry is deliberate: this is the most-used control
+// path in evcc, so the only regression risk worth taking is "occasionally waits a little
+// longer to stop", never "stops sooner or starts differently than configured".
+func (lp *Loadpoint) effectiveDisableDelay() time.Duration {
+	delay := lp.GetDisableDelay()
+
+	if lp.site == nil {
+		return delay
+	}
+
+	tariff := lp.site.GetTariff(api.TariffUsageSolar)
+	if tariff == nil {
+		return delay
+	}
+
+	rates, err := tariff.Rates()
+	if err != nil || len(rates) == 0 {
+		return delay
+	}
+
+	now := time.Now()
+	current, err := rates.At(now)
+	if err != nil || current.Value <= 0 {
+		return delay // no meaningful forecast for right now: nothing to compare against
+	}
+
+	ahead, err := rates.At(now.Add(solarForecastLookahead))
+	if err != nil || ahead.Value < current.Value*solarForecastRecoveryFraction {
+		return delay // forecast itself is declining (or has nothing to say): treat as real
+	}
+
+	return delay + min(delay, maxDisableDelayExtension)
+}
+
 // pvMaxCurrent calculates the maximum target current for PV mode
 func (lp *Loadpoint) pvMaxCurrent(mode api.ChargeMode, sitePower, batteryPower float64, batteryBuffered, batteryStart bool) float64 {
 	// read only once to simplify testing
@@ -1682,15 +1741,17 @@ func (lp *Loadpoint) pvMaxCurrent(mode api.ChargeMode, sitePower, batteryPower f
 		if projectedSitePower >= lp.Disable.Threshold && !lp.vehicleClimateActive() {
 			lp.log.DEBUG.Printf("projected site power %.0fW >= %.0fW disable threshold", projectedSitePower, lp.Disable.Threshold)
 
+			disableDelay := lp.effectiveDisableDelay()
+
 			if lp.pvTimer.IsZero() {
-				lp.log.DEBUG.Printf("pv disable timer start: %v", lp.GetDisableDelay())
+				lp.log.DEBUG.Printf("pv disable timer start: %v", disableDelay)
 				lp.pvTimer = lp.clock.Now()
 			}
 
-			lp.publishTimer(pvTimer, lp.GetDisableDelay(), pvDisable)
+			lp.publishTimer(pvTimer, disableDelay, pvDisable)
 
 			elapsed := lp.clock.Since(lp.pvTimer)
-			if elapsed >= lp.GetDisableDelay() {
+			if elapsed >= disableDelay {
 				lp.log.DEBUG.Println("pv disable timer elapsed")
 
 				// reset timer to prevent immediate charger re-enabling
@@ -1701,7 +1762,7 @@ func (lp *Loadpoint) pvMaxCurrent(mode api.ChargeMode, sitePower, batteryPower f
 
 			// suppress duplicate log message after timer started
 			if elapsed > time.Second {
-				lp.log.DEBUG.Printf("pv disable timer remaining: %v", (lp.GetDisableDelay() - elapsed).Round(time.Second))
+				lp.log.DEBUG.Printf("pv disable timer remaining: %v", (disableDelay - elapsed).Round(time.Second))
 			}
 		} else {
 			// reset timer
