@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/api"
+	"github.com/evcc-io/evcc/core/session"
 )
 
 var _ API = (*dummy)(nil)
@@ -83,6 +84,22 @@ func (v *dummy) GetAdaptivePlanLearning() bool {
 }
 
 func (v *dummy) SetAdaptivePlanLearning(enabled bool) error {
+	return nil
+}
+
+func (v *dummy) GetExpectedArrival() (session.ExpectedArrival, time.Time) {
+	return session.ExpectedArrival{}, time.Time{}
+}
+
+func (v *dummy) SetExpectedArrival(arrival session.ExpectedArrival) error {
+	return nil
+}
+
+func (v *dummy) GetExpectedArrivalLearning() bool {
+	return false
+}
+
+func (v *dummy) SetExpectedArrivalLearning(enabled bool) error {
 	return nil
 }
 

@@ -145,6 +145,92 @@ func TestLearnRequiresMinimumHistory(t *testing.T) {
 	assert.Empty(t, LearnRepeatingPlans(commuterSessions(1), learnNow), "one week is not enough")
 }
 
+func TestLearnExpectedArrivalCommuter(t *testing.T) {
+	arrival := LearnExpectedArrival(commuterSessions(8), learnNow)
+	require.NotNil(t, arrival)
+
+	// commuterSessions returns the car 11h after each ~06:05-06:32 departure, i.e.
+	// ~17:05-17:32; the early (0.1) quantile of that must still land in the evening,
+	// nowhere near midnight or the morning departure window.
+	assert.GreaterOrEqual(t, arrival.TimeOfDay, 16*60, "evening arrival, not the morning departure")
+	assert.LessOrEqual(t, arrival.TimeOfDay, 18*60, "evening arrival")
+
+	// Tuesdays use 20 soc, every other weekday 10: the high (0.9) quantile must pick
+	// up the long day rather than settle on the common case.
+	assert.GreaterOrEqual(t, arrival.SocUsed, 18.0, "high quantile reflects the long day, not the typical one")
+}
+
+func TestLearnExpectedArrivalRejectsAutomationArtifacts(t *testing.T) {
+	sessions := commuterSessions(8)
+
+	// an automation reconnects the charger daily at exactly 05:30:00 - if this leaked
+	// into the arrival sample, its early wall-clock time would drag the 0.1 quantile
+	// out of the evening and into the middle of the night.
+	for i := 0; i < 40; i++ {
+		d := learnNow.AddDate(0, 0, -i)
+		dep := time.Date(d.Year(), d.Month(), d.Day(), 4, 30, 0, 0, time.UTC)
+		arr := time.Date(d.Year(), d.Month(), d.Day(), 5, 30, 0, 0, time.UTC)
+		socEnd, socStart := 60.0, 50.0
+		sessions = append(sessions, Session{
+			Created:      dep.Add(-2 * time.Hour),
+			Disconnected: &dep,
+			Vehicle:      "car",
+			SocEnd:       &socEnd,
+		}, Session{
+			Created:  arr,
+			Vehicle:  "car",
+			SocStart: &socStart,
+		})
+	}
+
+	arrival := LearnExpectedArrival(sessions, learnNow)
+	require.NotNil(t, arrival)
+	assert.GreaterOrEqual(t, arrival.TimeOfDay, 16*60, "artifact cluster must not pull the estimate into the night")
+}
+
+func TestLearnExpectedArrivalRequiresDrivingEvidence(t *testing.T) {
+	var sessions Sessions
+
+	// plug-outs with no SoC drop and no odometer movement: car never left
+	for i := 0; i < 30; i++ {
+		d := learnNow.AddDate(0, 0, -i)
+		dep := time.Date(d.Year(), d.Month(), d.Day(), 8, i%50, i%40, 0, time.UTC)
+		soc := 60.0
+		odo := 10000.0
+		sessions = append(sessions, Session{
+			Created:      dep.Add(-2 * time.Hour),
+			Disconnected: &dep,
+			Vehicle:      "car",
+			SocEnd:       &soc,
+			Odometer:     &odo,
+		}, Session{
+			Created:  dep.Add(time.Hour),
+			Vehicle:  "car",
+			SocStart: &soc,
+			Odometer: &odo,
+		})
+	}
+
+	assert.Nil(t, LearnExpectedArrival(sessions, learnNow), "no driving evidence, no prediction")
+}
+
+func TestLearnExpectedArrivalRequiresMinimumHistory(t *testing.T) {
+	assert.Nil(t, LearnExpectedArrival(nil, learnNow))
+	assert.Nil(t, LearnExpectedArrival(commuterSessions(1), learnNow), "one week is not enough")
+}
+
+func TestLearnExpectedArrivalIgnoresSessionsOutsideWindow(t *testing.T) {
+	old := commuterSessions(8)
+	for i := range old {
+		old[i].Created = old[i].Created.AddDate(-1, 0, 0)
+		if old[i].Disconnected != nil {
+			d := old[i].Disconnected.AddDate(-1, 0, 0)
+			old[i].Disconnected = &d
+		}
+	}
+	assert.Nil(t, LearnExpectedArrival(old, learnNow), "year-old history is ignored")
+}
+
 func TestLearnIgnoresSessionsOutsideWindow(t *testing.T) {
 	old := commuterSessions(8)
 	for i := range old {

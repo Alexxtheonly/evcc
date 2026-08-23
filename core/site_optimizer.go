@@ -16,7 +16,9 @@ import (
 	"github.com/evcc-io/evcc/core/keys"
 	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/core/metrics"
+	"github.com/evcc-io/evcc/core/session"
 	"github.com/evcc-io/evcc/core/types"
+	"github.com/evcc-io/evcc/core/vehicle"
 	"github.com/evcc-io/evcc/hems/hems"
 	"github.com/evcc-io/evcc/messenger"
 	"github.com/evcc-io/evcc/tariff"
@@ -1126,15 +1128,25 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 	// uncontrollable power of loadpoints that cannot be modelled as storage
 	var unmodelled float64
 
+	// vehicles currently connected to a loadpoint, real or session-limited - checked
+	// below so an expected-arrival prediction is never modelled for one that is already
+	// physically present and modelled as a battery (or as unmodelled load).
+	connected := make(map[api.Vehicle]bool)
+
 	for id, lp := range site.ActiveLoadpoints() {
 		// ignore disconnected loadpoints, including StatusNone
 		if s := lp.GetStatus(); s != api.StatusB && s != api.StatusC {
 			continue
 		}
 
+		v := lp.GetVehicle()
+		if v != nil {
+			connected[v] = true
+		}
+
 		// no vehicle capacity and no session energy limit to model against:
 		// account for the consumption as uncontrollable load
-		if v := lp.GetVehicle(); v == nil || (v.Capacity() == 0 && lp.GetLimitEnergy() == 0) {
+		if v == nil || (v.Capacity() == 0 && lp.GetLimitEnergy() == 0) {
 			unmodelled += unmodelledPower(lp)
 			continue
 		}
@@ -1159,6 +1171,13 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		for i, v := range prorate(load, firstSlotDuration) {
 			req.TimeSeries.Gt[i] += v
 		}
+	}
+
+	// vehicles predicted to return later in the horizon, but not connected anywhere right
+	// now, get modelled as anticipated demand on the same footing as unmodelled loadpoint
+	// load - see expectedArrivalDemand for why this can't be a battery entry.
+	for i, v := range site.expectedArrivalDemand(site.Vehicles().Settings(), minLen, now, details.Timestamps, grid[minLen-1].End, connected) {
+		req.TimeSeries.Gt[i] += v
 	}
 
 	for i, dev := range site.batteryMeters {
@@ -1718,6 +1737,97 @@ func unmodelledPower(lp loadpoint.API) float64 {
 	}
 
 	return max(0, power)
+}
+
+// expectedArrivalDemand returns anticipated home demand (Wh, one entry per slot, nil if
+// there is none to add) for vehicles that are opted into expected-arrival learning, are
+// not currently connected anywhere on the site, and have a confident, still-valid learned
+// prediction of when they return and how depleted they are likely to be.
+//
+// This cannot be modelled as a virtual battery: BatteryConfig.CMax is one scalar for the
+// whole horizon (see the optimizer client, e.g. client/types.go), so there is no way to
+// keep a battery entry at zero charge rate before the vehicle actually arrives and open it
+// up only from that slot on. Without that, the solver would happily "pre-charge" a vehicle
+// that in reality has nowhere to receive that energy yet - the same failure mode this
+// feature exists to prevent, just shifted earlier. Adding the anticipated energy straight
+// into Gt (the fixed demand series, the same mechanism unmodelled loadpoint load already
+// uses a few lines up) reserves for it without ever pretending it is a controllable
+// battery: it never enters req.Batteries, so nothing downstream - the optimizer result,
+// applyOptimizerResult, the suggestion/mode logic - can mistake it for a connected
+// vehicle's battery, and it cannot make the request infeasible since Gt is already an
+// uncapped, always-feasible input (a real load spike has the same effect).
+func (site *Site) expectedArrivalDemand(vehicles []vehicle.API, minLen int, now time.Time, timestamps []time.Time, horizonEnd time.Time, connected map[api.Vehicle]bool) []float32 {
+	var demand []float32
+
+	for _, v := range vehicles {
+		if !v.GetExpectedArrivalLearning() {
+			continue
+		}
+
+		instance := v.Instance()
+		if instance == nil || connected[instance] {
+			continue
+		}
+
+		arrival, updated := v.GetExpectedArrival()
+		if arrival == (session.ExpectedArrival{}) || now.Sub(updated) > vehicle.AdaptivePlansValidity {
+			continue
+		}
+
+		capacity := instance.Capacity() // kWh
+		if capacity <= 0 {
+			continue
+		}
+
+		energy := float32(arrival.SocUsed / 100 * capacity * 1e3) // Wh
+		if energy <= 0 {
+			continue
+		}
+
+		slot := arrivalSlot(timestamps, horizonEnd, nextOccurrence(arrival.TimeOfDay, now))
+		if slot < 0 {
+			continue
+		}
+
+		if demand == nil {
+			demand = make([]float32, minLen)
+		}
+		demand[slot] += energy
+
+		site.log.DEBUG.Printf("optimizer: expected arrival %s: %.0fWh at slot %d (%v)", v.Name(), energy, slot, timestamps[slot])
+	}
+
+	return demand
+}
+
+// nextOccurrence returns the next time minutesAfterMidnight occurs at or after now, today
+// if it hasn't passed yet, otherwise tomorrow.
+func nextOccurrence(minutesAfterMidnight int, now time.Time) time.Time {
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	t := day.Add(time.Duration(minutesAfterMidnight) * time.Minute)
+	if t.Before(now) {
+		t = t.AddDate(0, 0, 1)
+	}
+	return t
+}
+
+// arrivalSlot returns the index of the last slot starting at or before target, or -1 when
+// target falls outside the horizon (before the first slot, which should not happen since
+// nextOccurrence never returns a past time, or after the last one, which happens whenever
+// the predicted arrival is further out than this request's horizon).
+func arrivalSlot(timestamps []time.Time, horizonEnd, target time.Time) int {
+	if target.After(horizonEnd) {
+		return -1
+	}
+
+	slot := -1
+	for i, t := range timestamps {
+		if t.After(target) {
+			break
+		}
+		slot = i
+	}
+	return slot
 }
 
 // homeProfile returns the home base load in Wh

@@ -8,7 +8,9 @@ import (
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/core/metrics"
+	"github.com/evcc-io/evcc/core/session"
 	"github.com/evcc-io/evcc/core/types"
+	"github.com/evcc-io/evcc/core/vehicle"
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
 	"github.com/evcc-io/evcc/util"
@@ -685,6 +687,133 @@ func TestConservativeSolarRates(t *testing.T) {
 
 	// the source slice must not be mutated
 	assert.Equal(t, 1000.0, rr[0].Value)
+}
+
+func TestNextOccurrence(t *testing.T) {
+	now := time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
+
+	// later today
+	assert.Equal(t, time.Date(2026, 8, 23, 18, 30, 0, 0, time.UTC), nextOccurrence(18*60+30, now))
+
+	// already passed today: rolls to tomorrow
+	assert.Equal(t, time.Date(2026, 8, 24, 6, 0, 0, 0, time.UTC), nextOccurrence(6*60, now))
+
+	// exactly now: today, not pushed out a day
+	assert.Equal(t, now, nextOccurrence(14*60, now))
+}
+
+func TestArrivalSlot(t *testing.T) {
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	timestamps := []time.Time{now, now.Add(15 * time.Minute), now.Add(30 * time.Minute), now.Add(45 * time.Minute)}
+	horizonEnd := now.Add(time.Hour)
+
+	assert.Equal(t, 0, arrivalSlot(timestamps, horizonEnd, now.Add(5*time.Minute)))
+	assert.Equal(t, 2, arrivalSlot(timestamps, horizonEnd, now.Add(35*time.Minute)))
+	assert.Equal(t, 3, arrivalSlot(timestamps, horizonEnd, now.Add(59*time.Minute)), "last slot covers up to horizon end")
+	assert.Equal(t, -1, arrivalSlot(timestamps, horizonEnd, now.Add(2*time.Hour)), "beyond horizon: not modelled")
+}
+
+// TestExpectedArrivalDemand exercises the gates expectedArrivalDemand must enforce: opted
+// out, connected elsewhere, stale or absent prediction, and no capacity to convert soc
+// into Wh must all leave Gt untouched, while a vehicle that clears every gate contributes
+// its predicted energy at its predicted slot and nowhere else.
+func TestExpectedArrivalDemand(t *testing.T) {
+	site := &Site{log: util.NewLogger("foo")}
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	timestamps := []time.Time{now, now.Add(15 * time.Minute), now.Add(30 * time.Minute), now.Add(45 * time.Minute)}
+	horizonEnd := now.Add(time.Hour)
+	arrival := session.ExpectedArrival{TimeOfDay: 12*60 + 20, SocUsed: 30} // 12:20 today -> slot 1
+
+	newVehicleMock := func(t *testing.T, capacity float64) *api.MockVehicle {
+		ctrl := gomock.NewController(t)
+		mv := api.NewMockVehicle(ctrl)
+		mv.EXPECT().Capacity().Return(capacity).AnyTimes()
+		return mv
+	}
+
+	t.Run("opted out", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().GetExpectedArrivalLearning().Return(false)
+
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		assert.Nil(t, got)
+	})
+
+	t.Run("connected elsewhere", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mv := newVehicleMock(t, 50)
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().GetExpectedArrivalLearning().Return(true)
+		v.EXPECT().Instance().Return(mv).AnyTimes()
+
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, map[api.Vehicle]bool{mv: true})
+		assert.Nil(t, got, "already connected: never modelled twice")
+	})
+
+	t.Run("no confident prediction", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mv := newVehicleMock(t, 50)
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().GetExpectedArrivalLearning().Return(true)
+		v.EXPECT().Instance().Return(mv).AnyTimes()
+		v.EXPECT().GetExpectedArrival().Return(session.ExpectedArrival{}, time.Time{})
+
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		assert.Nil(t, got, "absent vehicle with no usable history changes nothing")
+	})
+
+	t.Run("stale prediction", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mv := newVehicleMock(t, 50)
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().GetExpectedArrivalLearning().Return(true)
+		v.EXPECT().Instance().Return(mv).AnyTimes()
+		v.EXPECT().GetExpectedArrival().Return(arrival, now.Add(-vehicle.AdaptivePlansValidity-time.Hour))
+
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		assert.Nil(t, got, "stale prediction is not trusted")
+	})
+
+	t.Run("no capacity to convert soc into energy", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mv := newVehicleMock(t, 0)
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().GetExpectedArrivalLearning().Return(true)
+		v.EXPECT().Instance().Return(mv).AnyTimes()
+		v.EXPECT().GetExpectedArrival().Return(arrival, now)
+
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		assert.Nil(t, got)
+	})
+
+	t.Run("confident prediction lands at the right slot", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mv := newVehicleMock(t, 50) // 50 kWh
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().Name().Return("car").AnyTimes()
+		v.EXPECT().GetExpectedArrivalLearning().Return(true)
+		v.EXPECT().Instance().Return(mv).AnyTimes()
+		v.EXPECT().GetExpectedArrival().Return(arrival, now)
+
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		require.Len(t, got, 4)
+
+		// 30% of 50kWh = 15kWh = 15000Wh, at slot 1 (12:20 falls in [12:15,12:30))
+		assert.Equal(t, []float32{0, 15000, 0, 0}, got)
+	})
+
+	t.Run("prediction beyond the horizon is not modelled", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mv := newVehicleMock(t, 50)
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().GetExpectedArrivalLearning().Return(true)
+		v.EXPECT().Instance().Return(mv).AnyTimes()
+		v.EXPECT().GetExpectedArrival().Return(session.ExpectedArrival{TimeOfDay: 23 * 60, SocUsed: 30}, now)
+
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		assert.Nil(t, got, "arrival predicted well past this request's short horizon")
+	})
 }
 
 func TestBlendMeasured(t *testing.T) {

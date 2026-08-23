@@ -5,11 +5,13 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/core/session"
+	"github.com/evcc-io/evcc/core/vehicle"
 	"github.com/evcc-io/evcc/server/db"
 )
 
-// adaptivePlanLearnInterval paces re-learning adaptive plans from session
-// history. Sessions accrue slowly; anything faster is wasted work.
+// adaptivePlanLearnInterval paces re-learning adaptive plans (and, on the same cycle,
+// expected arrivals) from session history. Sessions accrue slowly; anything faster is
+// wasted work.
 const adaptivePlanLearnInterval = 6 * time.Hour
 
 // updateAdaptivePlansAsync re-learns adaptive plans when due
@@ -25,16 +27,20 @@ func (site *Site) updateAdaptivePlansAsync() {
 	go site.updateAdaptivePlans()
 }
 
-// updateAdaptivePlans learns adaptive plans from session history for every
-// vehicle with learning enabled. Plans are only re-written when they changed,
-// so plan locks are not churned.
+// updateAdaptivePlans learns adaptive plans and expected arrivals from session history
+// for every vehicle with the respective learning enabled - the two are independent
+// per-vehicle opt-ins, but share one session fetch per vehicle since both read the same
+// history. Results are only re-written when they changed, so plan locks are not churned
+// and a vehicle without expected-arrival learning enabled is untouched.
 func (site *Site) updateAdaptivePlans() {
 	if db.Instance == nil {
 		return
 	}
 
 	for _, v := range site.Vehicles().Settings() {
-		if !v.GetAdaptivePlanLearning() {
+		learnPlans := v.GetAdaptivePlanLearning()
+		learnArrival := v.GetExpectedArrivalLearning()
+		if !learnPlans && !learnArrival {
 			continue
 		}
 
@@ -49,18 +55,54 @@ func (site *Site) updateAdaptivePlans() {
 			continue
 		}
 
-		plans := session.LearnRepeatingPlans(sessions, time.Now())
-
-		current, _ := v.GetAdaptivePlans()
-		if len(plans) == 0 && len(current) == 0 || reflect.DeepEqual(plans, current) {
-			continue
+		if learnPlans {
+			site.updateAdaptivePlan(v, sessions)
 		}
-
-		if err := v.SetAdaptivePlans(plans); err != nil {
-			site.log.ERROR.Printf("adaptive plans %s: %v", v.Name(), err)
-			continue
+		if learnArrival {
+			site.updateExpectedArrival(v, sessions)
 		}
+	}
+}
 
-		site.log.DEBUG.Printf("adaptive plans %s: learned %d plans", v.Name(), len(plans))
+// updateAdaptivePlan re-learns and stores a single vehicle's adaptive repeating plans
+func (site *Site) updateAdaptivePlan(v vehicle.API, sessions session.Sessions) {
+	plans := session.LearnRepeatingPlans(sessions, time.Now())
+
+	current, _ := v.GetAdaptivePlans()
+	if len(plans) == 0 && len(current) == 0 || reflect.DeepEqual(plans, current) {
+		return
+	}
+
+	if err := v.SetAdaptivePlans(plans); err != nil {
+		site.log.ERROR.Printf("adaptive plans %s: %v", v.Name(), err)
+		return
+	}
+
+	site.log.DEBUG.Printf("adaptive plans %s: learned %d plans", v.Name(), len(plans))
+}
+
+// updateExpectedArrival re-learns and stores a single vehicle's expected-arrival
+// prediction. A nil result (not enough history, or history that no longer supports a
+// confident prediction) clears any previously stored one rather than leaving it stale.
+func (site *Site) updateExpectedArrival(v vehicle.API, sessions session.Sessions) {
+	var next session.ExpectedArrival
+	if learned := session.LearnExpectedArrival(sessions, time.Now()); learned != nil {
+		next = *learned
+	}
+
+	current, _ := v.GetExpectedArrival()
+	if next == current {
+		return
+	}
+
+	if err := v.SetExpectedArrival(next); err != nil {
+		site.log.ERROR.Printf("expected arrival %s: %v", v.Name(), err)
+		return
+	}
+
+	if next == (session.ExpectedArrival{}) {
+		site.log.DEBUG.Printf("expected arrival %s: cleared, no confident prediction", v.Name())
+	} else {
+		site.log.DEBUG.Printf("expected arrival %s: learned %02d:%02d, %.0f soc", v.Name(), next.TimeOfDay/60, next.TimeOfDay%60, next.SocUsed)
 	}
 }

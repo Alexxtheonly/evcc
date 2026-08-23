@@ -6,6 +6,7 @@ import (
 
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/keys"
+	"github.com/evcc-io/evcc/core/session"
 	"github.com/evcc-io/evcc/server/db/settings"
 	"github.com/evcc-io/evcc/util"
 	"github.com/stretchr/testify/assert"
@@ -133,4 +134,45 @@ func TestEffectiveRepeatingPlans(t *testing.T) {
 	stored, _ := v.GetAdaptivePlans()
 	require.Len(t, stored, 1)
 	assert.Equal(t, 80, stored[0].Soc)
+}
+
+func TestExpectedArrivalStore(t *testing.T) {
+	v := testAdapter("expected-arrival-store")
+
+	// nothing stored yet
+	arrival, updated := v.GetExpectedArrival()
+	assert.Zero(t, arrival)
+	assert.True(t, updated.IsZero())
+
+	learned := session.ExpectedArrival{TimeOfDay: 18 * 60, SocUsed: 35}
+	require.NoError(t, v.SetExpectedArrival(learned))
+
+	arrival, updated = v.GetExpectedArrival()
+	assert.Equal(t, learned, arrival)
+	assert.WithinDuration(t, time.Now(), updated, time.Minute, "timestamp is server-stamped")
+
+	// the zero value clears it
+	require.NoError(t, v.SetExpectedArrival(session.ExpectedArrival{}))
+	arrival, _ = v.GetExpectedArrival()
+	assert.Zero(t, arrival)
+}
+
+func TestExpectedArrivalLearning(t *testing.T) {
+	v := testAdapter("expected-arrival-learning")
+
+	// disabled by default
+	assert.False(t, v.GetExpectedArrivalLearning())
+
+	require.NoError(t, v.SetExpectedArrivalLearning(true))
+	assert.True(t, v.GetExpectedArrivalLearning())
+
+	require.NoError(t, v.SetExpectedArrival(session.ExpectedArrival{TimeOfDay: 18 * 60, SocUsed: 35}))
+	arrival, _ := v.GetExpectedArrival()
+	assert.NotZero(t, arrival)
+
+	// disabling clears the stored prediction so it stops influencing the optimizer
+	require.NoError(t, v.SetExpectedArrivalLearning(false))
+	assert.False(t, v.GetExpectedArrivalLearning())
+	arrival, _ = v.GetExpectedArrival()
+	assert.Zero(t, arrival)
 }

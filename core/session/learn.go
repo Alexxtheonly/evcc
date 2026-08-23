@@ -27,8 +27,9 @@ const (
 
 // departure is a validated vehicle departure
 type departure struct {
-	at      time.Time
-	socUsed float64 // soc points consumed until the next session, negative when unknown
+	at        time.Time
+	arrivedAt time.Time // start of the next session (Session.Created) - when the vehicle plugged back in
+	socUsed   float64   // soc points consumed until the next session, negative when unknown
 }
 
 // quantile returns the linear-interpolation quantile of sorted values
@@ -75,7 +76,7 @@ func departures(sessions Sessions, now time.Time) []departure {
 			continue
 		}
 
-		d := departure{at: *s.Disconnected, socUsed: -1}
+		d := departure{at: *s.Disconnected, arrivedAt: next.Created, socUsed: -1}
 		if s.SocEnd != nil && next.SocStart != nil {
 			d.socUsed = max(*s.SocEnd-*next.SocStart, 0)
 		}
@@ -205,6 +206,72 @@ func LearnRepeatingPlans(sessions Sessions, now time.Time) []api.RepeatingPlan {
 	}
 
 	return plans
+}
+
+// ExpectedArrival is a learned prediction that an absent vehicle will return needing
+// roughly this much energy, derived from the same validated departure/arrival pairs
+// LearnRepeatingPlans uses.
+type ExpectedArrival struct {
+	TimeOfDay int     // minutes after midnight, an early quantile of observed arrival times
+	SocUsed   float64 // percentage points, a high quantile of observed soc consumed while away
+}
+
+// LearnExpectedArrival derives when a vehicle that is currently away is likely to return
+// and roughly how depleted it is likely to be, from the same validated departures
+// LearnRepeatingPlans learns from. Returns nil when the history does not support a
+// confident prediction.
+//
+// Unlike LearnRepeatingPlans, this is a single pooled estimate rather than a per-weekday
+// one: it exists to give the optimizer something to plan against for a vehicle that isn't
+// plugged in yet, not to reproduce a weekly schedule, so a coarser fallback is enough.
+// TimeOfDay uses the same early quantile LearnRepeatingPlans uses for ready-by (0.1) and
+// SocUsed the same high quantile it uses for the charge target (0.9): the two ways this
+// estimate can be wrong aren't equally costly. Assuming the vehicle returns later than it
+// actually does - or needing less energy than it actually does - leaves it charging
+// through a period the site should have reserved for it, so the estimate leans early and
+// well-fed rather than to the middle.
+func LearnExpectedArrival(sessions Sessions, now time.Time) *ExpectedArrival {
+	deps := departures(sessions, now)
+	if len(deps) < learnMinDepartures {
+		return nil
+	}
+
+	// exact-second clusters in the arrival time mark an automation (e.g. a charger or
+	// gateway reboot reconnecting on its own) rather than a real return - the same
+	// signature departures() already screens out on the departure side, applied here to
+	// the arrival side since that filter only ever looked at Disconnected.
+	clusters := make(map[string]int)
+	for _, d := range deps {
+		if !d.arrivedAt.IsZero() {
+			clusters[d.arrivedAt.Format("15:04:05")]++
+		}
+	}
+
+	var times, soc []float64
+	for _, d := range deps {
+		if d.arrivedAt.IsZero() || clusters[d.arrivedAt.Format("15:04:05")] >= learnArtifactClusterLen {
+			continue
+		}
+		times = append(times, minutesOfDay(d.arrivedAt))
+		if d.socUsed >= 0 {
+			soc = append(soc, d.socUsed)
+		}
+	}
+
+	if len(times) < learnMinDepartures || len(soc) == 0 {
+		return nil
+	}
+
+	slices.Sort(times)
+	slices.Sort(soc)
+
+	timeOfDay := int(quantile(times, 0.1))
+	timeOfDay -= timeOfDay % 15
+
+	return &ExpectedArrival{
+		TimeOfDay: timeOfDay,
+		SocUsed:   quantile(soc, 0.9),
+	}
 }
 
 func minutesOfDay(t time.Time) float64 {

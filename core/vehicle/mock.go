@@ -14,6 +14,7 @@ import (
 	time "time"
 
 	api "github.com/evcc-io/evcc/api"
+	session "github.com/evcc-io/evcc/core/session"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -82,6 +83,35 @@ func (m *MockAPI) GetEffectiveRepeatingPlans() []api.RepeatingPlan {
 func (mr *MockAPIMockRecorder) GetEffectiveRepeatingPlans() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEffectiveRepeatingPlans", reflect.TypeOf((*MockAPI)(nil).GetEffectiveRepeatingPlans))
+}
+
+// GetExpectedArrival mocks base method.
+func (m *MockAPI) GetExpectedArrival() (session.ExpectedArrival, time.Time) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExpectedArrival")
+	ret0, _ := ret[0].(session.ExpectedArrival)
+	ret1, _ := ret[1].(time.Time)
+	return ret0, ret1
+}
+
+// GetExpectedArrival indicates an expected call of GetExpectedArrival.
+func (mr *MockAPIMockRecorder) GetExpectedArrival() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExpectedArrival", reflect.TypeOf((*MockAPI)(nil).GetExpectedArrival))
+}
+
+// GetExpectedArrivalLearning mocks base method.
+func (m *MockAPI) GetExpectedArrivalLearning() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExpectedArrivalLearning")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// GetExpectedArrivalLearning indicates an expected call of GetExpectedArrivalLearning.
+func (mr *MockAPIMockRecorder) GetExpectedArrivalLearning() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExpectedArrivalLearning", reflect.TypeOf((*MockAPI)(nil).GetExpectedArrivalLearning))
 }
 
 // GetLimitSoc mocks base method.
@@ -238,6 +268,34 @@ func (m *MockAPI) SetAdaptivePlans(arg0 []api.RepeatingPlan) error {
 func (mr *MockAPIMockRecorder) SetAdaptivePlans(arg0 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetAdaptivePlans", reflect.TypeOf((*MockAPI)(nil).SetAdaptivePlans), arg0)
+}
+
+// SetExpectedArrival mocks base method.
+func (m *MockAPI) SetExpectedArrival(arg0 session.ExpectedArrival) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetExpectedArrival", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetExpectedArrival indicates an expected call of SetExpectedArrival.
+func (mr *MockAPIMockRecorder) SetExpectedArrival(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExpectedArrival", reflect.TypeOf((*MockAPI)(nil).SetExpectedArrival), arg0)
+}
+
+// SetExpectedArrivalLearning mocks base method.
+func (m *MockAPI) SetExpectedArrivalLearning(arg0 bool) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetExpectedArrivalLearning", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetExpectedArrivalLearning indicates an expected call of SetExpectedArrivalLearning.
+func (mr *MockAPIMockRecorder) SetExpectedArrivalLearning(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetExpectedArrivalLearning", reflect.TypeOf((*MockAPI)(nil).SetExpectedArrivalLearning), arg0)
 }
 
 // SetLimitSoc mocks base method.
