@@ -199,6 +199,31 @@ func forecastSlotEnergy(solar api.Rates, now time.Time) float64 {
 	return solarEnergy(solar, slot, slot.Add(tariff.SlotDuration)) / 1e3
 }
 
+// archiveForecastSlot persists the solar forecast's predicted energy at a small
+// set of lead times ahead of now, once per 15min boundary - same cadence and
+// partial-boot-slot skip as persistTariffs. Unlike the Forecast collector fed by
+// forecastSlotEnergy above, which only ever records the near-zero-lead nowcast
+// for the slot containing "now", this captures what the forecast said about a
+// slot well before it arrived, so forecast bias can later be measured per lead
+// time instead of being conflated into one number.
+func (site *Site) archiveForecastSlot(solar api.Rates) {
+	slot := time.Now().Truncate(tariff.SlotDuration)
+
+	last := site.forecastArchiveSlot
+	site.forecastArchiveSlot = slot
+
+	// skip repeat ticks within the slot and the partial boot slot
+	if last.IsZero() || !slot.After(last) {
+		return
+	}
+
+	if err := metrics.ArchiveForecastSample(slot, func(from, to time.Time) float64 {
+		return solarEnergy(solar, from, to)
+	}); err != nil {
+		site.log.ERROR.Printf("archive solar forecast: %v", err)
+	}
+}
+
 func (site *Site) solarDetails(solar api.Rates) solarDetails {
 	res := solarDetails{
 		Timeseries: solarTimeseries(solar),
@@ -230,6 +255,8 @@ func (site *Site) solarDetails(solar api.Rates) solarDetails {
 	if err := site.collectors[metrics.Forecast].SetEnergy(forecastSlotEnergy(solar, time.Now())); err != nil {
 		site.log.ERROR.Printf("solar forecast collector: %v", err)
 	}
+
+	site.archiveForecastSlot(solar)
 
 	if r, err := tariff.At(site.GetTariff(api.TariffUsageTemperature), time.Now()); err == nil {
 		if err := site.collectors[metrics.Temperature].SetSocTemp(r.Value, true); err != nil {

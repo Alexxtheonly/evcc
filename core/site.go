@@ -105,8 +105,9 @@ type Site struct {
 	prioritizer *prioritizer.Prioritizer // Power budgets
 	stats       *Stats                   // Stats
 
-	collectors map[string]*metrics.Collector // keyed by meter ref
-	tariffSlot time.Time                     // last persisted tariff slot
+	collectors          map[string]*metrics.Collector // keyed by meter ref
+	tariffSlot          time.Time                     // last persisted tariff slot
+	forecastArchiveSlot time.Time                     // last solar forecast lead-time archive slot
 
 	// cached measurement state, guarded by RWMutex
 	siteState
