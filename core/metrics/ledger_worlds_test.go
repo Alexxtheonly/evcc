@@ -424,6 +424,118 @@ func TestChainContributionsSumToWhole(t *testing.T) {
 	require.InDelta(t, expectedAvg, sumAvg, 1e-9)
 }
 
+// TestChainOraclePerSlotEuros is the check TestChainContributionsSumToWhole cannot
+// be: that test's Σ(W_{k-1}-W_k) == W0-W3 assertion is a telescoping identity, true
+// of any four numbers whether or not a single world is computed correctly - it would
+// have passed throughout the feed-in binding bug this test was written to catch (see
+// TestQueryTariffSlotsBindsFeedIn). This asserts each world's absolute PerSlot euro
+// figure, computed by hand below, and is deliberately built on top of the same
+// four-slot fixture plus a loadpoint (so W0/W1/W2 have EV load to price) and a
+// battery physics setup pinned to round numbers (FloorFrac 0, capacity 10kWh from
+// seedBatteryCalibration, rate ceilings raised above anything this fixture's flows
+// ever need) so the counterfactual battery's arithmetic is checkable by hand too.
+//
+// Hand computation (home/pv/import/export/price in kWh and EUR/kWh):
+//
+//	slot  home  lp   pv   grid-imp  grid-exp  p_grid  p_feedin
+//	0     2.0   0.0  0.0  2.0       0.0       0.30    0.08
+//	1     0.5   0.0  3.0  0.0       1.0       0.25    0.07
+//	2     1.5   1.0  0.2  0.8       0.0       0.35    0.06
+//	3     0.8   0.0  0.8  0.1       0.1       0.20    0.05
+//
+// W0 (no PV, no battery): import = home+lp every slot.
+//
+//	0.30*2.0 + 0.25*0.5 + 0.35*2.5 + 0.20*0.8 = 0.60+0.125+0.875+0.16 = 1.76
+//
+// W1 (PV self-consumption only): slot0 import2.0, slot1 export2.5, slot2
+// import2.3 (load2.5-pv0.2), slot3 balanced (load0.8==pv0.8).
+//
+//	0.30*2.0 - 0.07*2.5 + 0.35*2.3 - 0 = 0.60-0.175+0.805+0 = 1.23
+//
+// W2 (dumb-rule battery, floor 0, capacity 10kWh, starts at measured 50% = 5.0kWh,
+// rate ceilings non-binding): slot0 discharges the full 2.0kWh deficit (available
+// 5.0*0.9=4.5kWh headroom), landing at 5.0-2.0/0.9=2.7778kWh; slot1 charges the full
+// 2.5kWh surplus, landing at 2.7778+2.5*0.9=5.0278kWh; slot2 discharges the full
+// 2.3kWh deficit, landing at 5.0278-2.3/0.9=2.4722kWh; slot3's load and PV are
+// exactly equal (0.8==0.8), so neither charges nor discharges. Every slot's grid
+// flow is therefore exactly zero:
+//
+//	W2 PerSlot = 0
+//
+// W3 (actual, measured grid meter):
+//
+//	0.30*2.0 - 0.07*1.0 + 0.35*0.8 - 0 + (0.20*0.1 - 0.05*0.1) = 0.60-0.07+0.28+0.015 = 0.825
+func TestChainOraclePerSlotEuros(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	pv := mustCreateEntity(t, PV, "pv1")
+	bat := mustCreateEntity(t, Battery, "bat1")
+	lp := mustCreateEntity(t, Loadpoint, "lp-1")
+
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	// force FloorFrac to exactly 0: an isolated history row (far from any other
+	// timestamp, so it never enters a contiguous charge/discharge window) with the
+	// lowest SoC on record.
+	zero := 0.0
+	require.NoError(t, persist(bat, time.Date(2026, 6, 1, 0, 0, 0, 0, loc), 0, 0, &zero, false, false))
+
+	// raise MaxChargeKWh/MaxDischargeKWh (p99 of observed per-slot energy) well above
+	// anything this fixture's flows ever ask for, so W2's rate ceiling never binds and
+	// the hand computation above doesn't have to account for it. Isolated timestamps,
+	// no SoC reading, so they're excluded from both the capacity-window and
+	// FloorFrac(haveSoc) calculations - see batteryHistoryRows/deriveBatteryCapacityFromHistory.
+	require.NoError(t, persist(bat, time.Date(2026, 6, 2, 0, 0, 0, 0, loc), 3.5, 0, nil, false, false))
+	require.NoError(t, persist(bat, time.Date(2026, 6, 3, 0, 0, 0, 0, loc), 0, 3.5, nil, false, false))
+
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, loc)
+
+	type seed struct {
+		home, lp, pv, gridImport, gridExport, soc, priceGrid, priceFeedIn float64
+	}
+	seeds := []seed{
+		{home: 2.0, lp: 0.0, pv: 0.0, gridImport: 2.0, gridExport: 0.0, soc: 50, priceGrid: 0.30, priceFeedIn: 0.08},
+		{home: 0.5, lp: 0.0, pv: 3.0, gridImport: 0.0, gridExport: 1.0, soc: 55, priceGrid: 0.25, priceFeedIn: 0.07},
+		{home: 1.5, lp: 1.0, pv: 0.2, gridImport: 0.8, gridExport: 0.0, soc: 60, priceGrid: 0.35, priceFeedIn: 0.06},
+		{home: 0.8, lp: 0.0, pv: 0.8, gridImport: 0.1, gridExport: 0.1, soc: 58, priceGrid: 0.20, priceFeedIn: 0.05},
+	}
+
+	for i, s := range seeds {
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		require.NoError(t, persist(grid, ts, s.gridImport, s.gridExport, nil, false, false))
+		require.NoError(t, persist(home, ts, s.home, 0, nil, false, false))
+		require.NoError(t, persist(pv, ts, s.pv, 0, nil, false, false))
+		require.NoError(t, persist(lp, ts, s.lp, 0, nil, false, false))
+		soc := s.soc
+		require.NoError(t, persist(bat, ts, 0, 0, &soc, false, false))
+		g, f := s.priceGrid, s.priceFeedIn
+		require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+	}
+
+	from := base
+	to := base.Add(time.Duration(len(seeds)) * 15 * time.Minute)
+
+	chain, err := ComputeChain(context.Background(), from, to)
+	require.NoError(t, err)
+	require.Len(t, chain.Worlds, 4)
+	require.NotNil(t, chain.BatteryPhysics)
+	require.InDelta(t, 0, chain.BatteryPhysics.FloorFrac, 1e-9)
+	require.GreaterOrEqual(t, chain.BatteryPhysics.MaxChargeKWh, 3.0)
+	require.GreaterOrEqual(t, chain.BatteryPhysics.MaxDischargeKWh, 3.0)
+
+	require.InDelta(t, 1.76, chain.Worlds[0].Settled.PerSlot, 1e-9, "W0")
+	require.InDelta(t, 1.23, chain.Worlds[1].Settled.PerSlot, 1e-9, "W1")
+	require.InDelta(t, 0.0, chain.Worlds[2].Settled.PerSlot, 1e-9, "W2")
+	require.InDelta(t, 0.825, chain.Worlds[3].Settled.PerSlot, 1e-9, "W3")
+
+	require.Len(t, chain.Contributions, 3)
+	require.NotEqual(t, 0.0, chain.Contributions[1].Settled.PerSlot, `"Battery" contribution must not be zero - a zero here means W2 collapsed to W1`)
+}
+
 // TestComputeW0W1IncludeLoadpointLoad is a narrow unit test on the world functions
 // directly (no DB): HomeKWh alone is a derived residual with loadpoint charge power
 // already subtracted out by core/site.go's updatePower, so W0/W1 must price

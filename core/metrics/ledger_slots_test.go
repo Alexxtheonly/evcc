@@ -212,3 +212,29 @@ func TestBuildLedgerSlotsEnergyBalance(t *testing.T) {
 	sinks := s.HomeKWh + s.LoadpointKWh + s.GridExportKWh + s.BatteryChargeKWh
 	require.InDelta(t, sources, sinks, 1e-9, "PV + import + discharge must balance home + loadpoint + export + charge")
 }
+
+// TestQueryTariffSlotsBindsFeedIn covers the GORM naming-strategy trap:
+// tariffValue tags FeedIn as column "feedin" (see tariffValue in tariffs.go), but
+// queryTariffSlots' local scan struct left the field untagged, so GORM's default
+// naming strategy expected a "feed_in" column and the actual "feedin" column never
+// bound - every export in the ledger silently priced at EUR 0 regardless of what
+// was on record. Grid was unaffected only because its column name happens to equal
+// its lowercased field name.
+func TestQueryTariffSlotsBindsFeedIn(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	loc := time.Now().Location()
+	ts := time.Date(2026, 8, 20, 12, 0, 0, 0, loc)
+
+	g, f := 0.30, 0.08
+	require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+
+	slots, err := queryTariffSlots(context.Background(), ts, ts.Add(15*time.Minute))
+	require.NoError(t, err)
+	require.Contains(t, slots, ts.Unix())
+
+	got := slots[ts.Unix()]
+	require.InDelta(t, 0.30, got.Grid, 1e-9)
+	require.InDelta(t, 0.08, got.FeedIn, 1e-9, "FeedIn must bind from the \"feedin\" column, not stay at its zero value")
+}

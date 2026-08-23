@@ -200,8 +200,15 @@ type tariffSlot struct {
 // with a fabricated value.
 func queryTariffSlots(ctx context.Context, from, to time.Time) (map[int64]tariffSlot, error) {
 	type row struct {
-		Ts           int64
-		Grid, FeedIn float64
+		Ts   int64
+		Grid float64
+		// gorm's default naming strategy maps field FeedIn to column "feed_in", but
+		// tariffValue's own gorm tag (and the Select below) uses "feedin" - without
+		// this explicit tag the scan silently left FeedIn at its zero value, so
+		// every export in the ledger priced at EUR 0 regardless of what was on
+		// record. Grid was unaffected only because its column name happens to equal
+		// its lowercased field name. See TestQueryTariffSlotsBindsFeedIn.
+		FeedIn float64 `gorm:"column:feedin"`
 	}
 	var res []row
 	if err := db.Instance.WithContext(ctx).Model(new(tariffValue)).
