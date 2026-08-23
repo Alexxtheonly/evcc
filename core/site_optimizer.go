@@ -1309,6 +1309,11 @@ func (site *Site) optimizerUpdate(battery []types.Measurement) error {
 		Details: details,
 	})
 
+	// diagnostic record of the run itself (ADR-011), independent of whether
+	// the result was usable - an Infeasible run is exactly the kind of thing
+	// this table exists to make visible after the fact
+	site.persistOptimizerRun(string(resp.JSON200.Status), *resp.JSON200)
+
 	// feasible results are usable, they are just not proven optimal
 	if status := resp.JSON200.Status; status != optimizer.Optimal && status != optimizer.Feasible {
 		return errors.New(string(status))
@@ -1416,6 +1421,58 @@ func newOptimizerDiagnosticsPublish(res optimizer.OptimizationResult) optimizerD
 			GridImportLimitExceeded: res.LimitViolations.GridImportLimitExceeded,
 			GridExportLimitHit:      res.LimitViolations.GridExportLimitHit,
 		},
+	}
+}
+
+// optimizerRunResultStatuses are the solver statuses that produced an actual
+// schedule. The optimizer client's wire format zero-values ObjectiveValue and
+// the overshoot slices for any other status - see
+// optimizer.OptimizationResult.ObjectiveValue's doc comment ("present for
+// Optimal and Feasible, null otherwise") - so for any other status those
+// fields would read as a false "no overshoot" instead of "no schedule to
+// measure" if persisted as-is.
+var optimizerRunResultStatuses = map[optimizer.OptimizationResultStatus]bool{
+	optimizer.Optimal:  true,
+	optimizer.Feasible: true,
+}
+
+// persistOptimizerRun stores the diagnostic outcome of one optimizer run for
+// ADR-011, gated to the same 15min slot boundary as persistTariffs and
+// persistControlSlot: automatic mode calls the optimizer roughly once per
+// control-loop cycle (~30s), so without the gate this would grow far faster
+// than the ~96 rows/day the ledger design accounts for. Called for every
+// completed run regardless of solver outcome - an Infeasible or timed-out run
+// is itself diagnostic information, not something to silently drop.
+//
+// Only ever called from optimizerUpdate, itself only reachable while the
+// caller (optimizerUpdateAsync) already holds site.optimizerMu for the whole
+// run - so optimizerRunSlot, like optimizerUpdated beside it, is read and
+// written here without taking the lock again; optimizerMu is a plain
+// sync.Mutex and re-locking it on the same goroutine would deadlock.
+func (site *Site) persistOptimizerRun(status string, res optimizer.OptimizationResult) {
+	slot := time.Now().Truncate(tariff.SlotDuration)
+
+	last := site.optimizerRunSlot
+	site.optimizerRunSlot = slot
+
+	// skip repeat ticks within the slot and the partial boot slot
+	if last.IsZero() || !slot.After(last) {
+		return
+	}
+
+	var objective, importOvershoot, exportOvershoot *float64
+	var importLimitExceeded, exportLimitHit *bool
+
+	if optimizerRunResultStatuses[optimizer.OptimizationResultStatus(status)] {
+		objective = lo.ToPtr(float64(res.ObjectiveValue))
+		importOvershoot = lo.ToPtr(float64(lo.Sum(res.GridImportOvershoot)))
+		exportOvershoot = lo.ToPtr(float64(lo.Sum(res.GridExportOvershoot)))
+		importLimitExceeded = lo.ToPtr(res.LimitViolations.GridImportLimitExceeded)
+		exportLimitHit = lo.ToPtr(res.LimitViolations.GridExportLimitHit)
+	}
+
+	if err := metrics.PersistOptimizerRun(slot, status, objective, importOvershoot, exportOvershoot, importLimitExceeded, exportLimitHit); err != nil {
+		site.log.ERROR.Printf("persist optimizer run: %v", err)
 	}
 }
 

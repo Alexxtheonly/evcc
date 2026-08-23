@@ -144,6 +144,7 @@ type Site struct {
 	optimizerMu      sync.Mutex                     // guards optimizer runs
 	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu
 	optimizerClient  *optimizer.ClientWithResponses // cached api client for connection reuse, guarded by optimizerMu
+	optimizerRunSlot time.Time                      // last persisted optimizer_runs slot (ADR-011), guarded by optimizerMu
 
 	solarScaleCached       func() (float64, error)             // util.Cached wrapper around querySolarScale
 	solarScaleByLeadCached func() (map[int]float64, error)     // util.Cached wrapper around querySolarScaleByLead

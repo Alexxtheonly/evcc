@@ -142,7 +142,11 @@ func SetupSchema() error {
 	// savings ledger persistence (ADR-011): what the control loop decided and
 	// under what configuration, so a later replay can audit it instead of
 	// only having whatever is live right now
-	return db.Instance.AutoMigrate(new(controlSlot))
+	if err := db.Instance.AutoMigrate(new(controlSlot)); err != nil {
+		return err
+	}
+
+	return db.Instance.AutoMigrate(new(optimizerRun))
 }
 
 // OnPersist, if set, is called with the slot start after a slot is written.

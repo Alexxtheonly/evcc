@@ -1261,3 +1261,70 @@ func TestPersistControlSlotPriceAbsentWhenNotCharging(t *testing.T) {
 	require.NoError(t, db.Instance.Raw("SELECT price FROM control_slots").Row().Scan(&price))
 	assert.Nil(t, price)
 }
+
+// TestPersistOptimizerRunGate exercises the ADR-011 optimizer_runs slot gate,
+// same rationale as TestPersistControlSlotGate.
+func TestPersistOptimizerRunGate(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{log: util.NewLogger("foo")}
+
+	res := optimizer.OptimizationResult{
+		ObjectiveValue:      2.5,
+		GridImportOvershoot: []float32{10, 20},
+	}
+
+	countRows := func() int64 {
+		var n int64
+		require.NoError(t, db.Instance.Table("optimizer_runs").Count(&n).Error)
+		return n
+	}
+
+	site.persistOptimizerRun("Optimal", res)
+	assert.Equal(t, int64(0), countRows())
+
+	site.persistOptimizerRun("Optimal", res)
+	assert.Equal(t, int64(0), countRows())
+
+	site.optimizerRunSlot = site.optimizerRunSlot.Add(-tariff.SlotDuration)
+	site.persistOptimizerRun("Optimal", res)
+	assert.Equal(t, int64(1), countRows())
+
+	// still gated even though the outcome (and hence the row's contents)
+	// would differ - the gate is purely time-based
+	site.persistOptimizerRun("Infeasible", res)
+	assert.Equal(t, int64(1), countRows())
+
+	var status string
+	var objective *float64
+	require.NoError(t, db.Instance.Raw(
+		"SELECT status, objective_value FROM optimizer_runs",
+	).Row().Scan(&status, &objective))
+	assert.Equal(t, "Optimal", status)
+	require.NotNil(t, objective)
+	assert.InDelta(t, 2.5, *objective, 0.001)
+}
+
+// TestPersistOptimizerRunInfeasibleHasNoDiagnostics asserts that a run which
+// didn't produce a schedule persists no numeric diagnostics at all, rather
+// than the wire format's zero-valued ObjectiveValue/overshoot fields being
+// mistaken for a real "zero overshoot" result.
+func TestPersistOptimizerRunInfeasibleHasNoDiagnostics(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{log: util.NewLogger("foo")}
+
+	// zero-valued result, as the client would decode for an Infeasible run
+	site.persistOptimizerRun("Infeasible", optimizer.OptimizationResult{})
+	site.optimizerRunSlot = site.optimizerRunSlot.Add(-tariff.SlotDuration)
+	site.persistOptimizerRun("Infeasible", optimizer.OptimizationResult{})
+
+	var objective, importOvershoot *float64
+	require.NoError(t, db.Instance.Raw(
+		"SELECT objective_value, grid_import_overshoot FROM optimizer_runs",
+	).Row().Scan(&objective, &importOvershoot))
+	assert.Nil(t, objective)
+	assert.Nil(t, importOvershoot)
+}

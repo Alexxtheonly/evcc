@@ -26,6 +26,16 @@ func TestSetupSchemaControlSlots(t *testing.T) {
 	require.NoError(t, SetupSchema())
 }
 
+// TestSetupSchemaOptimizerRuns is TestSetupSchemaControlSlots's counterpart
+// for the ADR-011 optimizer_runs table.
+func TestSetupSchemaOptimizerRuns(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	require.True(t, db.Instance.Migrator().HasTable(new(optimizerRun)))
+	require.NoError(t, SetupSchema())
+}
+
 func TestSqliteTimestamp(t *testing.T) {
 	clock := clock.NewMock()
 	clock.Add(time.Hour)
