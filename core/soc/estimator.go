@@ -10,12 +10,14 @@ import (
 const (
 	ChargeEfficiency = 0.85 // assume 85% charge efficiency
 
+	// minChargePower and maxChargePower are the generic taper's default endpoints, used
+	// until a vehicle-specific pair is learned from session history (see SeedChargeTaper) and
+	// as the permanent fallback for the free RemainingChargeDuration function, which has no
+	// per-vehicle estimator to learn from. maxChargeSoc (the taper knee) is never learned -
+	// see PriorChargeTaper for why - so it stays a plain constant here, not an Estimator field.
 	minChargePower = 1000.0  // charge power at 100% soc (just before the vehicle stops charging)
 	maxChargePower = 50000.0 // charge power up to maxChargeSoc
 	maxChargeSoc   = 50.0    // soc up to which maxChargePower is available
-
-	// power reduction per soc percent above maxChargeSoc
-	powerPerSoc = (maxChargePower - minChargePower) / (100 - maxChargeSoc)
 
 	// plausible charge efficiency bounds for a learned or seeded energyPerSocStep. A real
 	// session can't exceed 100% (more battery than energy delivered), and even a cold-weather
@@ -24,6 +26,13 @@ const (
 	// so it is rejected rather than trusted.
 	minPlausibleEfficiency = 0.5
 	maxPlausibleEfficiency = 1.0
+
+	// plausible bounds for a learned charge-power taper. minPlausibleChargePower rules out a
+	// near-zero reading (glitched meter, a session that never actually charged); maxPlausibleChargePower
+	// is a generous ceiling for a home or workplace EVSE - this guards against a corrupted
+	// reading, not against any particular vehicle's real charge curve, which varies widely.
+	minPlausibleChargePower = 100.0
+	maxPlausibleChargePower = 150000.0
 )
 
 // PlausibleEnergyPerSocStep reports whether step (Wh per soc percent) implies a charge
@@ -42,6 +51,13 @@ func PlausibleEnergyPerSocStep(step, capacity float64) bool {
 	}
 	perStepAt100 := capacity / 100
 	return step >= perStepAt100/maxPlausibleEfficiency && step <= perStepAt100/minPlausibleEfficiency
+}
+
+// PlausibleChargeTaper reports whether a learned (minPower, maxPower) charge-power pair is
+// physically sane: the plateau must deliver more power than the tapered tail, by definition,
+// and both must fall within a range a home or workplace EVSE could plausibly report.
+func PlausibleChargeTaper(minPower, maxPower float64) bool {
+	return minPower >= minPlausibleChargePower && maxPower > minPower && maxPower <= maxPlausibleChargePower
 }
 
 // BlendEnergyPerSocStep folds a newly learned gradient into a previously persisted one. A
@@ -66,6 +82,12 @@ type Estimator struct {
 	initialEnergy     float64 // energy counter at first valid soc in Wh
 	prevSoc           float64 // vehicle soc at last soc change in %
 	prevChargedEnergy float64 // charged energy at last soc change in Wh
+
+	// charge-power taper endpoints (W), defaulted from the package constants and optionally
+	// overridden by SeedChargeTaper. The knee soc (maxChargeSoc) is not part of this - see
+	// PriorChargeTaper for why.
+	minChargePower float64
+	maxChargePower float64
 }
 
 // NewEstimator creates new estimator
@@ -76,6 +98,19 @@ func NewEstimator(log *util.Logger, vehicle api.Vehicle) *Estimator {
 		log:              log,
 		capacity:         capacity,
 		energyPerSocStep: capacity / ChargeEfficiency / 100, // initial gradient taking efficiency into account
+		minChargePower:   minChargePower,
+		maxChargePower:   maxChargePower,
+	}
+}
+
+// SeedChargeTaper overrides the default charge-power taper (min power near 100% soc, max
+// plateau power below maxChargeSoc) with a pair learned from session history, e.g. via
+// session.PriorChargeTaper. Ignored if the pair is not plausible, so a corrupted or thin
+// history can't derail a fresh estimator.
+func (s *Estimator) SeedChargeTaper(minPower, maxPower float64) {
+	if PlausibleChargeTaper(minPower, maxPower) {
+		s.minChargePower = minPower
+		s.maxChargePower = maxPower
 	}
 }
 
@@ -107,16 +142,23 @@ func (s *Estimator) virtualCapacity() float64 {
 
 // RemainingChargeDuration returns the estimated remaining duration
 func (s *Estimator) RemainingChargeDuration(targetSoc, chargePower float64) time.Duration {
-	return remainingChargeDuration(targetSoc, chargePower, s.vehicleSoc, s.virtualCapacity())
+	return remainingChargeDuration(targetSoc, chargePower, s.vehicleSoc, s.virtualCapacity(), s.minChargePower, s.maxChargePower)
 }
 
 func RemainingChargeDuration(targetSoc, chargePower, vehicleSoc, capacity float64) time.Duration {
-	return remainingChargeDuration(targetSoc, chargePower, vehicleSoc, capacity*1e3/ChargeEfficiency)
+	return remainingChargeDuration(targetSoc, chargePower, vehicleSoc, capacity*1e3/ChargeEfficiency, minChargePower, maxChargePower)
 }
 
-func remainingChargeDuration(targetSoc, chargePower, vehicleSoc, virtualCapacity float64) time.Duration {
+// remainingChargeDuration models a linear taper: full power (up to minPower/maxPower) below
+// maxChargeSoc, decaying linearly to minPower at 100%. minPower/maxPower are either the
+// generic defaults or a vehicle-specific pair learned from session history (see
+// Estimator.SeedChargeTaper); the knee itself (maxChargeSoc) is always the generic constant.
+func remainingChargeDuration(targetSoc, chargePower, vehicleSoc, virtualCapacity, minPower, maxPower float64) time.Duration {
+	// power reduction per soc percent above maxChargeSoc
+	powerPerSoc := (maxPower - minPower) / (100 - maxChargeSoc)
+
 	// soc above which charge power starts to taper off
-	taperSoc := 100 - (chargePower-minChargePower)/powerPerSoc
+	taperSoc := 100 - (chargePower-minPower)/powerPerSoc
 
 	var hours float64
 
@@ -125,9 +167,9 @@ func remainingChargeDuration(targetSoc, chargePower, vehicleSoc, virtualCapacity
 		hours += (min(targetSoc, taperSoc) - vehicleSoc) / 100 * virtualCapacity / chargePower
 	}
 
-	// above the taper point power decreases linearly towards minChargePower
+	// above the taper point power decreases linearly towards minPower
 	if targetSoc > taperSoc {
-		hours += (targetSoc - max(vehicleSoc, taperSoc)) / 100 * virtualCapacity / ((chargePower + minChargePower) / 2)
+		hours += (targetSoc - max(vehicleSoc, taperSoc)) / 100 * virtualCapacity / ((chargePower + minPower) / 2)
 	}
 
 	return max(0, time.Duration(float64(time.Hour)*hours)).Round(time.Second)

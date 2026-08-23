@@ -209,3 +209,46 @@ func TestEstimatorLearned(t *testing.T) {
 	assert.True(t, ce.Learned())
 	assert.InDelta(t, 1500.0/15, ce.EnergyPerSocStep(), 1e-9)
 }
+
+func TestPlausibleChargeTaper(t *testing.T) {
+	tc := []struct {
+		minPower, maxPower float64
+		want               bool
+	}{
+		{1000, 11000, true},   // typical single-phase home wallbox taper
+		{11000, 1000, false},  // plateau below tail: physically backwards
+		{1000, 1000, false},   // no taper at all
+		{0, 11000, false},     // tail at or below the implausibility floor
+		{1000, 200000, false}, // plateau above the generous EVSE ceiling
+		{-500, 11000, false},  // negative reading, e.g. a sign error
+	}
+
+	for _, c := range tc {
+		assert.Equal(t, c.want, PlausibleChargeTaper(c.minPower, c.maxPower), "min=%.0f max=%.0f", c.minPower, c.maxPower)
+	}
+}
+
+// TestEstimatorSeedChargeTaper mirrors TestEstimatorSeed for the charge-power taper: an
+// implausible pair is ignored (default kept), a plausible one is adopted and actually changes
+// the duration estimate, not just the stored fields.
+func TestEstimatorSeedChargeTaper(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	vehicle := api.NewMockVehicle(ctrl)
+	vehicle.EXPECT().Capacity().Return(50.0).AnyTimes() // 50 kWh
+
+	ce := NewEstimator(util.NewLogger("foo"), vehicle)
+	ce.vehicleSoc = 10
+
+	before := ce.RemainingChargeDuration(60, 11000)
+
+	// implausible pair (plateau below tail) is ignored, default taper is kept
+	ce.SeedChargeTaper(11000, 1000)
+	assert.Equal(t, before, ce.RemainingChargeDuration(60, 11000))
+
+	// plausible pair is adopted: a lower learned plateau (11kW vs the generic 50kW) means the
+	// requested 11kW charge power now sits at the learned ceiling instead of far below a
+	// theoretical one, changing the taper point and thus the estimate
+	ce.SeedChargeTaper(1200, 11000)
+	after := ce.RemainingChargeDuration(60, 11000)
+	assert.NotEqual(t, before, after)
+}

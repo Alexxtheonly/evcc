@@ -254,19 +254,25 @@ func (lp *Loadpoint) persistSocGradient(v api.Vehicle) {
 	lp.log.DEBUG.Printf("persisted soc gradient for %s: %.1fWh/%%", v.GetTitle(), value)
 }
 
-// seedSocGradient seeds a freshly created estimator's energy-per-soc-step from a previously
-// learned value: the vehicle's own persisted gradient if present, otherwise a prior derived
-// from its session history (median across qualifying sessions, see session.PriorSocGradient)
-// so learning does not have to wait for the first live session on a vehicle evcc already has
-// history for. Falls back to the estimator's own constant-efficiency default (see
-// soc.NewEstimator) when neither is available or plausible - Seed silently ignores an
+// seedSocGradient seeds a freshly created estimator's energy-per-soc-step and charge-power
+// taper from history, so learning does not have to wait for the first live session on a
+// vehicle evcc already has data for.
+//
+// The soc gradient prefers the vehicle's own persisted value if present, otherwise a prior
+// derived from session history (median across qualifying sessions, see
+// session.PriorSocGradient); falls back to the estimator's own constant-efficiency default
+// (see soc.NewEstimator) when neither is available or plausible - Seed silently ignores an
 // implausible value.
+//
+// The charge-power taper (min/max power, see soc.Estimator.SeedChargeTaper) has no persisted
+// counterpart of its own - unlike the soc gradient there is no live in-session learning step
+// to persist, so it is always re-derived from session history on attach instead.
 func (lp *Loadpoint) seedSocGradient(v api.Vehicle) {
 	settingsAPI := vehicle.Settings(lp.log, v)
 
-	if stored, ok := settingsAPI.GetSocGradient(); ok {
-		lp.socEstimator.Seed(stored)
-		return
+	storedGradient, hasStoredGradient := settingsAPI.GetSocGradient()
+	if hasStoredGradient {
+		lp.socEstimator.Seed(storedGradient)
 	}
 
 	if db.Instance == nil {
@@ -279,8 +285,16 @@ func (lp *Loadpoint) seedSocGradient(v api.Vehicle) {
 		return
 	}
 
-	if prior, ok := session.PriorSocGradient(sessions); ok {
-		lp.socEstimator.Seed(prior)
+	// the persisted gradient, if any, already reflects everything session history could
+	// teach the live estimator - recomputing session.PriorSocGradient would just relearn it
+	if !hasStoredGradient {
+		if prior, ok := session.PriorSocGradient(sessions); ok {
+			lp.socEstimator.Seed(prior)
+		}
+	}
+
+	if minPower, maxPower, ok := session.PriorChargeTaper(sessions); ok {
+		lp.socEstimator.SeedChargeTaper(minPower, maxPower)
 	}
 }
 

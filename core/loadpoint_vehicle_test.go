@@ -9,9 +9,11 @@ import (
 	"github.com/benbjohnson/clock"
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/coordinator"
+	"github.com/evcc-io/evcc/core/session"
 	"github.com/evcc-io/evcc/core/settings"
 	"github.com/evcc-io/evcc/core/soc"
 	"github.com/evcc-io/evcc/core/vehicle"
+	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
 	"github.com/stretchr/testify/assert"
@@ -730,4 +732,47 @@ func TestPersistSocGradientUnknownVehicle(t *testing.T) {
 	lp.socEstimator = fresh
 	assert.NotPanics(t, func() { lp.seedSocGradient(v) })
 	assert.Equal(t, fresh.EnergyPerSocStep(), lp.socEstimator.EnergyPerSocStep(), "no db, no stored value: default is kept")
+}
+
+// TestSeedChargeTaperFromSessionHistory verifies seedSocGradient also seeds the estimator's
+// charge-power taper from session history (session.PriorChargeTaper). Unlike the soc
+// gradient, the taper has no persisted counterpart of its own - there is no live in-session
+// learning step to persist - so it must be re-derived from history on every attach, not just
+// when nothing is stored yet.
+func TestSeedChargeTaperFromSessionHistory(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.AutoMigrate(new(session.Session)))
+
+	const name = "taper-vehicle"
+	hour, twoHours := time.Hour, 2*time.Hour
+
+	mk := func(socStart, socEnd, kwh float64, d time.Duration) session.Session {
+		return session.Session{Vehicle: name, SocStart: &socStart, SocEnd: &socEnd, ChargedEnergy: kwh, ChargeDuration: &d}
+	}
+
+	for _, s := range []session.Session{
+		mk(10, 40, 11, hour), // plateau sessions, ~11000W
+		mk(5, 35, 11.2, hour),
+		mk(15, 45, 10.8, hour),
+		mk(60, 100, 2.4, twoHours), // tail sessions, ~1200W
+		mk(55, 95, 2.6, twoHours),
+		mk(70, 100, 1.1, hour),
+	} {
+		s := s
+		require.NoError(t, db.Instance.Create(&s).Error)
+	}
+
+	ctrl := gomock.NewController(t)
+	v := api.NewMockVehicle(ctrl)
+	v.EXPECT().Capacity().Return(50.0).AnyTimes()
+	v.EXPECT().GetTitle().Return(name).AnyTimes()
+
+	lp := NewLoadpoint(util.NewLogger("foo"), nil)
+	lp.socEstimator = soc.NewEstimator(lp.log, v)
+	before := lp.socEstimator.RemainingChargeDuration(100, 11000)
+
+	lp.seedSocGradient(v)
+	after := lp.socEstimator.RemainingChargeDuration(100, 11000)
+
+	assert.NotEqual(t, before, after, "the learned taper (plateau ~11kW, tail ~1.2kW) must change the duration estimate")
 }
