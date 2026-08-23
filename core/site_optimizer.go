@@ -589,12 +589,36 @@ type optimizerHealthPublish struct {
 	Updated time.Time             `json:"updated,omitzero"`
 }
 
-// publishOptimizerHealth publishes the outcome of a completed run attempt -
-// Updated always advances to now. Called from optimizerUpdateAsync's deferred
-// handler for every outcome except errOptimizerNotReady, which leaves the
-// previous status in place for a silent retry on the next cycle.
-func (site *Site) publishOptimizerHealth(ok bool, reason optimizerHealthReason) {
+// optimizerHealthSteadyReasons are run outcomes that describe a persistent
+// configuration state rather than a genuine result of that particular run -
+// the same category publishOptimizerHealthGate already dedupes for
+// notSponsored/disabled. errOptimizerNotConfigured belongs here too: in
+// automatic mode optimizerUpdateAsync runs on every loadpoint cycle, so
+// without dedup a site with no battery/vehicle/loadpoint configured yet
+// republishes "not configured" - and re-clears suggestions - forever.
+// Genuine run results (success, solver errors, missing tariff) are
+// intentionally excluded so Updated keeps advancing on every real attempt.
+var optimizerHealthSteadyReasons = map[optimizerHealthReason]bool{
+	optimizerHealthReasonNotConfigured: true,
+}
+
+// publishOptimizerHealth publishes the outcome of a completed run attempt and
+// reports whether it actually changed the published state. For steady-state
+// reasons (see optimizerHealthSteadyReasons) a repeat of the same {ok, reason}
+// is a no-op - Updated does not advance and nothing is published, mirroring
+// publishOptimizerHealthGate. For every other reason the call always publishes
+// and Updated always advances to now. Called from optimizerUpdateAsync's
+// deferred handler for every outcome except errOptimizerNotReady, which leaves
+// the previous status in place for a silent retry on the next cycle.
+func (site *Site) publishOptimizerHealth(ok bool, reason optimizerHealthReason) bool {
 	site.Lock()
+	changed := site.optimizerHealthOk != ok || site.optimizerHealthReason != reason
+
+	if optimizerHealthSteadyReasons[reason] && !changed {
+		site.Unlock()
+		return false
+	}
+
 	site.optimizerHealthOk = ok
 	site.optimizerHealthReason = reason
 	site.optimizerHealthUpdated = time.Now()
@@ -602,6 +626,7 @@ func (site *Site) publishOptimizerHealth(ok bool, reason optimizerHealthReason) 
 	site.Unlock()
 
 	site.publish(keys.OptimizerHealth, optimizerHealthPublish{Ok: ok, Reason: reason, Updated: updated})
+	return changed
 }
 
 // publishOptimizerHealthGate publishes why the optimizer isn't even attempting
@@ -912,9 +937,12 @@ func (site *Site) optimizerUpdateAsync(force bool) {
 		case err == nil:
 			site.publishOptimizerHealth(true, optimizerHealthReasonNone)
 		case errors.Is(err, errOptimizerNotConfigured):
-			// stale advice must not linger
-			site.clearSuggestions()
-			site.publishOptimizerHealth(false, optimizerHealthReasonNotConfigured)
+			// only clear on the transition into "not configured" - repeat runs
+			// while nothing is configured must not keep re-clearing and
+			// re-publishing suggestions/battery/mode that are already cleared
+			if site.publishOptimizerHealth(false, optimizerHealthReasonNotConfigured) {
+				site.clearSuggestions()
+			}
 		default:
 			site.log.ERROR.Println("optimizer:", err)
 

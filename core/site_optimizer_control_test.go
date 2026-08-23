@@ -429,3 +429,36 @@ func TestPublishOptimizerHealthAlwaysAdvances(t *testing.T) {
 	require.Len(t, second, 1, "identical outcome must still be published")
 	assert.False(t, second[0].Updated.Before(first[0].Updated))
 }
+
+// TestPublishOptimizerHealthNotConfiguredDedupes guards against a site with no
+// battery/vehicle/loadpoint configured (a settings flag automatic mode does
+// not require a battery for, see optimizerUpdateAsync) spamming an unchanged
+// "not configured" status - and its caller re-clearing already-cleared
+// suggestions - on every loadpoint cycle forever, the same class of steady
+// state publishOptimizerHealthGate already dedupes for disabled/notSponsored.
+func TestPublishOptimizerHealthNotConfiguredDedupes(t *testing.T) {
+	params := make(chan util.Param, 64)
+	site := &Site{log: util.NewLogger("foo"), valueChan: params}
+
+	changed := site.publishOptimizerHealth(false, optimizerHealthReasonNotConfigured)
+	assert.True(t, changed, "first observation of a steady reason is a real transition")
+
+	changed = site.publishOptimizerHealth(false, optimizerHealthReasonNotConfigured)
+	assert.False(t, changed, "repeat of the same steady reason is not a transition")
+
+	changed = site.publishOptimizerHealth(false, optimizerHealthReasonNotConfigured)
+	assert.False(t, changed)
+
+	got := drainOptimizerHealth(params)
+	require.Len(t, got, 1, "must only publish once for an unchanged steady reason")
+	assert.False(t, got[0].Ok)
+	assert.Equal(t, optimizerHealthReasonNotConfigured, got[0].Reason)
+
+	// a genuine run outcome (e.g. a battery gets configured) is always a
+	// transition out of the steady state and publishes again
+	changed = site.publishOptimizerHealth(true, optimizerHealthReasonNone)
+	assert.True(t, changed)
+	got = drainOptimizerHealth(params)
+	require.Len(t, got, 1)
+	assert.Equal(t, optimizerHealthReasonNone, got[0].Reason)
+}
