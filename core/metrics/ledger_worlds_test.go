@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func TestDeriveBatteryPhysics(t *testing.T) {
 	loc := time.Now().Location()
 	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
 
-	phys, err := deriveBatteryPhysics()
+	phys, err := deriveBatteryPhysics(context.Background())
 	require.NoError(t, err)
 
 	require.InDelta(t, 10.0, phys.CapacityKWh, 1e-6)
@@ -77,7 +78,7 @@ func TestDeriveBatteryPhysicsRefusesWithoutEnoughHistory(t *testing.T) {
 	require.NoError(t, persist(bat, base, 0, 0, &soc0, false, false))
 	require.NoError(t, persist(bat, base.Add(15*time.Minute), 0.1, 0, &soc1, false, false))
 
-	_, err := deriveBatteryPhysics()
+	_, err := deriveBatteryPhysics(context.Background())
 	require.ErrorIs(t, err, ErrBatteryPhysicsUnavailable)
 }
 
@@ -96,7 +97,7 @@ func TestDeriveBatteryPhysicsPrefersPersistedCapacity(t *testing.T) {
 
 	require.NoError(t, bat.updateCapacity(13.5))
 
-	phys, err := deriveBatteryPhysics()
+	phys, err := deriveBatteryPhysics(context.Background())
 	require.NoError(t, err)
 	require.InDelta(t, 13.5, phys.CapacityKWh, 1e-9)
 	require.Contains(t, phys.CapacitySource, "device-reported")
@@ -303,7 +304,7 @@ func TestChainContributionsSumToWhole(t *testing.T) {
 	from := base
 	to := base.Add(time.Duration(len(seeds)) * 15 * time.Minute)
 
-	chain, err := ComputeChain(from, to)
+	chain, err := ComputeChain(context.Background(), from, to)
 	require.NoError(t, err)
 	require.Len(t, chain.Worlds, 4)
 	require.Len(t, chain.Contributions, 3)
@@ -366,7 +367,7 @@ func TestChainAccountsForEVChargingAgainstControlAndPV(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
 	require.NoError(t, err)
 
 	control := chain.Contributions[2]
@@ -403,7 +404,7 @@ func TestChainAttributesPVToEVChargingNotPhantomExport(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
 	require.NoError(t, err)
 
 	pvContribution := chain.Contributions[0]
@@ -441,10 +442,10 @@ func TestBuildLedgerSlotsRefusesLoadpointWithoutChargeMeter(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	_, err := ComputeRealisedCost(base, base.Add(15*time.Minute))
+	_, err := ComputeRealisedCost(context.Background(), base, base.Add(15*time.Minute))
 	require.NoError(t, err, "ComputeRealisedCost reads only the grid meter and tariffs - it must not be affected by a loadpoint's missing charge meter")
 
-	_, err = ComputeChain(base, base.Add(15*time.Minute))
+	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute))
 	require.ErrorIs(t, err, ErrLoadpointNoChargeMeter)
 }
 
@@ -488,7 +489,7 @@ func TestChainControlSplitIdentities(t *testing.T) {
 	from := base
 	to := base.Add(time.Duration(len(seeds)) * 15 * time.Minute)
 
-	chain, err := ComputeChain(from, to)
+	chain, err := ComputeChain(context.Background(), from, to)
 	require.NoError(t, err)
 	require.NotNil(t, chain.Control)
 
@@ -519,7 +520,7 @@ func TestChainReportsLossWithoutClamp(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
 	require.NoError(t, err)
 
 	require.InDelta(t, 0.30, chain.Worlds[0].Settled.PerSlot, 1e-9)

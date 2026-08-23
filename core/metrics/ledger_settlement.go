@@ -4,7 +4,10 @@ package metrics
 // energy series both ways, and the realised-grid-cost figure everything else in the
 // ledger hangs off. See ledger_slots.go for the honesty rules this file shares.
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // worldFlow is one slot's grid exchange under a given world or mode: energy bought
 // from and sold to the grid, in kWh.
@@ -79,8 +82,8 @@ type RealisedCost struct {
 // from precedes the earliest priced tariff slot. Deliberately independent of
 // ComputeChain, so a caller can get the realised figure even when the battery-physics
 // derivation ComputeChain needs for W2 fails, or the site has no battery at all.
-func ComputeRealisedCost(from, to time.Time) (*RealisedCost, error) {
-	set, err := buildLedgerSlots(from, to, false)
+func ComputeRealisedCost(ctx context.Context, from, to time.Time) (*RealisedCost, error) {
+	set, err := buildLedgerSlots(ctx, from, to, false)
 	if err != nil {
 		return nil, err
 	}

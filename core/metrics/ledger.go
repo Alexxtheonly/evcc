@@ -9,7 +9,10 @@ package metrics
 // "Alternatives rejected" section - a ledger_slots table baking in today's
 // assumptions would make a later correction unauditable).
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Ledger is the full ADR-011 savings ledger response for a period: the realised
 // cost, the W0..W3 chain (with the routing/timing split when a battery is
@@ -25,20 +28,20 @@ type Ledger struct {
 // priced both ways (item 3), plus the per-slot battery-mode decision replay (item 4).
 // The realised-cost figure (item 1) is available inside Chain.Worlds (the W3/"actual"
 // entry) and via the standalone ComputeRealisedCost, which computes it independently.
-func ComputeLedger(from, to time.Time) (*Ledger, error) {
-	chain, err := ComputeChain(from, to)
+func ComputeLedger(ctx context.Context, from, to time.Time) (*Ledger, error) {
+	chain, err := ComputeChain(ctx, from, to)
 	if err != nil {
 		return nil, err
 	}
 
 	// re-derive the same slot set the chain used so the decision replay lines up
 	// with exactly the slots the chain priced - see DecisionDeltas' doc comment.
-	set, err := buildLedgerSlots(from, to, true)
+	set, err := buildLedgerSlots(ctx, from, to, true)
 	if err != nil {
 		return nil, err
 	}
 
-	decisions, err := DecisionDeltas(from, to, set, chain.BatteryPhysics)
+	decisions, err := DecisionDeltas(ctx, from, to, set, chain.BatteryPhysics)
 	if err != nil {
 		return nil, err
 	}

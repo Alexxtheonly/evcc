@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func TestRefusedBeforeTariffStart(t *testing.T) {
 	from := tariffStart.Add(-24 * time.Hour)
 	to := tariffStart
 
-	_, err := ComputeRealisedCost(from, to)
+	_, err := ComputeRealisedCost(context.Background(), from, to)
 	require.Error(t, err)
 
 	var refused *ErrBeforeTariffStart
@@ -73,7 +74,7 @@ func TestCoverageExcludesRecoveredIncompleteSlots(t *testing.T) {
 	from := base
 	to := base.Add(5 * 15 * time.Minute)
 
-	res, err := ComputeRealisedCost(from, to)
+	res, err := ComputeRealisedCost(context.Background(), from, to)
 	require.NoError(t, err)
 
 	require.Equal(t, 5, res.Coverage.TotalSlots)
@@ -83,6 +84,23 @@ func TestCoverageExcludesRecoveredIncompleteSlots(t *testing.T) {
 	// cost only over the 3 valid slots (1kWh import @ 0.25 each), not scaled up to
 	// pretend the excluded slots behaved the same way
 	require.InDelta(t, 3*0.25, res.Settled.PerSlot, 1e-9)
+}
+
+// TestBuildLedgerSlotsRefusesOversizedRange covers the Priority-3 fix: the ledger
+// endpoint is unauthenticated (server/http_savings_ledger_handler.go) and
+// ComputeLedger runs upwards of a dozen queries against a database with a single
+// connection (server/db/db.go's SetMaxOpenConns(1)) - an unbounded ?from=2000-01-01
+// would queue every other write behind it. buildLedgerSlots is the one choke point
+// every ledger computation goes through, so the cap belongs there.
+func TestBuildLedgerSlotsRefusesOversizedRange(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	from := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	_, err := buildLedgerSlots(context.Background(), from, to, false)
+	require.ErrorIs(t, err, ErrLedgerRangeTooLarge)
 }
 
 // TestBuildLedgerSlotsEnergyBalance is a data-integrity guard on buildLedgerSlots'
@@ -117,7 +135,7 @@ func TestBuildLedgerSlotsEnergyBalance(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	set, err := buildLedgerSlots(base, base.Add(15*time.Minute), true)
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), true)
 	require.NoError(t, err)
 	require.Len(t, set.Slots, 1)
 

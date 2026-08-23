@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -49,13 +50,13 @@ func TestDecisionDeltasHindsight(t *testing.T) {
 	from := base
 	to := second.Add(15 * time.Minute)
 
-	set, err := buildLedgerSlots(from, to, true)
+	set, err := buildLedgerSlots(context.Background(), from, to, true)
 	require.NoError(t, err)
 
-	phys, err := deriveBatteryPhysics()
+	phys, err := deriveBatteryPhysics(context.Background())
 	require.NoError(t, err)
 
-	rows, err := DecisionDeltas(from, to, set, &phys)
+	rows, err := DecisionDeltas(context.Background(), from, to, set, &phys)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 
@@ -82,7 +83,7 @@ func TestDecisionDeltasWithoutBatteryPhysics(t *testing.T) {
 	require.NoError(t, PersistControlSlot(base, batteryModeHold, batteryModeCharge, "payback", true, nil))
 
 	set := &ledgerSlotSet{}
-	rows, err := DecisionDeltas(base, base.Add(15*time.Minute), set, nil)
+	rows, err := DecisionDeltas(context.Background(), base, base.Add(15*time.Minute), set, nil)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Nil(t, rows[0].HindsightDeltaEUR, "no battery physics available - must not fabricate a delta")

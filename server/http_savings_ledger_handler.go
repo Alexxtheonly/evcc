@@ -2,10 +2,13 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/evcc-io/evcc/core/metrics"
 	"github.com/evcc-io/evcc/server/db"
+	"github.com/evcc-io/evcc/tariff"
 )
 
 // savingsLedgerHandler serves the ADR-011 savings ledger for a period: the
@@ -16,6 +19,13 @@ import (
 // same jsonError/jsonWrite pattern - but registered on the unauthenticated site API
 // alongside /history/energy and /tariff, since this is read-only history like those,
 // not a destructive operation like the /api/db routes.
+//
+// ComputeLedger runs upwards of a dozen queries against a database with a single
+// connection (server/db/db.go's SetMaxOpenConns(1)), and this endpoint carries no auth
+// (see the doc comment above) - r.Context() is threaded through every query so an
+// abandoned request (client gone, or metrics.ErrLedgerRangeTooLarge rejecting the
+// range up front) doesn't run to completion queued behind persist()/control-slot
+// writes for no reader.
 func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
@@ -28,16 +38,24 @@ func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ledger, err := metrics.ComputeLedger(from, to)
+	ledger, err := metrics.ComputeLedger(r.Context(), from, to)
 	if err != nil {
 		var refused *metrics.ErrBeforeTariffStart
-		if errors.As(err, &refused) {
+		switch {
+		case errors.As(err, &refused):
 			jsonError(w, http.StatusUnprocessableEntity, err)
-			return
+		case errors.Is(err, metrics.ErrLedgerRangeTooLarge):
+			jsonError(w, http.StatusBadRequest, err)
+		default:
+			jsonError(w, http.StatusInternalServerError, err)
 		}
-		jsonError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	// data only changes at the next slot boundary - same header /history/energy sets
+	// (server/http_history_handler.go)
+	maxAge := time.Until(time.Now().Truncate(tariff.SlotDuration).Add(tariff.SlotDuration))
+	w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", int(maxAge.Seconds())))
 
 	jsonWrite(w, ledger)
 }

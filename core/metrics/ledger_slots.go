@@ -9,6 +9,7 @@ package metrics
 // that lineage, that is a sign it belongs somewhere other than the ledger.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,6 +18,18 @@ import (
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
 )
+
+// MaxLedgerRangeDays bounds a single request's [from,to) window. The ledger endpoint is
+// unauthenticated (like its /history/energy and /tariff neighbours - see
+// server/http_savings_ledger_handler.go), and ComputeLedger runs upwards of a dozen
+// queries plus a battery-history scan per request against a database with a single
+// connection (server/db/db.go's SetMaxOpenConns(1)) - an unbounded ?from=2000-01-01
+// would queue every other write behind it. 400 days covers "a year plus slack" for any
+// legitimate dashboard query.
+const MaxLedgerRangeDays = 400
+
+// ErrLedgerRangeTooLarge means the requested [from,to) window exceeds MaxLedgerRangeDays.
+var ErrLedgerRangeTooLarge = fmt.Errorf("requested range exceeds the %d-day maximum", MaxLedgerRangeDays)
 
 // ErrBeforeTariffStart is returned when the requested period starts before the
 // earliest slot the tariffs table has a price for. ADR-011 honesty rule 4: refuse
@@ -36,9 +49,9 @@ func (e *ErrBeforeTariffStart) Error() string {
 // and a feed-in price are on record, or the zero time if none is. Both prices are
 // required because the ledger needs to cost import and export together - a slot with
 // only one of the two can't honestly price either.
-func EarliestTariffSlot() (time.Time, error) {
+func EarliestTariffSlot(ctx context.Context) (time.Time, error) {
 	var ts sql.NullInt64
-	if err := db.Instance.Model(new(tariffValue)).
+	if err := db.Instance.WithContext(ctx).Model(new(tariffValue)).
 		Where("grid IS NOT NULL AND feedin IS NOT NULL").
 		Select("MIN(ts)").Scan(&ts).Error; err != nil {
 		return time.Time{}, err
@@ -123,9 +136,9 @@ type groupSlotRow struct {
 // (e.g. no PV configured) - the caller must treat that as "zero energy, every slot
 // valid" rather than "every slot excluded", which is why this is a distinct return
 // value instead of an empty map.
-func queryGroupSlots(group string, from, to time.Time) (rows map[int64]groupSlotRow, hasEntities bool, err error) {
+func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (rows map[int64]groupSlotRow, hasEntities bool, err error) {
 	var ids []int
-	if err := db.Instance.Model(new(entity)).Where(`"group" = ?`, group).Pluck("id", &ids).Error; err != nil {
+	if err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, group).Pluck("id", &ids).Error; err != nil {
 		return nil, false, err
 	}
 	if len(ids) == 0 {
@@ -141,7 +154,7 @@ func queryGroupSlots(group string, from, to time.Time) (rows map[int64]groupSlot
 	}
 
 	var res []row
-	if err := db.Instance.Table("meters").
+	if err := db.Instance.WithContext(ctx).Table("meters").
 		Select(`ts, COALESCE(SUM(energy), 0) AS energy, COALESCE(SUM(return_energy), 0) AS return_energy,
 			AVG(soc_temp) AS soc_frac, MAX(CASE WHEN recovered OR incomplete THEN 1 ELSE 0 END) AS excluded`).
 		Where("meter IN ? AND ts >= ? AND ts < ?", ids, from.Unix(), to.Unix()).
@@ -166,13 +179,13 @@ type tariffSlot struct {
 // feed-in price on record. A slot missing either is simply absent from the result -
 // see buildLedgerSlots, which then excludes it from coverage rather than pricing it
 // with a fabricated value.
-func queryTariffSlots(from, to time.Time) (map[int64]tariffSlot, error) {
+func queryTariffSlots(ctx context.Context, from, to time.Time) (map[int64]tariffSlot, error) {
 	type row struct {
 		Ts           int64
 		Grid, FeedIn float64
 	}
 	var res []row
-	if err := db.Instance.Model(new(tariffValue)).
+	if err := db.Instance.WithContext(ctx).Model(new(tariffValue)).
 		Select("ts, grid, feedin").
 		Where("ts >= ? AND ts < ? AND grid IS NOT NULL AND feedin IS NOT NULL", from.Unix(), to.Unix()).
 		Scan(&res).Error; err != nil {
@@ -198,9 +211,9 @@ func queryTariffSlots(from, to time.Time) (map[int64]tariffSlot, error) {
 var ErrLoadpointNoChargeMeter = errors.New("a configured loadpoint has no charge-meter energy history; refusing to model a car-free household")
 
 // loadpointEntityIDs returns the entity ids for every configured loadpoint.
-func loadpointEntityIDs() ([]int, error) {
+func loadpointEntityIDs(ctx context.Context) ([]int, error) {
 	var ids []int
-	err := db.Instance.Model(new(entity)).Where(`"group" = ?`, Loadpoint).Pluck("id", &ids).Error
+	err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, Loadpoint).Pluck("id", &ids).Error
 	return ids, err
 }
 
@@ -208,12 +221,12 @@ func loadpointEntityIDs() ([]int, error) {
 // ids has never once written to the meters table, across all recorded history - not
 // scoped to the requested period, since "has a charge meter" is a configuration fact,
 // not something that becomes true or false slot by slot.
-func verifyLoadpointChargeMeters(ids []int) error {
+func verifyLoadpointChargeMeters(ctx context.Context, ids []int) error {
 	if len(ids) == 0 {
 		return nil
 	}
 	var withData []int
-	if err := db.Instance.Table("meters").Distinct("meter").Where("meter IN ?", ids).Pluck("meter", &withData).Error; err != nil {
+	if err := db.Instance.WithContext(ctx).Table("meters").Distinct("meter").Where("meter IN ?", ids).Pluck("meter", &withData).Error; err != nil {
 		return err
 	}
 	if len(withData) < len(ids) {
@@ -238,13 +251,19 @@ func verifyLoadpointChargeMeters(ids []int) error {
 // slotData.modelledLoadKWh(), which needs LoadpointKWh to be honest, not silently
 // zero.
 //
-// from must not precede the earliest priced tariff slot; see ErrBeforeTariffStart.
-func buildLedgerSlots(from, to time.Time, includeLoadpoint bool) (*ledgerSlotSet, error) {
+// from must not precede the earliest priced tariff slot; see ErrBeforeTariffStart. The
+// window is also capped at MaxLedgerRangeDays (ErrLedgerRangeTooLarge), and every query
+// runs WithContext(ctx) so a client disconnect (or the range guard) stops work instead
+// of running a query to completion nobody will read.
+func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint bool) (*ledgerSlotSet, error) {
 	if !to.After(from) {
 		return nil, errors.New("invalid period: to must be after from")
 	}
+	if to.Sub(from) > time.Duration(MaxLedgerRangeDays)*24*time.Hour {
+		return nil, ErrLedgerRangeTooLarge
+	}
 
-	earliest, err := EarliestTariffSlot()
+	earliest, err := EarliestTariffSlot(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +271,7 @@ func buildLedgerSlots(from, to time.Time, includeLoadpoint bool) (*ledgerSlotSet
 		return nil, &ErrBeforeTariffStart{Earliest: earliest}
 	}
 
-	gridRows, hasGrid, err := queryGroupSlots(Grid, from, to)
+	gridRows, hasGrid, err := queryGroupSlots(ctx, Grid, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +279,7 @@ func buildLedgerSlots(from, to time.Time, includeLoadpoint bool) (*ledgerSlotSet
 		return nil, errors.New("no grid meter configured")
 	}
 
-	homeRows, hasHome, err := queryGroupSlots(Home, from, to)
+	homeRows, hasHome, err := queryGroupSlots(ctx, Home, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -268,12 +287,12 @@ func buildLedgerSlots(from, to time.Time, includeLoadpoint bool) (*ledgerSlotSet
 		return nil, errors.New("no home meter configured")
 	}
 
-	pvRows, hasPV, err := queryGroupSlots(PV, from, to)
+	pvRows, hasPV, err := queryGroupSlots(ctx, PV, from, to)
 	if err != nil {
 		return nil, err
 	}
 
-	batRows, hasBattery, err := queryGroupSlots(Battery, from, to)
+	batRows, hasBattery, err := queryGroupSlots(ctx, Battery, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -281,20 +300,20 @@ func buildLedgerSlots(from, to time.Time, includeLoadpoint bool) (*ledgerSlotSet
 	var lpRows map[int64]groupSlotRow
 	var hasLoadpoint bool
 	if includeLoadpoint {
-		lpIDs, err := loadpointEntityIDs()
+		lpIDs, err := loadpointEntityIDs(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if err := verifyLoadpointChargeMeters(lpIDs); err != nil {
+		if err := verifyLoadpointChargeMeters(ctx, lpIDs); err != nil {
 			return nil, err
 		}
-		lpRows, hasLoadpoint, err = queryGroupSlots(Loadpoint, from, to)
+		lpRows, hasLoadpoint, err = queryGroupSlots(ctx, Loadpoint, from, to)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	tariffRows, err := queryTariffSlots(from, to)
+	tariffRows, err := queryTariffSlots(ctx, from, to)
 	if err != nil {
 		return nil, err
 	}

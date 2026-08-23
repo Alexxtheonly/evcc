@@ -17,12 +17,15 @@ package metrics
 // into a car as if it had been exported for feed-in revenue.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
+	"gorm.io/gorm"
 )
 
 // batteryModeNormal etc. mirror api.BatteryMode.String() as plain strings, the same
@@ -125,15 +128,54 @@ var ErrBatteryPhysicsUnavailable = errors.New("not enough battery history to der
 // refuse instead.
 const capacityDisagreementFrac = 0.15
 
+// batteryPhysicsCacheTTL bounds how long a derived batteryPhysics is reused across
+// requests. Even on the persisted-capacity path this still runs a battery-history scan
+// for the floor/max-rate fields, and ComputeChain calls it on every /api/savingsledger
+// request against a database with a single connection (server/db/db.go's
+// SetMaxOpenConns(1)) - capacity, efficiency and rate ceilings change at most a few
+// times a year, so a few minutes of staleness costs nothing a caller would notice.
+const batteryPhysicsCacheTTL = 5 * time.Minute
+
+var batteryPhysicsCache struct {
+	sync.Mutex
+	db   *gorm.DB // keys the cache to the current db.Instance, so a test's fresh :memory: DB never sees another test's entry
+	at   time.Time
+	phys batteryPhysics
+	err  error
+}
+
 // deriveBatteryPhysics establishes the counterfactual battery's capacity, preferring
 // the device-reported capacity persisted via Collector.SetCapacity (core/site.go reads
 // api.BatteryCapacity every battery-meter cycle - a hardware fact evcc already knows)
 // and falling back to deriving one from the site's own charge/discharge SoC history,
 // labelled as a fallback, only when persisted capacity isn't available for every
 // configured battery. Either way this uses the full recorded history (a hardware
-// property, not something scoped to the requested period) rather than [from,to).
-func deriveBatteryPhysics() (batteryPhysics, error) {
-	ids, err := batteryEntityIDs()
+// property, not something scoped to the requested period) rather than [from,to) -
+// bounded to the last MaxLedgerRangeDays and cached for batteryPhysicsCacheTTL, see
+// batteryHistoryRows and this function's cache.
+func deriveBatteryPhysics(ctx context.Context) (batteryPhysics, error) {
+	batteryPhysicsCache.Lock()
+	if batteryPhysicsCache.db == db.Instance && !batteryPhysicsCache.at.IsZero() && time.Since(batteryPhysicsCache.at) < batteryPhysicsCacheTTL {
+		phys, err := batteryPhysicsCache.phys, batteryPhysicsCache.err
+		batteryPhysicsCache.Unlock()
+		return phys, err
+	}
+	batteryPhysicsCache.Unlock()
+
+	phys, err := deriveBatteryPhysicsUncached(ctx)
+
+	batteryPhysicsCache.Lock()
+	batteryPhysicsCache.db = db.Instance
+	batteryPhysicsCache.at = time.Now()
+	batteryPhysicsCache.phys = phys
+	batteryPhysicsCache.err = err
+	batteryPhysicsCache.Unlock()
+
+	return phys, err
+}
+
+func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
+	ids, err := batteryEntityIDs(ctx)
 	if err != nil {
 		return batteryPhysics{}, err
 	}
@@ -141,7 +183,7 @@ func deriveBatteryPhysics() (batteryPhysics, error) {
 		return batteryPhysics{}, errors.New("no battery configured")
 	}
 
-	rows, err := batteryHistoryRows(ids)
+	rows, err := batteryHistoryRows(ctx, ids)
 	if err != nil {
 		return batteryPhysics{}, err
 	}
@@ -164,7 +206,7 @@ func deriveBatteryPhysics() (batteryPhysics, error) {
 		}
 	}
 
-	capacityKWh, capacitySource, err := resolveBatteryCapacity(ids, rows)
+	capacityKWh, capacitySource, err := resolveBatteryCapacity(ctx, ids, rows)
 	if err != nil {
 		return batteryPhysics{}, err
 	}
@@ -191,9 +233,9 @@ func deriveBatteryPhysics() (batteryPhysics, error) {
 // column. ok is true only when EVERY entity in ids has a value - a site with two
 // batteries where only one reports capacity has no honest total, so this falls
 // through to full derivation rather than silently summing a partial figure.
-func persistedBatteryCapacityKWh(ids []int) (sum float64, ok bool, err error) {
+func persistedBatteryCapacityKWh(ctx context.Context, ids []int) (sum float64, ok bool, err error) {
 	var caps []sql.NullFloat64
-	if err := db.Instance.Model(new(entity)).Where("id IN ?", ids).Pluck("capacity_kwh", &caps).Error; err != nil {
+	if err := db.Instance.WithContext(ctx).Model(new(entity)).Where("id IN ?", ids).Pluck("capacity_kwh", &caps).Error; err != nil {
 		return 0, false, err
 	}
 	if len(caps) != len(ids) {
@@ -210,8 +252,8 @@ func persistedBatteryCapacityKWh(ids []int) (sum float64, ok bool, err error) {
 
 // resolveBatteryCapacity prefers persisted device capacity over derivation - see
 // deriveBatteryPhysics' doc comment for why.
-func resolveBatteryCapacity(ids []int, rows []batteryHistoryRow) (float64, string, error) {
-	if sum, ok, err := persistedBatteryCapacityKWh(ids); err != nil {
+func resolveBatteryCapacity(ctx context.Context, ids []int, rows []batteryHistoryRow) (float64, string, error) {
+	if sum, ok, err := persistedBatteryCapacityKWh(ctx, ids); err != nil {
 		return 0, "", err
 	} else if ok {
 		return sum, "device-reported capacity, persisted", nil
@@ -299,16 +341,19 @@ type batteryHistoryRow struct {
 }
 
 // batteryEntityIDs returns the entity ids for every configured battery.
-func batteryEntityIDs() ([]int, error) {
+func batteryEntityIDs(ctx context.Context) ([]int, error) {
 	var ids []int
-	err := db.Instance.Model(new(entity)).Where(`"group" = ?`, Battery).Pluck("id", &ids).Error
+	err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, Battery).Pluck("id", &ids).Error
 	return ids, err
 }
 
 // batteryHistoryRows aggregates the meters table by slot across the given battery
 // entities, excluding recovered/incomplete rows (an unreliable slot must not seed a
 // capacity estimate), ordered so consecutive rows can be compared for contiguity.
-func batteryHistoryRows(ids []int) ([]batteryHistoryRow, error) {
+// Bounded to the last MaxLedgerRangeDays: capacity is a hardware property that doesn't
+// need the battery's ENTIRE lifetime to establish confidently, and an unbounded scan
+// only grows more expensive, on every request, for the life of the installation.
+func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, error) {
 	type row struct {
 		Ts           int64
 		Energy       float64
@@ -316,10 +361,12 @@ func batteryHistoryRows(ids []int) ([]batteryHistoryRow, error) {
 		SocFrac      *float64
 	}
 
+	since := time.Now().AddDate(0, 0, -MaxLedgerRangeDays).Unix()
+
 	var res []row
-	if err := db.Instance.Table("meters").
+	if err := db.Instance.WithContext(ctx).Table("meters").
 		Select(`ts, COALESCE(SUM(energy), 0) AS energy, COALESCE(SUM(return_energy), 0) AS return_energy, AVG(soc_temp) AS soc_frac`).
-		Where("meter IN ? AND recovered = ? AND incomplete = ?", ids, false, false).
+		Where("meter IN ? AND recovered = ? AND incomplete = ? AND ts >= ?", ids, false, false, since).
 		Group("ts").
 		Order("ts").
 		Scan(&res).Error; err != nil {
@@ -486,8 +533,8 @@ type Chain struct {
 // ComputeChain runs the full ADR-011 world chain for [from,to). See buildLedgerSlots
 // for what counts as a valid slot and ErrBeforeTariffStart/ErrSocGap for the two ways
 // this refuses rather than fabricates.
-func ComputeChain(from, to time.Time) (*Chain, error) {
-	set, err := buildLedgerSlots(from, to, true)
+func ComputeChain(ctx context.Context, from, to time.Time) (*Chain, error) {
+	set, err := buildLedgerSlots(ctx, from, to, true)
 	if err != nil {
 		return nil, err
 	}
@@ -501,7 +548,7 @@ func ComputeChain(from, to time.Time) (*Chain, error) {
 	var control *ControlSplit
 
 	if set.HasBattery {
-		p, err := deriveBatteryPhysics()
+		p, err := deriveBatteryPhysics(ctx)
 		if err != nil {
 			return nil, err
 		}

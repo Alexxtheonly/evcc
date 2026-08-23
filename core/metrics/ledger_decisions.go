@@ -11,6 +11,7 @@ package metrics
 // something to approximate here.
 
 import (
+	"context"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -38,9 +39,9 @@ type DecisionRow struct {
 // the identical slot data and battery assumptions the chain was priced with; phys may
 // be nil (no battery, or physics unavailable), in which case every row is still
 // returned but HindsightDeltaEUR is always nil.
-func DecisionDeltas(from, to time.Time, set *ledgerSlotSet, phys *batteryPhysics) ([]DecisionRow, error) {
+func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet, phys *batteryPhysics) ([]DecisionRow, error) {
 	var rows []controlSlot
-	if err := db.Instance.Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Order("ts").Find(&rows).Error; err != nil {
+	if err := db.Instance.WithContext(ctx).Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Order("ts").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 
