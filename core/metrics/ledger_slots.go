@@ -105,6 +105,11 @@ func (s slotData) modelledLoadKWh() float64 {
 // Coverage reports what fraction of a period's slots the ledger could actually
 // compute over. ADR-011 honesty rule 3: excluded slots (recovered, incomplete, or
 // missing an input entirely) are dropped and reported, never scaled up to compensate.
+// Coverage.Fraction is 0 both when the period had zero possible slots (TotalSlots==0,
+// undefined) and when it had slots but none were valid (TotalSlots>0, ValidSlots==0,
+// a genuine zero) - Fraction alone can't tell those apart. A caller that needs to
+// isn't left guessing: check TotalSlots first, exactly like this struct's own
+// coverage() constructor does before dividing.
 type Coverage struct {
 	ValidSlots int     `json:"validSlots"`
 	TotalSlots int     `json:"totalSlots"`
