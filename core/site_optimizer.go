@@ -224,9 +224,9 @@ func safeCPriority(priority int, minImportPrice float32) int {
 	return priority
 }
 
-// terminalValueSafetyMargin keeps terminalStorageValue strictly below the arbitrage
-// breakeven it is derived from, so rounding between here and the solver can never turn a
-// zero-margin case into a real one.
+// terminalValueSafetyMargin keeps terminalStorageValue strictly below the horizon's
+// cheapest price, so rounding between here and the solver can never make banking the
+// terminal bonus as good as spending the energy in the horizon itself.
 const terminalValueSafetyMargin = 0.99
 
 // terminalStorageValue is the Wh value the solver assigns to energy still in a battery at
@@ -235,25 +235,26 @@ const terminalValueSafetyMargin = 0.99
 // (optimizer.py:396-398), so p_a has to be a genuine currency/Wh estimate of what that
 // energy goes on to be worth, not an incentive of its own.
 //
-// Charging 1 Wh into storage at price p costs p/eta on the grid side (eta_c on the way in,
-// see the state transition at optimizer.py:623-631). If p_a ever exceeded
-// minImportPrice/eta, the solver could bank pure profit by charging at the horizon's
-// cheapest slot for no reason but the terminal bonus, then never discharging that energy -
-// hoarding instead of running the battery. Capping p_a at minImportPrice/eta (with a small
-// safety margin) rules that out at every slot, since every other price in the horizon is
-// by definition >= minImportPrice, while crediting stored energy with the most it can be
-// worth under that constraint: close to its replacement cost, rather than the previous
-// minImportPrice*eta, which discounted it twice - once for the horizon's cheapest price,
-// again for round-trip loss - and so systematically undervalued it, biasing the plan
-// toward spending it before the horizon ends.
+// s is internal storage, not AC-side energy: the state transition (optimizer.py:617-631)
+// applies eta_c on the way in and eta_d on the way out, so one internal Wh realizes eta_d
+// AC-side Wh when it is eventually discharged. Its value is therefore eta*p, a
+// multiplication, not p/eta - dividing prices replacement cost (what it took to put the Wh
+// there), not realizable value (what it is worth coming back out). Capping the multiplier
+// at the horizon's cheapest price, minImportPrice, values leftover energy at what it would
+// have cost to top up right now, with a small safety margin so the solver never prefers
+// banking the terminal bonus over spending the energy inside the horizon it can already
+// see priced out slot by slot.
 //
 // Floored at zero: a negative minImportPrice (the grid paying to import) would otherwise
-// send the cap negative, turning stored energy into a liability the solver dumps to raise
-// the objective. Zero makes leftover energy worth nothing in that case instead - the
+// send the value negative, turning stored energy into a liability the solver dumps to
+// raise the objective. Zero makes leftover energy worth nothing in that case instead - the
 // uninformative but safe answer when the horizon itself gives no evidence about what
-// happens after it, which also holds on a flat curve at zero and needs no special case.
+// happens after it. This also matters for sites configured with s_min = 0: without the
+// floor a negative terminal value would push the solver to drain the battery to empty
+// purely to escape the penalty, which the optimizer's own openapi contract already rules
+// out by declaring p_a's minimum as 0.
 func terminalStorageValue(minImportPrice float32) float32 {
-	return max(0, minImportPrice/eta*terminalValueSafetyMargin)
+	return max(0, minImportPrice*eta*terminalValueSafetyMargin)
 }
 
 // currentSlotSuggestion maps the optimizer's first-slot corner result onto an advisory action.
@@ -422,7 +423,9 @@ func chargePaybackJustified(pn, soc, discharge []float32, sInitial float32) bool
 
 	// the plan never returns to the initial SoC within the horizon: the charged
 	// energy's value rests on the terminal value alone, which is always below the
-	// buy price — not worth paying for now
+	// buy price - not worth paying for now. This depends on terminalStorageValue
+	// staying a fraction of minImportPrice (a multiplication, not a division by eta);
+	// see its doc comment for why the inverse formula breaks this invariant.
 	return false
 }
 

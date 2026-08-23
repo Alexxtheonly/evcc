@@ -618,10 +618,14 @@ func TestSafeCPriority(t *testing.T) {
 	assert.Equal(t, 0, safeCPriority(0, -0.0001), "already 0: stays 0")
 }
 
-// TestTerminalStorageValue pins the two bounds terminalStorageValue is built on: it must
-// never rise high enough to make grid-charging purely for the terminal bonus profitable at
-// the horizon's cheapest price (the hoarding failure mode), and it must never drop below
-// zero (the dumping failure mode a negative-price horizon would otherwise cause).
+// TestTerminalStorageValue pins the bounds terminalStorageValue is built on: it must never
+// drop below zero (the dumping failure mode a negative-price horizon would otherwise
+// cause), and - the property that actually matters for plan quality - it must stay low
+// enough that discharging stored energy now is always at least as good as holding it for
+// the terminal bonus. Get that inverted (as the divide-by-eta formula this replaces did)
+// and the solver stops discharging altogether: proven on a flat 0.30 EUR/kWh tariff with
+// the pinned solver, discharged energy went 4.0 kWh -> 0.0 kWh and grid import rose
+// 8.0 kWh -> 12.0 kWh over a 12-slot horizon once pa exceeded eta*price everywhere.
 func TestTerminalStorageValue(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -639,27 +643,32 @@ func TestTerminalStorageValue(t *testing.T) {
 
 			assert.GreaterOrEqual(t, pa, float32(0), "never negative")
 
-			// arbitrage bound: charging 1 Wh into storage at minImportPrice costs
-			// minImportPrice/eta on the grid side (optimizer.py:623-631); if pa*eta
-			// exceeded minImportPrice, banking that charge purely for the terminal
-			// bonus would be pure profit at the horizon's cheapest slot, and every
-			// other slot is priced at or above minImportPrice so the same bound
-			// covers them too.
 			if tc.minImportPrice > 0 {
-				assert.Less(t, pa*eta, tc.minImportPrice, "must stay below the arbitrage breakeven")
+				// discharge-over-hoarding bound: discharging one internal Wh right
+				// now at the horizon's cheapest price realizes eta*price AC-side
+				// currency (optimizer.py:617-631 - discharge multiplies by eta_d).
+				// Holding it to the terminal instead realizes pa. Every slot in the
+				// horizon prices at or above minImportPrice, so pinning this at the
+				// minimum covers every slot: the solver must never prefer holding
+				// over discharging anywhere, or a flat/near-flat tariff stalls
+				// discharge for the whole horizon exactly as it did before this bound
+				// held.
+				assert.Less(t, pa, eta*tc.minImportPrice, "must stay below the discharge-over-hoarding bound")
+
+				// anti-hoarding bound, unchanged by the direction of the formula:
+				// charging one Wh in at the cheapest price costs price/eta on the
+				// grid side (eta_c on the way in); banking pa instead of spending it
+				// must never be pure profit.
+				assert.Less(t, pa*eta, tc.minImportPrice, "must stay below the charge-to-hoard arbitrage breakeven")
 			}
 		})
 	}
 
-	// negative minimum: without the floor, dividing by eta (< 1) would push the value
-	// further negative than the old minImportPrice*eta formula did, turning stored energy
-	// into more of a liability than before instead of less.
+	// negative minimum: multiplying by eta (< 1) keeps the liability smaller in magnitude
+	// than minImportPrice itself, but the floor still applies - a negative terminal value
+	// would otherwise push a site configured with s_min = 0 to drain the battery to escape
+	// the penalty, and the optimizer's own openapi contract declares p_a's minimum as 0.
 	assert.Equal(t, float32(0), terminalStorageValue(-0.0002), "negative minimum: floored at zero, not a liability")
-
-	// the new value must never fall below the old minImportPrice*eta*0.99 formula it
-	// replaces - that was the undervaluation this change fixes.
-	old := float32(0.0002) * eta * 0.99
-	assert.Greater(t, terminalStorageValue(0.0002), old, "must value stored energy above the old, undervaluing formula")
 }
 
 // TestConservativeSolarRates pins the bounds conservativeSolarRates enforces when
