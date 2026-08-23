@@ -383,17 +383,22 @@ func TestUpdatePowerOptimizerSurplusGate(t *testing.T) {
 	// TestSitePowerPriorityAdjustment's "charging below prioritySoc" case.
 	state := siteState{battery: types.BatteryState{Soc: 30, Power: -2000}}
 
-	run := func(t *testing.T, suggestion *types.Suggestion) float64 {
+	runBoost := func(t *testing.T, boost int, suggestion *types.Suggestion) float64 {
 		t.Helper()
 
 		lp := &testUpdater{MockAPI: loadpoint.NewMockAPI(ctrl), suggestion: suggestion}
 		lp.EXPECT().GetMode().Return(api.ModeNow).AnyTimes()
-		lp.EXPECT().GetBatteryBoost().Return(boostDisabled).AnyTimes()
+		lp.EXPECT().GetBatteryBoost().Return(boost).AnyTimes()
 		lp.EXPECT().EffectiveMaxPower().Return(maxPower).AnyTimes()
 
 		newSite().updatePower(lp, state, 0, nil, nil)
 
 		return lp.sitePowerAt
+	}
+
+	run := func(t *testing.T, suggestion *types.Suggestion) float64 {
+		t.Helper()
+		return runBoost(t, boostDisabled, suggestion)
 	}
 
 	t.Run("no suggestion: gate closed, static prioritySoc behaviour unchanged", func(t *testing.T) {
@@ -414,5 +419,14 @@ func TestUpdatePowerOptimizerSurplusGate(t *testing.T) {
 
 	t.Run("active surplus-charge: gate opens, unadjusted site power restored", func(t *testing.T) {
 		assert.Equal(t, -2000.0, run(t, &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 0}))
+	})
+
+	// Both carve-outs can be true at once - a boosting loadpoint that is also an active
+	// surplus-charge - and are not mutually exclusive, so they must share one branch. Two
+	// sequential ifs would add priorityAdjustment twice (100 + (-2100) + (-2100) = -4100),
+	// handing pvMaxCurrent surplus that does not exist; the adjustment must apply exactly
+	// once, same as the single-condition case above.
+	t.Run("boost active and active surplus-charge together: adjustment applied exactly once", func(t *testing.T) {
+		assert.Equal(t, -2000.0, runBoost(t, boostStart, &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 0}))
 	})
 }

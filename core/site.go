@@ -1422,20 +1422,24 @@ func (site *Site) updatePower(lp updater, state siteState, totalChargePower floa
 		// reserve surplus claimed by higher-priority loadpoints that are starting up (#31194)
 		sitePower += site.reservedPVPower(lp)
 
-		// battery boost deliberately drains the battery, hence battery priority
-		// below prioritySoc does not apply to the boosting loadpoint (#30541)
-		if lp.GetBatteryBoost() != boostDisabled {
-			sitePower += res.priorityAdjustment
-		}
-
-		// the optimizer already decided this loadpoint gets the surplus - prioritySoc
-		// hiding it from pvMaxCurrent would just re-litigate that decision one layer
-		// down with a stale model (no suggestion controlling it). A suggestion that is
-		// missing, stale, or not an active surplus-charge (optimizer off/unsponsored,
-		// stalled, or recommending something else) closes this gate and falls straight
-		// back to today's static prioritySoc behaviour, unchanged (see clearSuggestions'
-		// nil-means-static contract).
-		if surplusCharge(lp.gate(), lp.EffectiveMaxPower()) {
+		// battery priority below prioritySoc does not apply when either:
+		//  - battery boost deliberately drains the battery, hence the boosting loadpoint
+		//    is exempt (#30541). boostHold also satisfies != boostDisabled while not
+		//    itself boosting anything, which is fine here: it's still a case where
+		//    control has already decided this loadpoint's power independently of
+		//    prioritySoc.
+		//  - the optimizer already decided this loadpoint gets the surplus - prioritySoc
+		//    hiding it from pvMaxCurrent would just re-litigate that decision one layer
+		//    down with a stale model (no suggestion controlling it). A suggestion that is
+		//    missing, stale, or not an active surplus-charge (optimizer off/unsponsored,
+		//    stalled, or recommending something else) closes this gate and falls straight
+		//    back to today's static prioritySoc behaviour, unchanged (see clearSuggestions'
+		//    nil-means-static contract).
+		// These two conditions are not mutually exclusive - a boosting loadpoint can also
+		// be an active surplus-charge - so they must collapse to one branch, not two
+		// sequential ifs. Two ifs would apply the adjustment twice, handing pvMaxCurrent
+		// surplus that does not exist.
+		if lp.GetBatteryBoost() != boostDisabled || surplusCharge(lp.gate(), lp.EffectiveMaxPower()) {
 			sitePower += res.priorityAdjustment
 		}
 
