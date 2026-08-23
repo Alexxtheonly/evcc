@@ -657,6 +657,35 @@ const noteTimingSettlement = "control.timing reflects real money only under per-
 // where this reports the opposite sign from a true hindsight figure.
 const noteSlotFlowDeltaIsSlotLocal = "decisions[].slotFlowDeltaEur prices only the vetoed slot itself, at its own starting SoC - a decision whose cost or benefit only materialises in a later slot can show the wrong sign here"
 
+// noteEVTimingUnattributed, present whenever the site has a loadpoint: W0/W1/W2 all
+// take slotData.modelledLoadKWh() - household plus every loadpoint's EV charging -
+// at its REALISED timestamp, so shifting when a car charges (a smartCostLimit plan,
+// a cheap-overnight window) produces exactly EUR 0 of attributed value in every
+// contribution, no matter how much the timing actually saved. Arithmetically correct
+// (ADR-011 rule 7 doesn't ask this package to invent a measure it can't honestly
+// attribute) but silent about it without this note - see
+// TestChainNotesEVTimingUnattributed.
+const noteEVTimingUnattributed = "EV charge timing is not attributed to any measure - PV/Battery/Control all price a loadpoint's energy at when it was actually drawn, so shifting a charge to a cheaper slot shows EUR 0 of value here even when it saved money"
+
+// noteFeedInZero, present whenever every slot in the period has PriceFeedIn == 0:
+// every export line in this payload is then EUR 0.00 by construction, indistinguishable
+// from a computation that silently lost every export unless this is said plainly.
+const noteFeedInZero = "feed-in price is EUR 0.00 for every slot in this period, so every export credit in this payload is EUR 0.00 - that reflects the configured/observed feed-in rate, not a computation error"
+
+// allFeedInZero reports whether every slot's feed-in price is exactly 0 - see
+// noteFeedInZero.
+func allFeedInZero(slots []slotData) bool {
+	if len(slots) == 0 {
+		return false
+	}
+	for _, s := range slots {
+		if s.PriceFeedIn != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // notePeriodAverageCoverage, present whenever coverage is incomplete: the period-
 // average price is the mean over VALID slots only, and dropped slots are not assumed
 // to distribute evenly across the day - if they cluster (e.g. an evening-peak outage),
@@ -741,6 +770,12 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	}
 	if coverage.TotalSlots > 0 && coverage.ValidSlots < coverage.TotalSlots {
 		notes = append(notes, notePeriodAverageCoverage(coverage))
+	}
+	if set.HasLoadpoint {
+		notes = append(notes, noteEVTimingUnattributed)
+	}
+	if allFeedInZero(set.Slots) {
+		notes = append(notes, noteFeedInZero)
 	}
 
 	return &Chain{

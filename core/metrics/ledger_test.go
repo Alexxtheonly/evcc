@@ -2,6 +2,8 @@ package metrics
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,4 +169,76 @@ func TestComputeLedgerDegradesOnRateCeilingRefusal(t *testing.T) {
 
 	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute))
 	require.ErrorIs(t, err, ErrBatteryRateCeilingUnavailable)
+}
+
+// TestChainNotesEVTimingUnattributed covers A14: W0/W1/W2 all take a loadpoint's
+// charge at its REALISED timestamp (see slotData.modelledLoadKWh), so shifting when a
+// car charges produces exactly EUR 0 of attributed value no matter how much the
+// timing actually saved - Contributions[2] ("Control") is arithmetically correct at
+// 0 for a site with no battery and one loadpoint, but nothing in the payload says
+// EV charge timing isn't attributed to any measure (ADR-011 rule 7).
+func TestChainNotesEVTimingUnattributed(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	lp := mustCreateEntity(t, Loadpoint, "lp-1")
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 10, 3, 0, 0, 0, loc)
+
+	// no PV, no battery: EV charges 5kWh at the cheap overnight price, all bought
+	// from the grid, exactly what actually happened.
+	require.NoError(t, persist(grid, base, 5.4, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 0.4, 0, nil, false, false))
+	require.NoError(t, persist(lp, base, 5.0, 0, nil, false, false))
+	g, f := 0.18, 0.05
+	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
+
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	require.NoError(t, err)
+
+	require.InDelta(t, 0.0, chain.Contributions[2].Settled.PerSlot, 1e-9,
+		"arithmetically correct: the counterfactual buys the identical EV energy the real site did")
+
+	found := slices.ContainsFunc(chain.Notes, func(n string) bool {
+		return strings.Contains(n, "EV") && strings.Contains(n, "not attributed")
+	})
+	require.True(t, found, "chain.Notes must say EV charge timing is not attributed to any measure (ADR-011 rule 7)")
+}
+
+// TestChainNotesFeedInZeroExplained covers B23: when every slot's feed-in price is
+// EUR 0 (a fixed placeholder tariff, common until a real feed-in rate is wired up),
+// every export line in the payload reads exactly EUR 0.00 - correct, but with nothing
+// in the payload saying why, indistinguishable from a computation that silently lost
+// every export.
+func TestChainNotesFeedInZeroExplained(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	pv := mustCreateEntity(t, PV, "pv1")
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 10, 12, 0, 0, 0, loc)
+
+	// PV surplus is exported this slot, so the export line is genuinely exercised,
+	// not merely absent.
+	require.NoError(t, persist(grid, base, 0, 1.0, nil, false, false))
+	require.NoError(t, persist(home, base, 0.5, 0, nil, false, false))
+	require.NoError(t, persist(pv, base, 1.5, 0, nil, false, false))
+	g, f := 0.30, 0.0
+	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
+
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	require.NoError(t, err)
+
+	require.InDelta(t, 0.0, chain.Worlds[3].Settled.PerSlot-0.0, 1e-9) // export priced at 0 either way, sanity check
+
+	found := slices.ContainsFunc(chain.Notes, func(n string) bool {
+		return strings.Contains(n, "feed-in") && strings.Contains(n, "0.00")
+	})
+	require.True(t, found, "chain.Notes must explain that feed-in is configured at EUR 0 for this period, not silently zeroed")
 }

@@ -120,10 +120,11 @@ type Coverage struct {
 // bookkeeping (whether PV/battery are configured at all, and the period's total slot
 // count) to report coverage honestly.
 type ledgerSlotSet struct {
-	Slots      []slotData
-	TotalSlots int
-	HasPV      bool
-	HasBattery bool
+	Slots        []slotData
+	TotalSlots   int
+	HasPV        bool
+	HasBattery   bool
+	HasLoadpoint bool
 }
 
 func (s *ledgerSlotSet) coverage() Coverage {
@@ -416,5 +417,5 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 		slots = append(slots, s)
 	}
 
-	return &ledgerSlotSet{Slots: slots, TotalSlots: total, HasPV: hasPV, HasBattery: hasBattery}, nil
+	return &ledgerSlotSet{Slots: slots, TotalSlots: total, HasPV: hasPV, HasBattery: hasBattery, HasLoadpoint: hasLoadpoint}, nil
 }
