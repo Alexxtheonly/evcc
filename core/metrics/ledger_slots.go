@@ -31,6 +31,15 @@ const MaxLedgerRangeDays = 400
 // ErrLedgerRangeTooLarge means the requested [from,to) window exceeds MaxLedgerRangeDays.
 var ErrLedgerRangeTooLarge = fmt.Errorf("requested range exceeds the %d-day maximum", MaxLedgerRangeDays)
 
+// ErrLedgerRangeUnaligned means from or to isn't truncated to a tariff.SlotDuration
+// boundary. meters.ts and tariffs.ts are always slot starts, and buildLedgerSlots
+// walks from `from` in fixed 15-minute steps (see the loop below) - an unaligned from
+// (e.g. ?from=2026-08-01T00:07:00Z) matches zero rows at every step even when the
+// period is full of data, silently returning a confident-looking "computed over 0 of N
+// slots, EUR 0.00" instead of visibly failing. Reject rather than fabricate (ADR-011
+// rule 4).
+var ErrLedgerRangeUnaligned = errors.New("from/to must be aligned to a tariff slot boundary")
+
 // ErrBeforeTariffStart is returned when the requested period starts before the
 // earliest slot the tariffs table has a price for. ADR-011 honesty rule 4: refuse
 // rather than fabricate a price for a period the site has no record of.
@@ -266,6 +275,9 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint 
 	}
 	if to.Sub(from) > time.Duration(MaxLedgerRangeDays)*24*time.Hour {
 		return nil, ErrLedgerRangeTooLarge
+	}
+	if !from.Equal(from.Truncate(tariff.SlotDuration)) || !to.Equal(to.Truncate(tariff.SlotDuration)) {
+		return nil, ErrLedgerRangeUnaligned
 	}
 
 	earliest, err := EarliestTariffSlot(ctx)

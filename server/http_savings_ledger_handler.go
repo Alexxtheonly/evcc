@@ -44,7 +44,7 @@ func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.As(err, &refused):
 			jsonError(w, http.StatusUnprocessableEntity, err)
-		case errors.Is(err, metrics.ErrLedgerRangeTooLarge):
+		case errors.Is(err, metrics.ErrLedgerRangeTooLarge), errors.Is(err, metrics.ErrLedgerRangeUnaligned):
 			jsonError(w, http.StatusBadRequest, err)
 		default:
 			jsonError(w, http.StatusInternalServerError, err)

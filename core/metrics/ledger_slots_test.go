@@ -103,6 +103,38 @@ func TestBuildLedgerSlotsRefusesOversizedRange(t *testing.T) {
 	require.ErrorIs(t, err, ErrLedgerRangeTooLarge)
 }
 
+// TestBuildLedgerSlotsRefusesUnalignedRange covers the "confident EUR 0.00" bug: an
+// unaligned from (not on a 15-minute tariff slot boundary) matches zero rows at every
+// step of buildLedgerSlots' fixed-15-minute walk, even over a period full of data -
+// producing a plausible-looking but wrong "computed over 0 slots" answer instead of
+// visibly failing.
+func TestBuildLedgerSlotsRefusesUnalignedRange(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, loc)
+	g, f := 0.25, 0.05
+	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
+	require.NoError(t, persist(grid, base, 1, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 1, 0, nil, false, false))
+
+	unalignedFrom := base.Add(7 * time.Minute)
+	_, err := buildLedgerSlots(context.Background(), unalignedFrom, unalignedFrom.Add(15*time.Minute), false)
+	require.ErrorIs(t, err, ErrLedgerRangeUnaligned)
+
+	unalignedTo := base.Add(15*time.Minute + 3*time.Second)
+	_, err = buildLedgerSlots(context.Background(), base, unalignedTo, false)
+	require.ErrorIs(t, err, ErrLedgerRangeUnaligned)
+
+	// the aligned equivalent must still work
+	_, err = buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), false)
+	require.NoError(t, err)
+}
+
 // TestBuildLedgerSlotsEnergyBalance is a data-integrity guard on buildLedgerSlots'
 // output itself, independent of any world simulation: every slot's measured sources
 // (PV generation, grid import, battery discharge) must balance its measured sinks
