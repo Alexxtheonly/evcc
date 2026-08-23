@@ -75,7 +75,7 @@ func TestApplyBatteryMode(t *testing.T) {
 		if tc.expected != api.BatteryUnknown {
 			batCon.EXPECT().SetBatteryMode(tc.expected).Times(1)
 		}
-		site.updateBatteryMode(false, api.Rate{}, nil)
+		site.updateBatteryMode(false, api.Rate{})
 
 		if tc.internal != api.BatteryNormal {
 			assert.Equal(t, tc.expected, site.batteryMode)
@@ -123,7 +123,7 @@ func TestBatteryHoldAppliedOnce(t *testing.T) {
 	batCon.EXPECT().SetBatteryMode(api.BatteryHold).Times(1)
 
 	for range 3 {
-		site.updateBatteryMode(true, api.Rate{}, nil)
+		site.updateBatteryMode(true, api.Rate{})
 	}
 
 	ctrl.Finish()
@@ -149,7 +149,7 @@ func TestBatteryHoldNotShared(t *testing.T) {
 	fullCon.EXPECT().SetBatteryMode(api.BatteryHold).Times(1)
 	emptyCon.EXPECT().SetBatteryMode(gomock.Any()).Times(0)
 
-	site.updateBatteryMode(true, api.Rate{}, nil)
+	site.updateBatteryMode(true, api.Rate{})
 
 	ctrl.Finish()
 }
@@ -180,7 +180,7 @@ func TestRequiredExternalBatteryMode(t *testing.T) {
 		site.batteryMode = tc.internal
 		site.batteryModeExternal = tc.external
 
-		mode := site.requiredBatteryMode(false, api.Rate{}, nil)
+		mode := site.requiredBatteryMode(false, api.Rate{})
 		assert.Equal(t, tc.new.String(), mode.String(), "internal mode expected %s got %s", tc.new, mode)
 	}
 }
@@ -234,13 +234,13 @@ func TestExternalBatteryModeChange(t *testing.T) {
 		if tc.expected != api.BatteryUnknown {
 			batCon.EXPECT().SetBatteryMode(tc.expected).Times(1)
 		}
-		site.updateBatteryMode(false, api.Rate{}, nil)
+		site.updateBatteryMode(false, api.Rate{})
 		if !ctrl.Satisfied() {
 			ctrl.Finish()
 		}
 
 		// 3. verify required external mode only applied once
-		site.updateBatteryMode(false, api.Rate{}, nil)
+		site.updateBatteryMode(false, api.Rate{})
 		if !ctrl.Satisfied() {
 			ctrl.Finish()
 		}
@@ -257,7 +257,7 @@ func TestExternalBatteryModeChange(t *testing.T) {
 		if tc.expected != api.BatteryNormal {
 			batCon.EXPECT().SetBatteryMode(api.BatteryNormal).Times(1)
 		}
-		site.updateBatteryMode(false, api.Rate{}, nil)
+		site.updateBatteryMode(false, api.Rate{})
 
 		// timer disabled
 		assert.True(t, site.batteryModeExternalTimer.IsZero())
@@ -319,7 +319,7 @@ func TestForcedBatteryChargeLimits(t *testing.T) {
 			batCon.EXPECT().SetBatteryMode(tc.expected).Times(1)
 		}
 
-		site.updateBatteryMode(true, api.Rate{}, nil)
+		site.updateBatteryMode(true, api.Rate{})
 
 		ctrl.Finish()
 	}

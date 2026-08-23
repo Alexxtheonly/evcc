@@ -534,68 +534,6 @@ func (site *Site) setBatteryGridChargeLimit(val *float64) error {
 		} else {
 			settings.SetFloat(keys.BatteryGridChargeLimit, *val)
 			site.publish(keys.BatteryGridChargeLimit, *val)
-
-			// absolute and percentile are the same setting in different forms -
-			// writing one clears the other so only one is ever active
-			if site.batteryGridChargeLimitPercentile != nil {
-				site.batteryGridChargeLimitPercentile = nil
-				settings.SetString(keys.BatteryGridChargeLimitPercentile, "")
-				site.publish(keys.BatteryGridChargeLimitPercentile, nil)
-			}
-		}
-	}
-
-	return nil
-}
-
-// The optimizer replaces the limit in automatic mode, so it reads as unset.
-func (site *Site) GetBatteryGridChargeLimitPercentile() *float64 {
-	if site.Automatic() {
-		return nil
-	}
-
-	site.RLock()
-	defer site.RUnlock()
-	return site.batteryGridChargeLimitPercentile
-}
-
-func (site *Site) SetBatteryGridChargeLimitPercentile(val *float64) error {
-	if site.Automatic() {
-		return ErrOptimizerAutomatic
-	}
-
-	if val != nil && (*val <= 0 || *val > 100) {
-		return fmt.Errorf("battery grid charge limit percentile out of range (0,100]: %.1f", *val)
-	}
-
-	return site.setBatteryGridChargeLimitPercentile(val)
-}
-
-func (site *Site) setBatteryGridChargeLimitPercentile(val *float64) error {
-	site.log.DEBUG.Println("set grid charge limit percentile:", printPtr("%.1f", val))
-
-	if !site.hasBatteryControl() {
-		return ErrBatteryControlNotAvailable
-	}
-
-	site.Lock()
-	defer site.Unlock()
-
-	if !ptrValueEqual(site.batteryGridChargeLimitPercentile, val) {
-		site.batteryGridChargeLimitPercentile = val
-
-		if val == nil {
-			settings.SetString(keys.BatteryGridChargeLimitPercentile, "")
-			site.publish(keys.BatteryGridChargeLimitPercentile, nil)
-		} else {
-			settings.SetFloat(keys.BatteryGridChargeLimitPercentile, *val)
-			site.publish(keys.BatteryGridChargeLimitPercentile, *val)
-
-			if site.batteryGridChargeLimit != nil {
-				site.batteryGridChargeLimit = nil
-				settings.SetString(keys.BatteryGridChargeLimit, "")
-				site.publish(keys.BatteryGridChargeLimit, nil)
-			}
 		}
 	}
 

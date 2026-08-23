@@ -260,14 +260,14 @@ func TestBatteryModeAutomatic(t *testing.T) {
 	site.setOptimizerBatteryMode(optimizerDecision{mode: api.BatteryCharge})
 
 	batCon.EXPECT().SetBatteryMode(api.BatteryCharge)
-	site.updateBatteryMode(false, api.Rate{}, nil)
+	site.updateBatteryMode(false, api.Rate{})
 	assert.Equal(t, api.BatteryCharge, site.GetBatteryMode())
 
 	// a stalled optimizer releases the battery
 	site.optimizerBatteryModeUpdated = time.Now().Add(-optimizerBatteryModeValidity - time.Minute)
 
 	batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
-	site.updateBatteryMode(false, api.Rate{}, nil)
+	site.updateBatteryMode(false, api.Rate{})
 	assert.Equal(t, api.BatteryNormal, site.GetBatteryMode())
 
 	ctrl.Finish()

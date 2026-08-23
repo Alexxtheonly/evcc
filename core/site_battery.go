@@ -53,8 +53,8 @@ func (site *Site) SetBatteryMode(batMode api.BatteryMode) {
 	}
 }
 
-func (site *Site) updateBatteryMode(batteryGridChargeActive bool, rate api.Rate, rates api.Rates) {
-	batteryMode := site.requiredBatteryMode(batteryGridChargeActive, rate, rates)
+func (site *Site) updateBatteryMode(batteryGridChargeActive bool, rate api.Rate) {
+	batteryMode := site.requiredBatteryMode(batteryGridChargeActive, rate)
 
 	// UI annotation only, does not affect the mode derived above
 	site.updateOptimizerLiveRateVeto(rate)
@@ -79,7 +79,7 @@ func (site *Site) updateBatteryMode(batteryGridChargeActive bool, rate api.Rate,
 }
 
 // requiredBatteryMode determines required battery mode based on grid charge and rate
-func (site *Site) requiredBatteryMode(batteryGridChargeActive bool, rate api.Rate, rates api.Rates) api.BatteryMode {
+func (site *Site) requiredBatteryMode(batteryGridChargeActive bool, rate api.Rate) api.BatteryMode {
 	var res api.BatteryMode
 	batMode := site.GetBatteryMode()
 	extMode := site.GetBatteryModeExternal()
@@ -119,7 +119,7 @@ func (site *Site) requiredBatteryMode(batteryGridChargeActive bool, rate api.Rat
 		}
 	case batteryGridChargeActive:
 		res = keepUnlessModified(api.BatteryCharge)
-	case site.dischargeControlActive(rate, rates):
+	case site.dischargeControlActive(rate):
 		res = keepUnlessModified(api.BatteryHold)
 	case batteryModeModified(batMode):
 		res = api.BatteryNormal
@@ -269,23 +269,23 @@ func (site *Site) tariffRates(usage api.TariffUsage) (api.Rates, error) {
 	return tariff.Rates()
 }
 
-func (site *Site) smartCostActive(lp loadpoint.API, rate api.Rate, rates api.Rates) bool {
-	limit := resolveSmartCostLimit(lp, rates)
+func (site *Site) smartCostActive(lp loadpoint.API, rate api.Rate) bool {
+	limit := lp.GetSmartCostLimit()
 	return limit != nil && !rate.IsZero() && rate.Value <= *limit
 }
 
-func (site *Site) batteryGridChargeActive(rate api.Rate, rates api.Rates) bool {
-	limit := site.resolveBatteryGridChargeLimit(rates)
+func (site *Site) batteryGridChargeActive(rate api.Rate) bool {
+	limit := site.GetBatteryGridChargeLimit()
 	return limit != nil && !rate.IsZero() && rate.Value <= *limit
 }
 
-func (site *Site) dischargeControlActive(rate api.Rate, rates api.Rates) bool {
+func (site *Site) dischargeControlActive(rate api.Rate) bool {
 	if !site.GetBatteryDischargeControl() {
 		return false
 	}
 
 	for _, lp := range site.activeLoadpoints() {
-		smartCostActive := site.smartCostActive(lp, rate, rates)
+		smartCostActive := site.smartCostActive(lp, rate)
 		if lp.GetStatus() == api.StatusC && (smartCostActive || lp.IsFastChargingActive()) {
 			return true
 		}

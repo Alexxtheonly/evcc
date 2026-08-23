@@ -42,13 +42,12 @@ const (
 	ConsumerMeters = "consumerMeters"
 
 	// battery settings
-	BatteryDischargeControl          = "batteryDischargeControl"
-	BatteryGridChargeLimit           = "batteryGridChargeLimit"
-	BatteryGridChargeLimitPercentile = "batteryGridChargeLimitPercentile" // battery grid charge limit as a percentile of the forward rate window, alternative to BatteryGridChargeLimit
-	BatteryGridChargeActive          = "batteryGridChargeActive"
-	BatteryGridDischarge             = "batteryGridDischarge"
-	BufferSoc                        = "bufferSoc"
-	BufferStartSoc                   = "bufferStartSoc"
+	BatteryDischargeControl = "batteryDischargeControl"
+	BatteryGridChargeLimit  = "batteryGridChargeLimit"
+	BatteryGridChargeActive = "batteryGridChargeActive"
+	BatteryGridDischarge    = "batteryGridDischarge"
+	BufferSoc               = "bufferSoc"
+	BufferStartSoc          = "bufferStartSoc"
 
 	// grid settings
 	GridExportLimit = "gridExportLimit"

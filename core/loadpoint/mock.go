@@ -643,20 +643,6 @@ func (mr *MockAPIMockRecorder) GetSmartCostLimit() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSmartCostLimit", reflect.TypeOf((*MockAPI)(nil).GetSmartCostLimit))
 }
 
-// GetSmartCostLimitPercentile mocks base method.
-func (m *MockAPI) GetSmartCostLimitPercentile() *float64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetSmartCostLimitPercentile")
-	ret0, _ := ret[0].(*float64)
-	return ret0
-}
-
-// GetSmartCostLimitPercentile indicates an expected call of GetSmartCostLimitPercentile.
-func (mr *MockAPIMockRecorder) GetSmartCostLimitPercentile() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSmartCostLimitPercentile", reflect.TypeOf((*MockAPI)(nil).GetSmartCostLimitPercentile))
-}
-
 // GetSmartFeedInPriorityLimit mocks base method.
 func (m *MockAPI) GetSmartFeedInPriorityLimit() *float64 {
 	m.ctrl.T.Helper()
@@ -1099,20 +1085,6 @@ func (m *MockAPI) SetSmartCostLimit(limit *float64) error {
 func (mr *MockAPIMockRecorder) SetSmartCostLimit(limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSmartCostLimit", reflect.TypeOf((*MockAPI)(nil).SetSmartCostLimit), limit)
-}
-
-// SetSmartCostLimitPercentile mocks base method.
-func (m *MockAPI) SetSmartCostLimitPercentile(percentile *float64) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetSmartCostLimitPercentile", percentile)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SetSmartCostLimitPercentile indicates an expected call of SetSmartCostLimitPercentile.
-func (mr *MockAPIMockRecorder) SetSmartCostLimitPercentile(percentile any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSmartCostLimitPercentile", reflect.TypeOf((*MockAPI)(nil).SetSmartCostLimitPercentile), percentile)
 }
 
 // SetSmartFeedInPriorityLimit mocks base method.

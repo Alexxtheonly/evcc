@@ -731,7 +731,7 @@ func (lp *Loadpoint) GetChargePower() float64 {
 func (lp *Loadpoint) GetChargePowerFlexibility(rates api.Rates) float64 {
 	mode := lp.GetMode()
 	if mode == api.ModeNow || !lp.charging() || lp.minSocNotReached() ||
-		lp.planActive || lp.smartLimitActive(resolveSmartCostLimit(lp, rates), rates, true) {
+		lp.planActive || lp.smartLimitActive(lp.GetSmartCostLimit(), rates, true) {
 		return 0
 	}
 
@@ -961,67 +961,6 @@ func (lp *Loadpoint) setSmartCostLimit(val *float64) {
 
 		lp.settings.SetFloatPtr(keys.SmartCostLimit, val)
 		lp.publish(keys.SmartCostLimit, val)
-
-		// absolute and percentile are the same setting in different forms -
-		// writing one clears the other so only one is ever active
-		if val != nil && lp.smartCostLimitPercentile != nil {
-			lp.smartCostLimitPercentile = nil
-			lp.settings.SetFloatPtr(keys.SmartCostLimitPercentile, nil)
-			lp.publish(keys.SmartCostLimitPercentile, nil)
-		}
-	}
-}
-
-// GetSmartCostLimitPercentile gets the smart cost limit expressed as a
-// percentile of the forward rate window. The optimizer replaces it in
-// automatic mode, so it reads as unset like GetSmartCostLimit.
-func (lp *Loadpoint) GetSmartCostLimitPercentile() *float64 {
-	if lp.optimizerControlled() {
-		return nil
-	}
-
-	lp.RLock()
-	defer lp.RUnlock()
-	return lp.smartCostLimitPercentile
-}
-
-// SetSmartCostLimitPercentile sets the smart cost limit as a percentile
-// (0-100] of the forward rate window, clearing any absolute limit
-func (lp *Loadpoint) SetSmartCostLimitPercentile(val *float64) error {
-	if lp.optimizerControlled() {
-		if val != nil {
-			return ErrOptimizerAutomatic
-		}
-
-		return nil
-	}
-
-	if val != nil && (*val <= 0 || *val > 100) {
-		return fmt.Errorf("smart cost limit percentile out of range (0,100]: %.1f", *val)
-	}
-
-	lp.setSmartCostLimitPercentile(val)
-
-	return nil
-}
-
-func (lp *Loadpoint) setSmartCostLimitPercentile(val *float64) {
-	lp.Lock()
-	defer lp.Unlock()
-
-	lp.log.DEBUG.Println("set smart cost limit percentile:", printPtr("%.1f", val))
-
-	if !ptrValueEqual(lp.smartCostLimitPercentile, val) {
-		lp.smartCostLimitPercentile = val
-
-		lp.settings.SetFloatPtr(keys.SmartCostLimitPercentile, val)
-		lp.publish(keys.SmartCostLimitPercentile, val)
-
-		if val != nil && lp.smartCostLimit != nil {
-			lp.smartCostLimit = nil
-			lp.settings.SetFloatPtr(keys.SmartCostLimit, nil)
-			lp.publish(keys.SmartCostLimit, nil)
-		}
 	}
 }
 

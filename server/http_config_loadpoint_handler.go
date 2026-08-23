@@ -36,7 +36,6 @@ func getLoadpointDynamicConfig(lp loadpoint.API) loadpoint.DynamicConfig {
 		MinCurrent:               lp.GetMinCurrent(),
 		MaxCurrent:               lp.GetMaxCurrent(),
 		SmartCostLimit:           lp.GetSmartCostLimit(),
-		SmartCostLimitPercentile: lp.GetSmartCostLimitPercentile(),
 		SmartFeedInPriorityLimit: lp.GetSmartFeedInPriorityLimit(),
 		Thresholds:               lp.GetThresholds(),
 		Soc:                      lp.GetSocConfig(),

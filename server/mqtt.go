@@ -223,14 +223,10 @@ func (m *MQTT) listenSiteSetters(topic string, site site.API) error {
 		{"smartCostLimit", floatPtrSetter(func(limit *float64) error {
 			return setLoadpointsLimit(site, loadpoint.API.SetSmartCostLimit, limit)
 		})},
-		{"smartCostLimitPercentile", floatPtrSetter(func(limit *float64) error {
-			return setLoadpointsLimit(site, loadpoint.API.SetSmartCostLimitPercentile, limit)
-		})},
 		{"smartFeedInPriorityLimit", floatPtrSetter(func(limit *float64) error {
 			return setLoadpointsLimit(site, loadpoint.API.SetSmartFeedInPriorityLimit, limit)
 		})},
 		{"batteryGridChargeLimit", floatPtrSetter(site.SetBatteryGridChargeLimit)},
-		{"batteryGridChargeLimitPercentile", floatPtrSetter(site.SetBatteryGridChargeLimitPercentile)},
 		{"batteryMode", ptrSetter(api.BatteryModeString, func(m *api.BatteryMode) error {
 			if m == nil {
 				m = new(api.BatteryUnknown)
@@ -261,7 +257,6 @@ func (m *MQTT) listenLoadpointSetters(topic string, site site.API, lp loadpoint.
 		{"enableDelay", durationSetter(pass(lp.SetEnableDelay))},
 		{"disableDelay", durationSetter(pass(lp.SetDisableDelay))},
 		{"smartCostLimit", floatPtrSetter(lp.SetSmartCostLimit)},
-		{"smartCostLimitPercentile", floatPtrSetter(lp.SetSmartCostLimitPercentile)},
 		{"smartFeedInPriorityLimit", floatPtrSetter(lp.SetSmartFeedInPriorityLimit)},
 		{"batteryBoost", boolSetter(lp.SetBatteryBoost)},
 		{"batteryBoostLimit", intSetter(pass(lp.SetBatteryBoostLimit))},

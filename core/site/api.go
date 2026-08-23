@@ -61,13 +61,6 @@ type API interface {
 	GetBatteryGridChargeLimit() *float64
 	// SetBatteryGridChargeLimit sets the grid charge limit
 	SetBatteryGridChargeLimit(limit *float64) error
-	// GetBatteryGridChargeLimitPercentile returns the grid charge limit
-	// expressed as a percentile (0-100] of the forward rate window instead of
-	// an absolute price. Mutually exclusive with GetBatteryGridChargeLimit.
-	GetBatteryGridChargeLimitPercentile() *float64
-	// SetBatteryGridChargeLimitPercentile sets the grid charge limit as a
-	// percentile of the forward rate window, clearing any absolute limit
-	SetBatteryGridChargeLimitPercentile(percentile *float64) error
 
 	// GetOptimizerChargingStrategy gets the optimizer grid charging strategy
 	GetOptimizerChargingStrategy() string
