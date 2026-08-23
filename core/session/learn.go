@@ -213,8 +213,8 @@ func LearnRepeatingPlans(sessions Sessions, now time.Time) []api.RepeatingPlan {
 // roughly this much energy, derived from the same validated departure/arrival pairs
 // LearnRepeatingPlans uses.
 type ExpectedArrival struct {
-	TimeOfDay int     // minutes after midnight, an early quantile of observed arrival times
-	SocUsed   float64 // percentage points, a high quantile of observed soc consumed while away
+	TimeOfDay int     `json:"timeOfDay"` // minutes after midnight, an early quantile of observed arrival times
+	SocUsed   float64 `json:"socUsed"`   // percentage points, a high quantile of observed soc consumed while away
 }
 
 // LearnExpectedArrival derives when a vehicle that is currently away is likely to return
