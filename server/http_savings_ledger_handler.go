@@ -46,6 +46,12 @@ func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusUnprocessableEntity, err)
 		case errors.Is(err, metrics.ErrLedgerRangeTooLarge), errors.Is(err, metrics.ErrLedgerRangeUnaligned):
 			jsonError(w, http.StatusBadRequest, err)
+		// ComputeLedger degrades a battery-physics refusal to a null Chain rather
+		// than failing the whole request (see Ledger's doc comment), so these two
+		// only reach here via a caller that skips that degradation - still not a
+		// server fault (ADR-011 rule 4: a refusal, not a crash), so 422 not 500.
+		case errors.Is(err, metrics.ErrBatteryPhysicsUnavailable), errors.Is(err, metrics.ErrSocGap):
+			jsonError(w, http.StatusUnprocessableEntity, err)
 		default:
 			jsonError(w, http.StatusInternalServerError, err)
 		}

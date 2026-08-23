@@ -586,6 +586,13 @@ func ComputeChain(ctx context.Context, from, to time.Time) (*Chain, error) {
 		return nil, err
 	}
 
+	return computeChainFromSlots(ctx, set)
+}
+
+// computeChainFromSlots is ComputeChain's body, taking an already-built slot set so
+// ComputeLedger can share one buildLedgerSlots pass with the decision replay instead
+// of paying for it twice (see that function's doc comment).
+func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, error) {
 	w0 := computeW0(set.Slots)
 	w1 := computeW1(set.Slots)
 	w3 := actualFlows(set.Slots)
