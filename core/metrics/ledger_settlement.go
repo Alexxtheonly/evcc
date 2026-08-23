@@ -76,6 +76,10 @@ func actualFlows(slots []slotData) []worldFlow {
 type RealisedCost struct {
 	Settled  Settled  `json:"settled"`
 	Coverage Coverage `json:"coverage"`
+	// Note states the invoice-comparability caveat (ADR-011 rule 7) in the payload
+	// itself: this is the one figure the ledger exists to compare against a real
+	// invoice, and it only ever prices the grid tariff rate.
+	Note string `json:"note"`
 }
 
 // ComputeRealisedCost computes item 1 for [from,to). Returns *ErrBeforeTariffStart if
@@ -91,5 +95,6 @@ func ComputeRealisedCost(ctx context.Context, from, to time.Time) (*RealisedCost
 	return &RealisedCost{
 		Settled:  settleFlows(set.Slots, actualFlows(set.Slots)),
 		Coverage: set.coverage(),
+		Note:     noteInvoiceComparability,
 	}, nil
 }

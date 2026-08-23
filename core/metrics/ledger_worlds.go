@@ -89,16 +89,20 @@ func computeW1(slots []slotData) []worldFlow {
 // from data using it, which the ADR explicitly allows ("otherwise use the existing
 // constant and say which"). Every field carries a Source string precisely so a caller
 // can render "derived from N slots" vs "no data, defaulted" rather than hiding which
-// one happened.
+// one happened. Fields are camelCase-tagged to match every other payload type in this
+// package (Settled, Coverage, ...) - without tags this serialised as PascalCase amid
+// lowerCamel siblings, the one field in the whole /api/savingsledger response that
+// looked like it came from a different API.
 type batteryPhysics struct {
-	CapacityKWh    float64
-	CapacitySource string
+	CapacityKWh    float64 `json:"capacityKWh"`
+	CapacitySource string  `json:"capacitySource"`
 
-	EtaC, EtaD float64
-	EtaSource  string
+	EtaC      float64 `json:"etaC"`
+	EtaD      float64 `json:"etaD"`
+	EtaSource string  `json:"etaSource"`
 
-	FloorFrac   float64
-	FloorSource string
+	FloorFrac   float64 `json:"floorFrac"`
+	FloorSource string  `json:"floorSource"`
 
 	// MaxChargeKWh/MaxDischargeKWh are the rateLimitPercentile (p99) single-slot
 	// charge/discharge energy observed for this battery - an empirical, data-derived
@@ -110,8 +114,8 @@ type batteryPhysics struct {
 	// rejected alternative could have done (in the flattering direction: bigger
 	// swings make the model's counterfactual look better than the real one). Only
 	// binds api.BatteryCharge's grid-forced branch (see simulateSlotStep).
-	MaxChargeKWh    float64
-	MaxDischargeKWh float64
+	MaxChargeKWh    float64 `json:"maxChargeKWh"`
+	MaxDischargeKWh float64 `json:"maxDischargeKWh"`
 }
 
 // rateLimitPercentile is the percentile used to establish MaxChargeKWh/MaxDischargeKWh
@@ -579,6 +583,37 @@ type Chain struct {
 	Coverage       Coverage        `json:"coverage"`
 	BatteryPhysics *batteryPhysics `json:"batteryPhysics,omitempty"`
 	Control        *ControlSplit   `json:"control,omitempty"`
+	// Notes are caveats ADR-011 rule 7 says must be labelled in the payload, not left
+	// to a code comment or an unwritten UI convention - which settlement figures a
+	// PeriodAverage price actually reflects, what Routing/Timing do and don't include,
+	// and what the euro figures do and don't cover against a real invoice.
+	Notes []string `json:"notes,omitempty"`
+}
+
+// noteInvoiceComparability, always present: every figure in this payload prices only
+// the grid/feed-in rate from the tariffs table. A standing charge, meter fee or VAT
+// isn't included unless the site's tariff configuration bakes it in - and the whole
+// point of this ledger is comparing against a real invoice.
+const noteInvoiceComparability = "prices only the grid tariff rate (kWh); standing charges, meter fees and VAT are not included unless baked into the tariff configuration"
+
+// noteRoutingIncludesLosses, present whenever Control is (a battery is configured):
+// Routing isolates "which sink got the energy" by pricing both worlds at the flat
+// period-average, which removes timing - but arbitrage (charging then discharging)
+// changes total import/export volume by the round-trip conversion loss, so that loss
+// is reported under Routing's volume effect even though it isn't a routing decision.
+const noteRoutingIncludesLosses = "control.routing includes round-trip battery conversion losses (charge-then-discharge isn't lossless), not only which sink the energy went to"
+
+// noteTimingSettlement, present whenever Control is: Timing is a genuine diagnostic
+// under period-average settlement, but reflects money actually paid only where the
+// site settles per-slot (Settled's own doc comment).
+const noteTimingSettlement = "control.timing reflects real money only under per-slot settlement; under period-average billing it is a diagnostic, not a figure actually paid"
+
+// notePeriodAverageCoverage, present whenever coverage is incomplete: the period-
+// average price is the mean over VALID slots only, and dropped slots are not assumed
+// to distribute evenly across the day - if they cluster (e.g. an evening-peak outage),
+// the period-average figures shift with coverage, not just with what actually happened.
+func notePeriodAverageCoverage(c Coverage) string {
+	return fmt.Sprintf("periodAverage prices are the mean over the %d valid slots only (%.1f%% coverage) - excluded slots are not assumed to average out evenly", c.ValidSlots, c.Fraction*100)
 }
 
 // ComputeChain runs the full ADR-011 world chain for [from,to). See buildLedgerSlots
@@ -642,11 +677,21 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 		{Label: "Control", Settled: diffSettled(worlds[2].Settled, worlds[3].Settled)},
 	}
 
+	coverage := set.coverage()
+	notes := []string{noteInvoiceComparability}
+	if control != nil {
+		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement)
+	}
+	if coverage.TotalSlots > 0 && coverage.ValidSlots < coverage.TotalSlots {
+		notes = append(notes, notePeriodAverageCoverage(coverage))
+	}
+
 	return &Chain{
 		Worlds:         worlds,
 		Contributions:  contributions,
-		Coverage:       set.coverage(),
+		Coverage:       coverage,
 		BatteryPhysics: phys,
 		Control:        control,
+		Notes:          notes,
 	}, nil
 }
