@@ -3,9 +3,11 @@ package settings
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
+	dbsettings "github.com/evcc-io/evcc/server/db/settings"
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
 	"github.com/spf13/cast"
@@ -36,12 +38,41 @@ func (s *ConfigSettings) get(key string) (any, error) {
 // TODO remove broken error handling when settings api is retired
 func (s *ConfigSettings) set(key string, val any) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+
 	data := s.conf.Named().Other
+	oldVal, existed := data[key]
 	data[key] = val
-	if err := s.conf.Update(data); err != nil {
+	err := s.conf.Update(data)
+	if err != nil {
 		s.log.ERROR.Println(err)
 	}
+
+	s.mu.Unlock()
+
+	// audit trail for the settings ledger (ADR-011 / F1): this adapter is
+	// handed to every database-configured loadpoint (cmd/setup.go) and
+	// persists through the configs table (conf.Update above) instead of
+	// server/db/settings.SetString, so without this hook every such
+	// loadpoint's mode/limitSoc/minSoc/planTime/... changes were entirely
+	// missing from settings_history - a failed write must not be recorded
+	// as if it had happened.
+	if err != nil {
+		return
+	}
+	if newStr := fmt.Sprint(val); !existed {
+		dbsettings.RecordHistory(s.historyKey(key), nil, newStr)
+	} else if oldStr := fmt.Sprint(oldVal); oldStr != newStr {
+		dbsettings.RecordHistory(s.historyKey(key), &oldStr, newStr)
+	}
+}
+
+// historyKey namespaces a settings_history key by the owning config record's
+// id (the same "db:<id>" identity util/config.NameForID already uses
+// elsewhere), so two database-configured loadpoints writing e.g. "mode"
+// don't conflate their history under one key - settings_history has no
+// column of its own for which device a key belongs to.
+func (s *ConfigSettings) historyKey(key string) string {
+	return config.NameForID(s.conf.ID) + "." + key
 }
 
 func (s *ConfigSettings) SetString(key string, val string) {
