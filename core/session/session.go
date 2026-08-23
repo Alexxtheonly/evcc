@@ -9,6 +9,7 @@ import (
 // Session is a single charging session
 type Session struct {
 	ID                   uint           `json:"id" csv:"-" gorm:"primarykey"`
+	Connected            *time.Time     `json:"connected" csv:"-"`
 	Created              time.Time      `json:"created"`
 	Finished             time.Time      `json:"finished"`
 	Disconnected         *time.Time     `json:"disconnected" csv:"-"`

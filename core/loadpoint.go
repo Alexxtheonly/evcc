@@ -582,6 +582,14 @@ func (lp *Loadpoint) evVehicleConnectHandler() {
 	// create charging session
 	lp.createSession()
 
+	// record the connect time; Created is stamped at charge start, which under
+	// smart or scheduled charging can be well after the vehicle plugs in, so
+	// Created cannot serve as the decision-relevant plug-in moment on its own
+	lp.updateSession(func(s *session.Session) {
+		now := lp.clock.Now()
+		s.Connected = &now
+	})
+
 	// reset energy-based charging plan offset
 	lp.planEnergyOffset = 0
 

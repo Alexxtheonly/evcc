@@ -57,7 +57,23 @@ func TestSession(t *testing.T) {
 	lp.createSession()
 	assert.NotNil(t, lp.session)
 
-	// start charging
+	// vehicle connects before charging starts: Connected is set on the
+	// in-memory session immediately, but nothing is persisted yet since
+	// Created (charge start) is still zero
+	connectedAt := clock.Now()
+	lp.updateSession(func(s *session.Session) {
+		now := lp.clock.Now()
+		s.Connected = &now
+	})
+	require.NotNil(t, lp.session.Connected)
+	assert.Equal(t, connectedAt, *lp.session.Connected)
+
+	s0, err := db.Sessions()
+	require.NoError(t, err)
+	assert.Empty(t, s0)
+
+	// start charging, an hour after connecting
+	clock.Add(time.Hour)
 	lp.updateSession(sessionStart(lp))
 	assert.Equal(t, clock.Now(), lp.session.Created)
 
@@ -104,6 +120,11 @@ func TestSession(t *testing.T) {
 	require.NotNil(t, s[0].Disconnected)
 	assert.Equal(t, clock.Now(), *s[0].Disconnected)
 	assert.Equal(t, time.Hour, s[0].Disconnected.Sub(s[0].Finished))
+
+	// Connected, set before Created existed, rode along on the first persist
+	// and survived the DB roundtrip
+	require.NotNil(t, s[0].Connected)
+	assert.Equal(t, connectedAt, *s[0].Connected)
 }
 
 func TestCloseSessionsOnStartup_emptyDb(t *testing.T) {
