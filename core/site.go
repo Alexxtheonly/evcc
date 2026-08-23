@@ -108,6 +108,7 @@ type Site struct {
 	collectors          map[string]*metrics.Collector // keyed by meter ref
 	tariffSlot          time.Time                     // last persisted tariff slot
 	forecastArchiveSlot time.Time                     // last solar forecast lead-time archive slot
+	controlSlot         time.Time                     // last persisted control_slots slot (ADR-011)
 
 	// cached measurement state, guarded by RWMutex
 	siteState
@@ -1337,6 +1338,11 @@ func (site *Site) update(lp updater) {
 	batteryGridChargeActive := site.batteryGridChargeActive(rate)
 	site.publish(keys.BatteryGridChargeActive, batteryGridChargeActive)
 	site.updateBatteryMode(batteryGridChargeActive, rate)
+
+	// record what was decided and what was actually applied, once per
+	// completed slot (ADR-011) - after updateBatteryMode so GetBatteryMode()
+	// reflects this cycle's applied decision, not the previous one
+	site.persistControlSlot()
 
 	// re-evaluate against the updated loadpoint state
 	site.publishSuggestions()

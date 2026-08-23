@@ -601,6 +601,52 @@ func (site *Site) publishOptimizerDecision() {
 	site.publishOptimizerDecisionLocked()
 }
 
+// persistControlSlot stores one completed 15min control decision (ADR-011):
+// the optimizer's vetted suggestion versus the battery mode actually applied,
+// and why they differ. Driven by the update loop like persistTariffs, with
+// the same slot-boundary gate - automatic mode runs the optimizer far more
+// often than once per slot (site.go's update loop calls this every cycle,
+// ~30s), so the gate is what bounds the table to ~96 rows/day rather than
+// the control loop's own frequency.
+//
+// Called after updateBatteryMode so GetBatteryMode() reflects this cycle's
+// applied decision. GetBatteryMode() takes site.RLock() itself, so it is
+// read before this function's own RLock section rather than inside it -
+// site.RWMutex is not reentrant, and nesting the two would deadlock against
+// a writer arriving between them.
+func (site *Site) persistControlSlot() {
+	slot := time.Now().Truncate(tariff.SlotDuration)
+
+	last := site.controlSlot
+	site.controlSlot = slot
+
+	// skip repeat ticks within the slot and the partial boot slot
+	if last.IsZero() || !slot.After(last) {
+		return
+	}
+
+	applied := site.GetBatteryMode()
+
+	site.RLock()
+	suggested := site.optimizerBatteryMode
+	veto := site.optimizerVetoReason
+	healthOk := site.optimizerHealthOk
+	price := site.optimizerChargePrice
+	site.RUnlock()
+
+	// price only means something alongside an actual charge decision - see
+	// optimizerChargePrice's own doc comment, which the non-charge branches
+	// of setOptimizerBatteryMode already keep at 0 for exactly this reason
+	var p *float64
+	if suggested == api.BatteryCharge {
+		p = &price
+	}
+
+	if err := metrics.PersistControlSlot(slot, applied.String(), suggested.String(), string(veto), healthOk, p); err != nil {
+		site.log.ERROR.Printf("persist control slot: %v", err)
+	}
+}
+
 // optimizerHealthReason explains why the optimizer is not currently producing
 // results. It is independent of optimizerVetoReason, which explains why a
 // result it did produce is not (fully) applied.

@@ -135,7 +135,14 @@ func SetupSchema() error {
 		return err
 	}
 
-	return db.Instance.AutoMigrate(new(forecastSample))
+	if err := db.Instance.AutoMigrate(new(forecastSample)); err != nil {
+		return err
+	}
+
+	// savings ledger persistence (ADR-011): what the control loop decided and
+	// under what configuration, so a later replay can audit it instead of
+	// only having whatever is live right now
+	return db.Instance.AutoMigrate(new(controlSlot))
 }
 
 // OnPersist, if set, is called with the slot start after a slot is written.

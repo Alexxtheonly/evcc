@@ -1187,3 +1187,77 @@ func TestApplyOptimizerResultEmptyMeansActuallyEmpty(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.False(t, got[0].Empty.IsZero(), "a soc of 0 must be reported empty")
 }
+
+// TestPersistControlSlotGate exercises the ADR-011 control_slots slot gate:
+// the same partial-boot-slot skip and repeat-tick dedup as persistTariffs.
+// Advancing "last persisted" backwards in place of sleeping avoids waiting on
+// wall-clock time to cross a real 15min boundary.
+func TestPersistControlSlotGate(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{log: util.NewLogger("foo")}
+	site.batteryMode = api.BatteryCharge
+	site.optimizerBatteryMode = api.BatteryCharge
+	site.optimizerChargePrice = 0.15
+	site.optimizerHealthOk = true
+
+	countRows := func() int64 {
+		var n int64
+		require.NoError(t, db.Instance.Table("control_slots").Count(&n).Error)
+		return n
+	}
+
+	// the first call after boot only establishes the current slot - a
+	// partial slot the process didn't observe from the start is not
+	// persisted, mirroring persistTariffs
+	site.persistControlSlot()
+	assert.Equal(t, int64(0), countRows())
+
+	// repeat ticks within the same slot (automatic mode calls this every
+	// control-loop cycle, ~30s) must not write again
+	site.persistControlSlot()
+	assert.Equal(t, int64(0), countRows())
+
+	// simulate having crossed into a new slot: rewind the tracked
+	// "last persisted" slot by one slot duration instead of sleeping
+	site.controlSlot = site.controlSlot.Add(-tariff.SlotDuration)
+	site.persistControlSlot()
+	assert.Equal(t, int64(1), countRows())
+
+	// and the gate closes again immediately afterwards
+	site.persistControlSlot()
+	assert.Equal(t, int64(1), countRows())
+
+	var appliedMode, suggestedMode string
+	var price *float64
+	require.NoError(t, db.Instance.Raw(
+		"SELECT applied_mode, suggested_mode, price FROM control_slots",
+	).Row().Scan(&appliedMode, &suggestedMode, &price))
+	assert.Equal(t, api.BatteryCharge.String(), appliedMode)
+	assert.Equal(t, api.BatteryCharge.String(), suggestedMode)
+	require.NotNil(t, price)
+	assert.InDelta(t, 0.15, *price, 0.001)
+}
+
+// TestPersistControlSlotPriceAbsentWhenNotCharging asserts the price column
+// is absent (not 0) whenever the suggested mode isn't an active charge
+// decision - a slot idling at 0 price must not be indistinguishable from a
+// slot with no price recorded at all.
+func TestPersistControlSlotPriceAbsentWhenNotCharging(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{log: util.NewLogger("foo")}
+	site.batteryMode = api.BatteryNormal
+	site.optimizerBatteryMode = api.BatteryNormal
+	site.optimizerChargePrice = 0 // stale/zeroed, as setOptimizerBatteryMode leaves it for non-charge modes
+
+	site.persistControlSlot()
+	site.controlSlot = site.controlSlot.Add(-tariff.SlotDuration)
+	site.persistControlSlot()
+
+	var price *float64
+	require.NoError(t, db.Instance.Raw("SELECT price FROM control_slots").Row().Scan(&price))
+	assert.Nil(t, price)
+}

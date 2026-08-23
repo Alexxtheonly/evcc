@@ -10,6 +10,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestSetupSchemaControlSlots confirms the ADR-011 control_slots table is
+// reachable through SetupSchema, the test entry point this package's other
+// migrations already go through - a table registered in a stray init()
+// instead would be invisible here even though production still migrates it
+// via db.Register at startup.
+func TestSetupSchemaControlSlots(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	require.True(t, db.Instance.Migrator().HasTable(new(controlSlot)))
+
+	// second call must be a no-op, not an error - production runs this on
+	// every startup against a database that already has the table
+	require.NoError(t, SetupSchema())
+}
+
 func TestSqliteTimestamp(t *testing.T) {
 	clock := clock.NewMock()
 	clock.Add(time.Hour)
