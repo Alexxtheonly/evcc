@@ -1166,13 +1166,26 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		}
 
 		scale := site.effectiveSolarScale()
-		ftSlots := scaleAndPruneByLead(solarEnergy, now, site.effectiveSolarScaleAt(scale), minLen)
+		scaleAt := site.effectiveSolarScaleAt(scale)
+		ftSlots := scaleAndPruneByLead(solarEnergy, now, scaleAt, minLen)
 
-		// decay the scale derived from measured vs forecasted energy of the last completed slot
-		if pv, fcst := site.measuredSlotEnergy(site.Meters.PVMetersRef...), site.measuredSlotEnergy(metrics.Forecast)*scale; pv > 0 && fcst > 0 {
+		// decay the scale derived from measured vs forecasted energy of the last
+		// completed slot. fcstRaw is deliberately NOT pre-multiplied by scale here -
+		// blendScaleByLead below evaluates the per-slot ratio pv/(fcstRaw*scaleAt(lead))
+		// using each target slot's OWN lead, the same scale ftSlots[i] was built with
+		// (see B31: a single flat ratio computed with one scale, applied to slots
+		// built with a per-lead scale, silently mixes the two for every slot but the
+		// one whose lead happens to match).
+		if pv, fcstRaw := site.measuredSlotEnergy(site.Meters.PVMetersRef...), site.measuredSlotEnergy(metrics.Forecast); pv > 0 && fcstRaw > 0 {
 			orig := slices.Clone(ftSlots[:min(optimizerDecaySlots, len(ftSlots))])
-			blendScale(ftSlots, pv/fcst, optimizerDecaySlots)
-			site.log.DEBUG.Printf("optimizer: pv slots updated with scale %.2f: %.0f -> %.0f", pv/fcst, orig, ftSlots[:len(orig)])
+			blendScaleByLead(ftSlots, solarEnergy, now, func(lead time.Duration) float64 {
+				s := scaleAt(lead)
+				if s == 0 {
+					return 1 // degenerate scale, no correction rather than a division by zero
+				}
+				return pv / (fcstRaw * s)
+			}, optimizerDecaySlots)
+			site.log.DEBUG.Printf("optimizer: pv slots updated with measured %.0fWh vs forecast %.0fWh: %.0f -> %.0f", pv, fcstRaw, orig, ftSlots[:len(orig)])
 		}
 		ft = prorate(ftSlots, firstSlotDuration)
 	}
@@ -2194,6 +2207,24 @@ func blendScale[T constraints.Float](slots []T, scale float64, decaySlots int) {
 	for i := range min(decaySlots, len(slots)) {
 		w := float64(decaySlots-i) / float64(decaySlots)
 		slots[i] = T(float64(slots[i]) * (w*scale + (1 - w)))
+	}
+}
+
+// blendScaleByLead is blendScale's per-lead counterpart (B31): a single flat scale
+// applied to every slot in the decay window silently mixes two different scales for
+// every slot but the first. slots[i] was built by scaleAndPruneByLead using
+// scaleAt(lead of leadSlots[i]) - a flat ratio computed with, say, the nowcast scale
+// only cancels that baked-in per-lead scale correctly at i=0, where lead is 0 and the
+// two scales happen to be the same value; for i>0 the mismatch shows up as a
+// systematic over- or under-correction proportional to how much scaleAt(lead) differs
+// from whatever scale the flat ratio used. ratioAt is evaluated per slot with that
+// slot's own lead, so the correction is internally consistent at every index, not
+// just the first - see TestBlendScaleByLead.
+func blendScaleByLead[T constraints.Float](slots []T, leadSlots api.Rates, now time.Time, ratioAt func(lead time.Duration) float64, decaySlots int) {
+	for i := range min(decaySlots, len(slots), len(leadSlots)) {
+		w := float64(decaySlots-i) / float64(decaySlots)
+		ratio := ratioAt(leadSlots[i].Start.Sub(now))
+		slots[i] = T(float64(slots[i]) * (w*ratio + (1 - w)))
 	}
 }
 

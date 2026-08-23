@@ -949,6 +949,72 @@ func TestBlendScale(t *testing.T) {
 	assert.Equal(t, []float64{50, 62.5}, short)
 }
 
+// TestBlendScaleByLead covers B31: a flat ratio applied to every slot in the decay
+// window mixes two different scales for every slot but the one whose lead happens to
+// match the scale the ratio's denominator used. Fixture: 4 slots at leads 0, 15, 30,
+// 45min, each forecast 2000Wh raw. scaleAt(0)=0.8 (the nowcast - matches what
+// scaleAndPruneByLead used to build slot 0), scaleAt(lead>0)=0.6 (a different
+// per-lead bias, entirely plausible in production since per-lead history can
+// genuinely disagree with the nowcast). Measured last-slot PV 400Wh vs raw archived
+// forecast 1000Wh.
+func TestBlendScaleByLead(t *testing.T) {
+	baseTime := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	leadSlots := api.Rates{
+		{Start: baseTime},
+		{Start: baseTime.Add(15 * time.Minute)},
+		{Start: baseTime.Add(30 * time.Minute)},
+		{Start: baseTime.Add(45 * time.Minute)},
+	}
+	scaleAt := func(lead time.Duration) float64 {
+		if lead <= 0 {
+			return 0.8
+		}
+		return 0.6
+	}
+
+	// ftSlots as scaleAndPruneByLead would have built them: rawForecast(2000) * scaleAt(lead)
+	rawForecast := 2000.0
+	newFtSlots := func() []float64 {
+		return []float64{rawForecast * scaleAt(0), rawForecast * scaleAt(15*time.Minute), rawForecast * scaleAt(30*time.Minute), rawForecast * scaleAt(45*time.Minute)}
+	}
+
+	pv, fcstRaw := 400.0, 1000.0
+
+	// OLD behaviour: a single flat ratio, computed with the nowcast scale only,
+	// applied uniformly via blendScale.
+	oldSlots := newFtSlots()
+	oldRatio := pv / (fcstRaw * 0.8)
+	blendScale(oldSlots, oldRatio, 4)
+	require.InDelta(t, 800, oldSlots[0], 1e-9)
+	require.InDelta(t, 750, oldSlots[1], 1e-9)
+	require.InDelta(t, 900, oldSlots[2], 1e-9)
+	require.InDelta(t, 1050, oldSlots[3], 1e-9)
+
+	// NEW behaviour: each slot's own lead selects the ratio's denominator scale.
+	newSlots := newFtSlots()
+	blendScaleByLead(newSlots, leadSlots, baseTime, func(lead time.Duration) float64 {
+		return pv / (fcstRaw * scaleAt(lead))
+	}, 4)
+
+	// slot 0 is unaffected - its lead (0) matches the scale the old flat ratio used
+	// too, so the scaleAt(0) term cancels identically either way.
+	require.InDelta(t, 800, newSlots[0], 1e-9)
+	require.InDelta(t, oldSlots[0], newSlots[0], 1e-9)
+
+	// slots 1-3 diverge from the old, flat-ratio figures - this is the bug.
+	require.InDelta(t, 900, newSlots[1], 1e-9)
+	require.InDelta(t, 1000, newSlots[2], 1e-9)
+	require.InDelta(t, 1100, newSlots[3], 1e-9)
+	require.NotEqual(t, oldSlots[1], newSlots[1])
+	require.NotEqual(t, oldSlots[2], newSlots[2])
+	require.NotEqual(t, oldSlots[3], newSlots[3])
+
+	// fewer slots than decay length, and fewer leadSlots than decay length
+	short := []float64{100, 100}
+	blendScaleByLead(short, leadSlots[:2], baseTime, func(time.Duration) float64 { return 2 }, 4)
+	require.Equal(t, []float64{200, 175}, short)
+}
+
 func TestCurrentSlotSuggestion(t *testing.T) {
 	// BYD-sized battery well between its SoC bounds
 	midSocConfig := optimizer.BatteryConfig{SCapacity: 19320, SMin: 966, SMax: 18354, SInitial: 10000}
