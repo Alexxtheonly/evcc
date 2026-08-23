@@ -21,9 +21,10 @@ import (
 // decision replay.
 //
 // Chain is nil, with ChainUnavailable explaining why, when the chain specifically
-// couldn't be computed for a battery-physics reason (ErrBatteryPhysicsUnavailable or
-// ErrSocGap) - Realised and Decisions (mode/veto data, just without a hindsight euro
-// figure) are still returned in that case. RealisedCost's own doc comment says it's
+// couldn't be computed for a battery-physics reason (ErrBatteryPhysicsUnavailable,
+// ErrSocGap or ErrBatteryRateCeilingUnavailable) - Realised and Decisions (mode/veto
+// data, just without a SlotFlowDeltaEUR figure) are still returned in that case.
+// RealisedCost's own doc comment says it's
 // deliberately independent of the chain; a battery-physics refusal destroying it too
 // would contradict that documented independence for no reason - the "one measured
 // number everything else hangs off" shouldn't disappear because a derived comparison

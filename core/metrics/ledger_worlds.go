@@ -650,6 +650,13 @@ const noteRoutingIncludesLosses = "control.routing includes round-trip battery c
 // site settles per-slot (Settled's own doc comment).
 const noteTimingSettlement = "control.timing reflects real money only under per-slot settlement; under period-average billing it is a diagnostic, not a figure actually paid"
 
+// noteSlotFlowDeltaIsSlotLocal, present whenever Control is: every decision's
+// slotFlowDeltaEur (in the sibling decisions array) prices only the vetoed slot
+// itself against the same starting SoC, not any later slot the decision would have
+// affected - see DecisionRow.SlotFlowDeltaEUR's doc comment for a worked example
+// where this reports the opposite sign from a true hindsight figure.
+const noteSlotFlowDeltaIsSlotLocal = "decisions[].slotFlowDeltaEur prices only the vetoed slot itself, at its own starting SoC - a decision whose cost or benefit only materialises in a later slot can show the wrong sign here"
+
 // notePeriodAverageCoverage, present whenever coverage is incomplete: the period-
 // average price is the mean over VALID slots only, and dropped slots are not assumed
 // to distribute evenly across the day - if they cluster (e.g. an evening-peak outage),
@@ -730,7 +737,7 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	coverage := set.coverage()
 	notes := []string{noteInvoiceComparability}
 	if control != nil {
-		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement, phys.rateCeilingNote(), phys.floorNote())
+		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement, noteSlotFlowDeltaIsSlotLocal, phys.rateCeilingNote(), phys.floorNote())
 	}
 	if coverage.TotalSlots > 0 && coverage.ValidSlots < coverage.TotalSlots {
 		notes = append(notes, notePeriodAverageCoverage(coverage))

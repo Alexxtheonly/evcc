@@ -2,6 +2,8 @@ package metrics
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,16 +63,16 @@ func TestDecisionDeltasHindsight(t *testing.T) {
 	require.Len(t, rows, 2)
 
 	require.Equal(t, "payback", rows[0].VetoReason)
-	require.NotNil(t, rows[0].HindsightDeltaEUR)
+	require.NotNil(t, rows[0].SlotFlowDeltaEUR)
 
 	// applied (hold): import=1kWh -> cost 0.40. rejected (charge): forces a grid
 	// charge to fill headroom too, so it costs strictly more - the veto was correct,
 	// so the hindsight delta must be negative (applied cost less than the rejected
 	// alternative would have).
-	require.Less(t, *rows[0].HindsightDeltaEUR, 0.0)
+	require.Less(t, *rows[0].SlotFlowDeltaEUR, 0.0)
 
 	// no veto on the second slot -> nothing to compare
-	require.Nil(t, rows[1].HindsightDeltaEUR)
+	require.Nil(t, rows[1].SlotFlowDeltaEUR)
 }
 
 // TestDecisionDeltasCarriesModeChanged covers the Priority-5 finding: AppliedMode is
@@ -108,5 +110,80 @@ func TestDecisionDeltasWithoutBatteryPhysics(t *testing.T) {
 	rows, err := DecisionDeltas(context.Background(), base, base.Add(15*time.Minute), set, nil)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	require.Nil(t, rows[0].HindsightDeltaEUR, "no battery physics available - must not fabricate a delta")
+	require.Nil(t, rows[0].SlotFlowDeltaEUR, "no battery physics available - must not fabricate a delta")
+}
+
+// TestSlotFlowDeltaIsSlotLocalNotForwardHindsight covers the A11 finding: what was
+// HindsightDeltaEUR (renamed - see SlotFlowDeltaEUR's doc comment) prices only the
+// vetoed slot itself, simulating applied vs. suggested for ONE slot with
+// simulateSlotStep and stopping there. A charge that was vetoed at a very cheap price
+// specifically because it would pay off in a LATER, expensive slot has that payoff
+// priced nowhere - the sign this field reports is determined by the direction of the
+// vetoed decision (charging always looks like a cost, discharging always looks like a
+// saving), not by whether the veto was actually right.
+//
+// Fixture: slot 1 at 0.05 EUR/kWh, 0.2kWh deficit, veto="payback" (suggested charge,
+// applied normal/hold). Slot 2 at 0.50 EUR/kWh, 3.0kWh deficit - the price the vetoed
+// charge would have displaced, at 20x the slot-1 price. A human reading "the veto
+// looks wrong" from a positive SlotFlowDeltaEUR would expect that reasoning to hold
+// here; instead this field reports -0.135 ("veto vindicated") because it never prices
+// slot 2 at all. This is documented, not silently left as a surprise: the field is
+// named for what it actually is, and chain.Notes carries the caveat in the payload
+// (ADR-011 rule 7) rather than only in a code comment.
+func TestSlotFlowDeltaIsSlotLocalNotForwardHindsight(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+	require.NoError(t, bat.updateCapacity(19.32))
+
+	loc := time.Now().Location()
+
+	// isolated history rows purely to establish charge/discharge evidence (see
+	// ErrBatteryRateCeilingUnavailable) and a 2.5kWh rate ceiling in both directions -
+	// no SoC reading, so they don't participate in FloorFrac or capacity derivation.
+	require.NoError(t, persist(bat, time.Date(2026, 6, 1, 0, 0, 0, 0, loc), 2.5, 0, nil, false, false))
+	require.NoError(t, persist(bat, time.Date(2026, 6, 2, 0, 0, 0, 0, loc), 0, 2.5, nil, false, false))
+
+	// a 5% floor reading, well below the period's own 20% - without it FloorFrac would
+	// equal the period's own SoC (the only other reading on record) and the applied
+	// "normal" mode would find zero headroom to discharge, changing the numbers below.
+	lowSoc := 5.0
+	require.NoError(t, persist(bat, time.Date(2026, 6, 3, 0, 0, 0, 0, loc), 0, 0, &lowSoc, false, false))
+
+	slot1 := time.Date(2026, 8, 6, 12, 0, 0, 0, loc)
+	slot2 := slot1.Add(15 * time.Minute)
+
+	soc := 20.0
+	require.NoError(t, persist(grid, slot1, 0.2, 0, nil, false, false))
+	require.NoError(t, persist(home, slot1, 0.2, 0, nil, false, false))
+	require.NoError(t, persist(bat, slot1, 0, 0, &soc, false, false))
+	g1, f1 := 0.05, 0.0
+	require.NoError(t, PersistTariffs(slot1, &g1, &f1, nil, nil))
+	require.NoError(t, PersistControlSlot(slot1, batteryModeNormal, batteryModeCharge, "payback", true, nil))
+
+	require.NoError(t, persist(grid, slot2, 3.0, 0, nil, false, false))
+	require.NoError(t, persist(home, slot2, 3.0, 0, nil, false, false))
+	require.NoError(t, persist(bat, slot2, 0, 0, &soc, false, false))
+	g2, f2 := 0.50, 0.0
+	require.NoError(t, PersistTariffs(slot2, &g2, &f2, nil, nil))
+	require.NoError(t, PersistControlSlot(slot2, batteryModeNormal, batteryModeNormal, "", true, nil))
+
+	from, to := slot1, slot2.Add(15*time.Minute)
+
+	ledger, err := ComputeLedger(context.Background(), from, to)
+	require.NoError(t, err)
+	require.NotNil(t, ledger.Chain, "chain must be available: %s", ledger.ChainUnavailable)
+	require.Len(t, ledger.Decisions, 2)
+
+	require.NotNil(t, ledger.Decisions[0].SlotFlowDeltaEUR)
+	require.InDelta(t, -0.135, *ledger.Decisions[0].SlotFlowDeltaEUR, 1e-9,
+		"documents the known slot-local limitation: a charge that would have paid off next slot still reads as vindicated")
+
+	found := slices.ContainsFunc(ledger.Chain.Notes, func(n string) bool {
+		return strings.Contains(n, "slotFlowDeltaEur") || strings.Contains(n, "SlotFlowDeltaEUR") || strings.Contains(n, "later slot")
+	})
+	require.True(t, found, "chain.Notes must disclose that the per-decision delta only prices the vetoed slot itself, not any later slot the decision would have affected")
 }
