@@ -41,6 +41,22 @@ var ErrLedgerRangeTooLarge = fmt.Errorf("requested range exceeds the %d-day maxi
 // rule 4).
 var ErrLedgerRangeUnaligned = errors.New("from/to must be aligned to a tariff slot boundary")
 
+// ErrLedgerRangeInverted means to does not come after from - a reversed or identical
+// period (e.g. ?from=2026-08-23&to=2026-08-22, or from==to). A malformed request, not
+// a server fault, so it needs a sentinel here rather than a plain errors.New: the
+// handler's mapping (savingsLedgerErrorStatus) only recognises specific errors and
+// falls back to 500 for anything else - the exact failure mode ErrLoadpointNoChargeMeter
+// had before it got its own case.
+var ErrLedgerRangeInverted = errors.New("invalid period: to must be after from")
+
+// ErrNoGridMeter and ErrNoHomeMeter mean the site has no meter of that group at all -
+// a configuration problem the ledger refuses to work around, not a period with no
+// data in it (that's handled by dropping slots, see buildLedgerSlots' doc comment).
+var (
+	ErrNoGridMeter = errors.New("no grid meter configured")
+	ErrNoHomeMeter = errors.New("no home meter configured")
+)
+
 // ErrBeforeTariffStart is returned when the requested period starts before the
 // earliest slot the tariffs table has a price for. ADR-011 honesty rule 4: refuse
 // rather than fabricate a price for a period the site has no record of.
@@ -328,7 +344,7 @@ func verifyLoadpointChargeMeters(ctx context.Context, ids []int) error {
 // of running a query to completion nobody will read.
 func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint, includeBattery bool) (*ledgerSlotSet, error) {
 	if !to.After(from) {
-		return nil, errors.New("invalid period: to must be after from")
+		return nil, ErrLedgerRangeInverted
 	}
 	if to.Sub(from) > time.Duration(MaxLedgerRangeDays)*24*time.Hour {
 		return nil, ErrLedgerRangeTooLarge
@@ -350,7 +366,7 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 		return nil, err
 	}
 	if !hasGrid {
-		return nil, errors.New("no grid meter configured")
+		return nil, ErrNoGridMeter
 	}
 
 	homeRows, hasHome, err := queryGroupSlots(ctx, Home, from, to)
@@ -358,7 +374,7 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 		return nil, err
 	}
 	if !hasHome {
-		return nil, errors.New("no home meter configured")
+		return nil, ErrNoHomeMeter
 	}
 
 	pvRows, hasPV, err := queryGroupSlots(ctx, PV, from, to)

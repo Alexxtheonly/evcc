@@ -26,10 +26,17 @@ func TestSavingsLedgerErrorStatus(t *testing.T) {
 		{"before tariff start", &metrics.ErrBeforeTariffStart{Earliest: time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)}, http.StatusUnprocessableEntity},
 		{"range too large", metrics.ErrLedgerRangeTooLarge, http.StatusBadRequest},
 		{"range unaligned", metrics.ErrLedgerRangeUnaligned, http.StatusBadRequest},
+		// D1: a reversed or identical from/to used to be a plain errors.New in
+		// buildLedgerSlots (core/metrics/ledger_slots.go), unrecognised here, so it fell
+		// to the default 500 - reproduced live via
+		// GET /api/savingsledger?from=...T00:00+02:00&to=...(earlier)T00:00+02:00.
+		{"range inverted (reversed from/to)", metrics.ErrLedgerRangeInverted, http.StatusBadRequest},
 		{"battery physics unavailable", metrics.ErrBatteryPhysicsUnavailable, http.StatusUnprocessableEntity},
 		{"soc gap", metrics.ErrSocGap, http.StatusUnprocessableEntity},
 		{"battery rate ceiling unavailable", metrics.ErrBatteryRateCeilingUnavailable, http.StatusUnprocessableEntity},
 		{"loadpoint has no charge meter", metrics.ErrLoadpointNoChargeMeter, http.StatusUnprocessableEntity},
+		{"no grid meter configured", metrics.ErrNoGridMeter, http.StatusUnprocessableEntity},
+		{"no home meter configured", metrics.ErrNoHomeMeter, http.StatusUnprocessableEntity},
 		{"wrapped loadpoint no charge meter", errors.New("wrap: " + metrics.ErrLoadpointNoChargeMeter.Error()), http.StatusInternalServerError}, // errors.New doesn't wrap - documents that only errors.Is-compatible wrapping is recognised
 		{"unrecognised error", errors.New("boom"), http.StatusInternalServerError},
 	}

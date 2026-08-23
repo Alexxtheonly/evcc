@@ -64,7 +64,14 @@ func savingsLedgerErrorStatus(err error) int {
 	switch {
 	case errors.As(err, &refused):
 		return http.StatusUnprocessableEntity
-	case errors.Is(err, metrics.ErrLedgerRangeTooLarge), errors.Is(err, metrics.ErrLedgerRangeUnaligned):
+	// malformed request shape: an out-of-bounds, unaligned, or reversed/identical
+	// [from,to). ErrLedgerRangeInverted used to be a plain errors.New in
+	// buildLedgerSlots (core/metrics/ledger_slots.go) - it fell to the default case
+	// below and returned 500 for a reversed or identical from/to, same failure mode
+	// ErrLoadpointNoChargeMeter had before it got its own case.
+	case errors.Is(err, metrics.ErrLedgerRangeTooLarge),
+		errors.Is(err, metrics.ErrLedgerRangeUnaligned),
+		errors.Is(err, metrics.ErrLedgerRangeInverted):
 		return http.StatusBadRequest
 	// ComputeLedger degrades a battery-physics refusal to a null Chain rather than
 	// failing the whole request (see Ledger's doc comment), so these three only
@@ -79,6 +86,10 @@ func savingsLedgerErrorStatus(err error) int {
 	// ErrLoadpointNoChargeMeter's doc comment). A request-shape/data problem, not a
 	// server fault.
 	case errors.Is(err, metrics.ErrLoadpointNoChargeMeter):
+		return http.StatusUnprocessableEntity
+	// the site itself has no grid or home meter configured at all - a configuration
+	// problem the ledger refuses to work around (ADR-011 rule 4), not a server fault.
+	case errors.Is(err, metrics.ErrNoGridMeter), errors.Is(err, metrics.ErrNoHomeMeter):
 		return http.StatusUnprocessableEntity
 	default:
 		return http.StatusInternalServerError
