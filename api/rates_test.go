@@ -36,3 +36,9 @@ func TestRates(t *testing.T) {
 	_, err = rr.At(clock.Now().Add(5 * time.Hour))
 	assert.Error(t, err)
 }
+
+func TestRateIsZero(t *testing.T) {
+	assert.True(t, Rate{}.IsZero())
+	assert.False(t, Rate{Value: 1}.IsZero())
+	assert.False(t, Rate{Forecast: true}.IsZero(), "a rate explicitly marked forecast is not the zero value")
+}
