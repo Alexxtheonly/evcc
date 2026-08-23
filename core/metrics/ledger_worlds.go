@@ -21,6 +21,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -94,14 +96,36 @@ type batteryPhysics struct {
 	FloorFrac   float64
 	FloorSource string
 
-	// MaxChargeKWh/MaxDischargeKWh are the largest single-slot charge/discharge
-	// energy ever observed for this battery - an empirical, data-derived stand-in
-	// for an inverter rate limit that isn't persisted anywhere the ledger can read.
-	// Only binds api.BatteryCharge's grid-forced branch (see simulateSlotStep);
-	// unconstrained by rate would let one slot "charge" from empty to full, which
-	// is unphysical and would overstate what a rejected alternative could have done.
+	// MaxChargeKWh/MaxDischargeKWh are the rateLimitPercentile (p99) single-slot
+	// charge/discharge energy observed for this battery - an empirical, data-derived
+	// stand-in for an inverter rate limit that isn't persisted anywhere the ledger
+	// can read. Deliberately NOT the raw maximum: a single glitched slot (a meter
+	// spike, or a one-off grid-forced test charge) would otherwise become the
+	// ceiling for the battery's entire future, letting the model "charge" from empty
+	// to full in one 15-minute slot - unphysical, and it always overstates what a
+	// rejected alternative could have done (in the flattering direction: bigger
+	// swings make the model's counterfactual look better than the real one). Only
+	// binds api.BatteryCharge's grid-forced branch (see simulateSlotStep).
 	MaxChargeKWh    float64
 	MaxDischargeKWh float64
+}
+
+// rateLimitPercentile is the percentile used to establish MaxChargeKWh/MaxDischargeKWh
+// from history, instead of the single largest slot ever observed - see those fields'
+// doc comment for why a raw max() is the wrong statistic here.
+const rateLimitPercentile = 0.99
+
+// percentile returns the value at percentile p (0..1) of values, nearest-rank method.
+// Returns 0 for an empty slice. Does not mutate values.
+func percentile(values []float64, p float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
+	rank := int(math.Ceil(p*float64(len(sorted)))) - 1
+	rank = max(0, min(rank, len(sorted)-1))
+	return sorted[rank]
 }
 
 // minSocDeltaFrac is the smallest SoC movement (as a fraction, e.g. 0.02 = 2
@@ -191,8 +215,8 @@ func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
 
 	var (
 		minSocFrac                      = 1.0
-		maxChargeSlot, maxDischargeSlot float64
 		haveSoc                         bool
+		chargeSamples, dischargeSamples []float64
 	)
 	for _, r := range rows {
 		if r.SocFrac != nil {
@@ -200,12 +224,14 @@ func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
 			minSocFrac = min(minSocFrac, *r.SocFrac)
 		}
 		if r.ChargeKWh > 0 {
-			maxChargeSlot = max(maxChargeSlot, r.ChargeKWh)
+			chargeSamples = append(chargeSamples, r.ChargeKWh)
 		}
 		if r.DischargeKWh > 0 {
-			maxDischargeSlot = max(maxDischargeSlot, r.DischargeKWh)
+			dischargeSamples = append(dischargeSamples, r.DischargeKWh)
 		}
 	}
+	maxChargeSlot := percentile(chargeSamples, rateLimitPercentile)
+	maxDischargeSlot := percentile(dischargeSamples, rateLimitPercentile)
 
 	capacityKWh, capacitySource, err := resolveBatteryCapacity(ctx, ids, rows)
 	if err != nil {

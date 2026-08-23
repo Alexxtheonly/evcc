@@ -82,6 +82,49 @@ func TestDeriveBatteryPhysicsRefusesWithoutEnoughHistory(t *testing.T) {
 	require.ErrorIs(t, err, ErrBatteryPhysicsUnavailable)
 }
 
+// TestPercentileIgnoresSingleOutlier covers the Priority-4 fix directly: a single
+// glitched slot must not become the p99 rate ceiling the way it would a raw max().
+func TestPercentileIgnoresSingleOutlier(t *testing.T) {
+	values := make([]float64, 0, 100)
+	for range 99 {
+		values = append(values, 2.0) // a normal, physically plausible charge rate
+	}
+	values = append(values, 40.0) // one glitched/grid-forced slot
+
+	require.InDelta(t, 2.0, percentile(values, rateLimitPercentile), 1e-9,
+		"the p99 ceiling must come from the 99 normal readings, not the single outlier")
+	require.InDelta(t, 40.0, percentile(values, 1.0), 1e-9, "p100 (the max) should still surface the outlier")
+}
+
+// TestDeriveBatteryPhysicsRateLimitIgnoresOutlier is the same fix at the
+// deriveBatteryPhysics level: MaxChargeKWh used to be max() over all history, so one
+// glitched slot (a meter spike, or a one-off grid-forced test charge) collapsed the
+// rate ceiling to whatever that single slot happened to be - unphysically letting the
+// model "charge" from empty to full in a single 15-minute slot, and always in the
+// direction that flatters the real controller's hindsight comparisons. Capacity is
+// persisted directly so this test doesn't also need to satisfy the derivation
+// fallback's evidence requirements - MaxChargeKWh is computed from the raw per-row
+// readings regardless of capacity source.
+func TestDeriveBatteryPhysicsRateLimitIgnoresOutlier(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	bat := mustCreateEntity(t, Battery, "bat1")
+	require.NoError(t, bat.updateCapacity(10.0))
+
+	loc := time.Now().Location()
+	ts := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+	for range 100 {
+		require.NoError(t, persist(bat, ts, 1.0, 0, nil, false, false))
+		ts = ts.Add(15 * time.Minute)
+	}
+	require.NoError(t, persist(bat, ts, 40.0, 0, nil, false, false)) // one glitched slot
+
+	phys, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+	require.Less(t, phys.MaxChargeKWh, 5.0, "one glitched 40kWh slot must not become the rate ceiling")
+}
+
 // TestDeriveBatteryPhysicsPrefersPersistedCapacity covers the Priority-2 decision: a
 // device-reported capacity (persisted via Collector.SetCapacity, mirroring what
 // core/site.go does with api.BatteryCapacity) must win over derivation, even when the
