@@ -139,6 +139,19 @@ func (p batteryPhysics) rateCeilingNote() string {
 		p.MaxChargeKWh, p.MaxDischargeKWh, rateLimitPercentile*100)
 }
 
+// floorNote renders FloorFrac and its provenance into the chain's Notes (ADR-011
+// rule 7). Unlike CapacityKWh, this package has no configured/persisted floor to
+// prefer - FloorFrac is always "the lowest SoC observed anywhere in this battery's
+// history", an arbitrary statistic that directly throttles how much the W2
+// counterfactual battery is allowed to discharge. One extra low-SoC row can move it
+// enough to flip the sign of Control (see TestFloorFracSensitivityIsLabelled) - this
+// belongs in Notes, the one field every caller already renders unconditionally,
+// rather than sitting unused inside batteryPhysics.
+func (p batteryPhysics) floorNote() string {
+	return fmt.Sprintf("counterfactual battery floor: %.1f%% SoC (%s) - the lowest SoC observed anywhere in this battery's history, not a configured limit; a single extra low reading can move it and therefore the control contribution materially",
+		p.FloorFrac*100, p.FloorSource)
+}
+
 // rateLimitPercentile is the percentile used to establish MaxChargeKWh/MaxDischargeKWh
 // from history, instead of the single largest slot ever observed - see those fields'
 // doc comment for why a raw max() is the wrong statistic here.
@@ -717,7 +730,7 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	coverage := set.coverage()
 	notes := []string{noteInvoiceComparability}
 	if control != nil {
-		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement, phys.rateCeilingNote())
+		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement, phys.rateCeilingNote(), phys.floorNote())
 	}
 	if coverage.TotalSlots > 0 && coverage.ValidSlots < coverage.TotalSlots {
 		notes = append(notes, notePeriodAverageCoverage(coverage))

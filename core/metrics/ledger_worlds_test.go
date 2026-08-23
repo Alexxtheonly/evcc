@@ -2,6 +2,9 @@ package metrics
 
 import (
 	"context"
+	"math"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -534,6 +537,68 @@ func TestChainOraclePerSlotEuros(t *testing.T) {
 
 	require.Len(t, chain.Contributions, 3)
 	require.NotEqual(t, 0.0, chain.Contributions[1].Settled.PerSlot, `"Battery" contribution must not be zero - a zero here means W2 collapsed to W1`)
+}
+
+// TestFloorFracSensitivityIsLabelled covers the adversarial finding behind B20:
+// FloorFrac is "the lowest observed SoC anywhere in this battery's history" (see
+// deriveBatteryPhysicsUncached), an arbitrary statistic that directly throttles how
+// much the W2 counterfactual battery is allowed to discharge - one extra low-SoC row,
+// with nothing else about the period changed, can materially move (and even flip the
+// sign of) the headline Control figure. There is no configured-floor alternative to
+// fall back to (grep -rn "floorFrac|floorSource|capacitySource|batteryPhysics"
+// assets/ finds nothing - no renderer exists yet), so this asserts the figure and its
+// source are carried in chain.Notes - the one field every caller already renders
+// unconditionally - not left sitting unused inside batteryPhysics.
+func TestFloorFracSensitivityIsLabelled(t *testing.T) {
+	loc := time.Now().Location()
+	period := time.Date(2026, 8, 15, 0, 0, 0, 0, loc)
+
+	run := func(extraLowSocRow bool) *Chain {
+		require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+		require.NoError(t, SetupSchema())
+
+		grid := mustCreateEntity(t, Grid, Grid)
+		home := mustCreateEntity(t, Home, Home)
+		bat := mustCreateEntity(t, Battery, "bat1")
+
+		seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc)) // capacity 10kWh, min observed SoC ~13.67%
+
+		if extraLowSocRow {
+			soc2 := 2.0
+			require.NoError(t, persist(bat, time.Date(2026, 6, 1, 0, 0, 0, 0, loc), 0, 0, &soc2, false, false))
+		}
+
+		require.NoError(t, persist(grid, period, 0.2, 0, nil, false, false))
+		require.NoError(t, persist(home, period, 1.0, 0, nil, false, false))
+		soc := 20.0
+		require.NoError(t, persist(bat, period, 0, 0, &soc, false, false))
+		g, f := 0.30, 0.05
+		require.NoError(t, PersistTariffs(period, &g, &f, nil, nil))
+
+		chain, err := ComputeChain(context.Background(), period, period.Add(15*time.Minute))
+		require.NoError(t, err)
+		return chain
+	}
+
+	chainHigherFloor := run(false)
+	chainLowerFloor := run(true)
+
+	require.NotNil(t, chainHigherFloor.BatteryPhysics)
+	require.NotNil(t, chainLowerFloor.BatteryPhysics)
+	require.Greater(t, chainHigherFloor.BatteryPhysics.FloorFrac, chainLowerFloor.BatteryPhysics.FloorFrac,
+		"the extra low-SoC row must lower FloorFrac")
+
+	delta := chainHigherFloor.Control.Full - chainLowerFloor.Control.Full
+	t.Logf("measured Control.Full delta from one extra history row: %.6f (higher floor=%.6f, lower floor=%.6f)",
+		delta, chainHigherFloor.Control.Full, chainLowerFloor.Control.Full)
+	require.Greater(t, math.Abs(delta), 0.05, "FloorFrac must materially move Control.Full - see the hand-computed swing in this test's doc comment")
+
+	for _, chain := range []*Chain{chainHigherFloor, chainLowerFloor} {
+		found := slices.ContainsFunc(chain.Notes, func(n string) bool {
+			return strings.Contains(n, "floor")
+		})
+		require.True(t, found, "chain.Notes must carry the battery floor and its source - no renderer exists yet to read it out of batteryPhysics")
+	}
 }
 
 // TestComputeW0W1IncludeLoadpointLoad is a narrow unit test on the world functions
