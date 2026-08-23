@@ -84,3 +84,45 @@ func TestCoverageExcludesRecoveredIncompleteSlots(t *testing.T) {
 	// pretend the excluded slots behaved the same way
 	require.InDelta(t, 3*0.25, res.Settled.PerSlot, 1e-9)
 }
+
+// TestBuildLedgerSlotsEnergyBalance is a data-integrity guard on buildLedgerSlots'
+// output itself, independent of any world simulation: every slot's measured sources
+// (PV generation, grid import, battery discharge) must balance its measured sinks
+// (household residual, loadpoint charging, grid export, battery charge) to within
+// meter rounding. This is the invariant a future change to which meters feed which
+// slotData field (the exact class of mistake ADR-011's Priority-1 rework fixed for
+// loadpoints) would violate.
+func TestBuildLedgerSlotsEnergyBalance(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	pv := mustCreateEntity(t, PV, "pv1")
+	bat := mustCreateEntity(t, Battery, "bat1")
+	lp := mustCreateEntity(t, Loadpoint, "lp-1")
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 11, 9, 0, 0, 0, loc)
+
+	// sources: 3.0kWh PV, 1.0kWh grid import, 0.5kWh battery discharge = 4.5kWh
+	// sinks: 2.0kWh home (residual), 1.5kWh loadpoint, 0.5kWh grid export, 0.5kWh
+	// battery charge = 4.5kWh
+	require.NoError(t, persist(grid, base, 1.0, 0.5, nil, false, false))
+	require.NoError(t, persist(home, base, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(pv, base, 3.0, 0, nil, false, false))
+	soc := 50.0
+	require.NoError(t, persist(bat, base, 0.5, 0.5, &soc, false, false))
+	require.NoError(t, persist(lp, base, 1.5, 0, nil, false, false))
+	g, f := 0.30, 0.05
+	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
+
+	set, err := buildLedgerSlots(base, base.Add(15*time.Minute), true)
+	require.NoError(t, err)
+	require.Len(t, set.Slots, 1)
+
+	s := set.Slots[0]
+	sources := s.PVKWh + s.GridImportKWh + s.BatteryDischargeKWh
+	sinks := s.HomeKWh + s.LoadpointKWh + s.GridExportKWh + s.BatteryChargeKWh
+	require.InDelta(t, sources, sinks, 1e-9, "PV + import + discharge must balance home + loadpoint + export + charge")
+}

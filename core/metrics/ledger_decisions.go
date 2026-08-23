@@ -62,9 +62,10 @@ func DecisionDeltas(from, to time.Time, set *ledgerSlotSet, phys *batteryPhysics
 		if phys != nil && r.AppliedMode != r.SuggestedMode {
 			if s, ok := bySlot[r.Timestamp]; ok && s.BatterySocFrac != nil {
 				socKWh := *s.BatterySocFrac * phys.CapacityKWh
+				load := s.modelledLoadKWh()
 
-				_, appliedFlow, _, _ := simulateSlotStep(r.AppliedMode, s.HomeKWh, s.PVKWh, socKWh, *phys)
-				_, rejectedFlow, _, _ := simulateSlotStep(r.SuggestedMode, s.HomeKWh, s.PVKWh, socKWh, *phys)
+				_, appliedFlow, _, _ := simulateSlotStep(r.AppliedMode, load, s.PVKWh, socKWh, *phys)
+				_, rejectedFlow, _, _ := simulateSlotStep(r.SuggestedMode, load, s.PVKWh, socKWh, *phys)
 
 				appliedCost := appliedFlow.ImportKWh*s.PriceGrid - appliedFlow.ExportKWh*s.PriceFeedIn
 				rejectedCost := rejectedFlow.ImportKWh*s.PriceGrid - rejectedFlow.ExportKWh*s.PriceFeedIn

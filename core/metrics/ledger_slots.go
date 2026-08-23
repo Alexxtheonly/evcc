@@ -60,10 +60,24 @@ type slotData struct {
 	GridExportKWh          float64
 	HomeKWh                float64
 	PVKWh                  float64
+	LoadpointKWh           float64 // EV charging energy, all loadpoints summed; see modelledLoadKWh
 	BatteryChargeKWh       float64
 	BatteryDischargeKWh    float64
 	BatterySocFrac         *float64 // 0..1, at slot start; nil if no battery configured
 	PriceGrid, PriceFeedIn float64
+}
+
+// modelledLoadKWh is what W0/W1/W2 buy: the household's residual load plus whatever
+// the loadpoints drew. HomeKWh alone is NOT total household consumption - it is a
+// derived residual that core/site.go's updatePower already subtracts loadpoint charge
+// power out of (homePower := gridPower + max(0,pvPower) + battery.Power -
+// totalChargePower), precisely so that EV energy isn't double-counted against the
+// "home" bucket elsewhere in evcc. The counterfactual worlds price what would have
+// been bought for the *whole* site, cars included - modelling load from HomeKWh alone
+// would price a household with no cars while W3 (the real grid meter) paid for every
+// EV kWh. See ledger_worlds.go's doc comment for the worked-example consequence.
+func (s slotData) modelledLoadKWh() float64 {
+	return s.HomeKWh + s.LoadpointKWh
 }
 
 // Coverage reports what fraction of a period's slots the ledger could actually
@@ -172,14 +186,60 @@ func queryTariffSlots(from, to time.Time) (map[int64]tariffSlot, error) {
 	return m, nil
 }
 
+// ErrLoadpointNoChargeMeter means a configured loadpoint has never written a single
+// meters row for its whole recorded history - the signature of lp.chargeMeter == nil
+// (core/loadpoint.go only wires lp.chargeEnergy, and so only ever calls its AddEnergy,
+// when a charge meter is configured; a loadpoint WITH a meter still writes a
+// zero-energy row every cycle even while nothing is plugged in, so "never any row" is
+// not "not charging this period"). Modelling W0-W2's load from the home meter alone in
+// this case would silently describe a car-free household while W3 (the real grid
+// meter) still paid for every kWh that loadpoint drew - refuse instead of guessing
+// (ADR-011 rule 4).
+var ErrLoadpointNoChargeMeter = errors.New("a configured loadpoint has no charge-meter energy history; refusing to model a car-free household")
+
+// loadpointEntityIDs returns the entity ids for every configured loadpoint.
+func loadpointEntityIDs() ([]int, error) {
+	var ids []int
+	err := db.Instance.Model(new(entity)).Where(`"group" = ?`, Loadpoint).Pluck("id", &ids).Error
+	return ids, err
+}
+
+// verifyLoadpointChargeMeters refuses (ErrLoadpointNoChargeMeter) if any loadpoint in
+// ids has never once written to the meters table, across all recorded history - not
+// scoped to the requested period, since "has a charge meter" is a configuration fact,
+// not something that becomes true or false slot by slot.
+func verifyLoadpointChargeMeters(ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var withData []int
+	if err := db.Instance.Table("meters").Distinct("meter").Where("meter IN ?", ids).Pluck("meter", &withData).Error; err != nil {
+		return err
+	}
+	if len(withData) < len(ids) {
+		return ErrLoadpointNoChargeMeter
+	}
+	return nil
+}
+
 // buildLedgerSlots assembles the merged, filtered slot series every ledger
 // computation runs on. A slot is included only if the grid meter, the home meter, the
 // tariff (both prices), and - when the site has them configured - PV and the battery
 // (including its SoC) all have a usable, non-excluded reading for that slot. Anything
 // less and the slot is dropped, never interpolated (ADR-011 rules 3 and 5).
 //
+// includeLoadpoint gates both the loadpoint-charge-meter refusal
+// (ErrLoadpointNoChargeMeter) and LoadpointKWh's inclusion in the returned slots.
+// ComputeRealisedCost passes false: it prices only the grid meter against tariffs (see
+// its own doc comment), so a loadpoint's missing charge meter is none of its business,
+// and gating it on that refusal would repeat the same "one filter serves every
+// computation" problem this parameter exists to avoid (ADR-011 Priority-4 finding).
+// ComputeChain and ComputeLedger pass true: W0-W2 and the decision replay price
+// slotData.modelledLoadKWh(), which needs LoadpointKWh to be honest, not silently
+// zero.
+//
 // from must not precede the earliest priced tariff slot; see ErrBeforeTariffStart.
-func buildLedgerSlots(from, to time.Time) (*ledgerSlotSet, error) {
+func buildLedgerSlots(from, to time.Time, includeLoadpoint bool) (*ledgerSlotSet, error) {
 	if !to.After(from) {
 		return nil, errors.New("invalid period: to must be after from")
 	}
@@ -216,6 +276,22 @@ func buildLedgerSlots(from, to time.Time) (*ledgerSlotSet, error) {
 	batRows, hasBattery, err := queryGroupSlots(Battery, from, to)
 	if err != nil {
 		return nil, err
+	}
+
+	var lpRows map[int64]groupSlotRow
+	var hasLoadpoint bool
+	if includeLoadpoint {
+		lpIDs, err := loadpointEntityIDs()
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyLoadpointChargeMeters(lpIDs); err != nil {
+			return nil, err
+		}
+		lpRows, hasLoadpoint, err = queryGroupSlots(Loadpoint, from, to)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	tariffRows, err := queryTariffSlots(from, to)
@@ -257,6 +333,14 @@ func buildLedgerSlots(from, to time.Time) (*ledgerSlotSet, error) {
 				continue
 			}
 			s.PVKWh = p.Energy
+		}
+
+		if hasLoadpoint {
+			l, ok := lpRows[u]
+			if !ok || l.Excluded {
+				continue
+			}
+			s.LoadpointKWh = l.Energy
 		}
 
 		if hasBattery {

@@ -4,6 +4,17 @@ package metrics
 // priced (via ledger_settlement.go's settleFlows) on top of the shared slot series
 // from ledger_slots.go. See ledger_slots.go for the honesty rules this and every
 // other ledger file share.
+//
+// W0/W1/W2 all price slotData.modelledLoadKWh() (household residual + every
+// loadpoint's EV charging), not HomeKWh alone. HomeKWh is a derived residual that
+// core/site.go's updatePower already has loadpoint charge power subtracted out of, so
+// pricing HomeKWh by itself modelled a household with no cars while W3 (the real grid
+// meter, priced via GridImportKWh/GridExportKWh) paid for every EV kWh - the
+// counterfactuals were then compared against a world that never happened. Worked
+// example from one real August month, before this fix: reported Control contribution
+// was -EUR 38 (the truth is a small positive), and the PV contribution was
+// simultaneously overstated because W1 booked EV charging energy that actually went
+// into a car as if it had been exported for feed-in revenue.
 
 import (
 	"errors"
@@ -30,24 +41,27 @@ const (
 // itself applies eta*eta for a round trip.
 const batteryEta = 0.9
 
-// computeW0 is the no-PV, no-battery baseline: every kWh of load is bought from the
+// computeW0 is the no-PV, no-battery baseline: every kWh of load - household plus
+// every loadpoint's EV charging (see slotData.modelledLoadKWh) - is bought from the
 // grid the moment it occurred.
 func computeW0(slots []slotData) []worldFlow {
 	out := make([]worldFlow, len(slots))
 	for i, s := range slots {
-		out[i] = worldFlow{ImportKWh: s.HomeKWh}
+		out[i] = worldFlow{ImportKWh: s.modelledLoadKWh()}
 	}
 	return out
 }
 
-// computeW1 adds direct PV self-consumption on top of W0: PV offsets load first,
-// any shortfall is bought, any surplus is exported at the feed-in price.
+// computeW1 adds direct PV self-consumption on top of W0: PV offsets load (household
+// plus EV charging) first, any shortfall is bought, any surplus is exported at the
+// feed-in price.
 func computeW1(slots []slotData) []worldFlow {
 	out := make([]worldFlow, len(slots))
 	for i, s := range slots {
+		load := s.modelledLoadKWh()
 		out[i] = worldFlow{
-			ImportKWh: max(0, s.HomeKWh-s.PVKWh),
-			ExportKWh: max(0, s.PVKWh-s.HomeKWh),
+			ImportKWh: max(0, load-s.PVKWh),
+			ExportKWh: max(0, s.PVKWh-load),
 		}
 	}
 	return out
@@ -350,7 +364,7 @@ func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, error) {
 			return nil, ErrSocGap
 		}
 
-		newSoc, flow, _, _ := simulateSlotStep(batteryModeNormal, s.HomeKWh, s.PVKWh, socKWh, phys)
+		newSoc, flow, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
 		socKWh = newSoc
 		out[i] = flow
 	}
@@ -408,7 +422,7 @@ type Chain struct {
 // for what counts as a valid slot and ErrBeforeTariffStart/ErrSocGap for the two ways
 // this refuses rather than fabricates.
 func ComputeChain(from, to time.Time) (*Chain, error) {
-	set, err := buildLedgerSlots(from, to)
+	set, err := buildLedgerSlots(from, to, true)
 	if err != nil {
 		return nil, err
 	}
