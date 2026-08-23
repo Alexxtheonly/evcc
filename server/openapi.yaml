@@ -221,6 +221,32 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/NumberResult"
+  /batterygridchargelimitpercentile:
+    delete:
+      operationId: removeBatteryGridChargeLimitPercentile
+      summary: Remove percentile battery grid charge limit
+      description: "Remove percentile-based battery grid charge limit."
+      externalDocs:
+        url: https://docs.evcc.io/en/features/battery
+      tags:
+        - battery
+      responses:
+        "200":
+          $ref: "#/components/responses/NullResult"
+  /batterygridchargelimitpercentile/{percentile}:
+    post:
+      operationId: setBatteryGridChargeLimitPercentile
+      summary: Set percentile battery grid charge limit
+      description: "Charge home battery from grid in the cheapest percentile of the forward rate window, as an alternative to an absolute price or emissions threshold."
+      externalDocs:
+        url: https://docs.evcc.io/en/features/battery
+      tags:
+        - battery
+      parameters:
+        - $ref: "#/components/parameters/percentileLimit"
+      responses:
+        "200":
+          $ref: "#/components/responses/NumberResult"
   /batterymode:
     delete:
       operationId: disableExternalBatteryControl
@@ -647,6 +673,35 @@ paths:
       parameters:
         - $ref: "#/components/parameters/id"
         - $ref: "#/components/parameters/costLimit"
+      responses:
+        "200":
+          $ref: "#/components/responses/NumberResult"
+  /loadpoints/{id}/smartcostlimitpercentile:
+    delete:
+      operationId: deleteLoadpointSmartCostLimitPercentile
+      summary: Delete percentile smart charging cost limit
+      description: "Delete percentile-based cost limit for fast-charging with grid energy."
+      externalDocs:
+        url: https://docs.evcc.io/en/features/dynamic-prices
+      tags:
+        - loadpoints
+      parameters:
+        - $ref: "#/components/parameters/id"
+      responses:
+        "200":
+          $ref: "#/components/responses/NullResult"
+  /loadpoints/{id}/smartcostlimitpercentile/{percentile}:
+    post:
+      operationId: setLoadpointSmartCostLimitPercentile
+      summary: Set percentile smart charging cost limit
+      description: "Set percentile-based cost limit for fast-charging with grid energy, as an alternative to an absolute limit."
+      externalDocs:
+        url: https://docs.evcc.io/en/features/dynamic-prices
+      tags:
+        - loadpoints
+      parameters:
+        - $ref: "#/components/parameters/id"
+        - $ref: "#/components/parameters/percentileLimit"
       responses:
         "200":
           $ref: "#/components/responses/NumberResult"
@@ -1927,6 +1982,17 @@ components:
       required: true
       schema:
         type: number
+    percentileLimit:
+      name: percentile
+      description: "Percentile (0-100] of the forward rate window's price distribution. Alternative to an absolute cost limit: resolved against the current forecast on every evaluation instead of a fixed price, so it keeps working as the price level shifts. Setting it clears any absolute limit on the same setting, and vice versa."
+      example: 30
+      in: path
+      required: true
+      schema:
+        type: number
+        minimum: 0
+        maximum: 100
+        exclusiveMinimum: true
     enable:
       name: enable
       description: "Charging mode."

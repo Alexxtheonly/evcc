@@ -26,6 +26,7 @@ type DynamicConfig struct {
 	MinCurrent               float64   `json:"minCurrent"`
 	MaxCurrent               float64   `json:"maxCurrent"`
 	SmartCostLimit           *float64  `json:"smartCostLimit"`
+	SmartCostLimitPercentile *float64  `json:"smartCostLimitPercentile"`
 	SmartFeedInPriorityLimit *float64  `json:"smartFeedInPriorityLimit"`
 	PlanEnergy               float64   `json:"planEnergy"`
 	PlanTime                 time.Time `json:"planTime"`
@@ -73,6 +74,7 @@ func (payload DynamicConfig) Apply(lp API) error {
 	// limits the optimizer controls are rejected, the remaining config still applies
 	limitErr := errors.Join(
 		lp.SetSmartCostLimit(payload.SmartCostLimit),
+		lp.SetSmartCostLimitPercentile(payload.SmartCostLimitPercentile),
 		lp.SetSmartFeedInPriorityLimit(payload.SmartFeedInPriorityLimit),
 	)
 

@@ -498,6 +498,7 @@ func TestLoadpointRequestChargeGoal(t *testing.T) {
 			lp.EXPECT().GetMode().Return(api.ModePV).AnyTimes()
 			lp.EXPECT().GetStatus().Return(api.StatusB).AnyTimes()
 			lp.EXPECT().GetSmartCostLimit().Return(nil).AnyTimes()
+			lp.EXPECT().GetSmartCostLimitPercentile().Return(nil).AnyTimes()
 			lp.EXPECT().EffectivePlanStrategy().Return(api.PlanStrategy{}).AnyTimes()
 			lp.EXPECT().GetPlanGoal().Return(0.0, false).AnyTimes()
 			lp.EXPECT().EffectivePriority().Return(0).AnyTimes()
@@ -540,6 +541,7 @@ func TestLoadpointRequestCPriorityNegativePriceHorizon(t *testing.T) {
 		lp.EXPECT().GetMode().Return(api.ModePV).AnyTimes()
 		lp.EXPECT().GetStatus().Return(api.StatusB).AnyTimes()
 		lp.EXPECT().GetSmartCostLimit().Return(nil).AnyTimes()
+		lp.EXPECT().GetSmartCostLimitPercentile().Return(nil).AnyTimes()
 		lp.EXPECT().EffectivePlanStrategy().Return(api.PlanStrategy{}).AnyTimes()
 		lp.EXPECT().GetPlanGoal().Return(0.0, false).AnyTimes()
 		lp.EXPECT().EffectivePriority().Return(10).AnyTimes() // top third -> CPriority 2

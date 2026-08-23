@@ -193,6 +193,13 @@ type API interface {
 	GetSmartCostLimit() *float64
 	// SetSmartCostLimit sets the smart cost limit
 	SetSmartCostLimit(limit *float64) error
+	// GetSmartCostLimitPercentile returns the smart cost limit expressed as a
+	// percentile (0-100] of the forward rate window instead of an absolute
+	// price. Mutually exclusive with GetSmartCostLimit - only one is ever set.
+	GetSmartCostLimitPercentile() *float64
+	// SetSmartCostLimitPercentile sets the smart cost limit as a percentile of
+	// the forward rate window, clearing any absolute limit
+	SetSmartCostLimitPercentile(percentile *float64) error
 	// GetSmartFeedInPriorityLimit return the smart feed-in limit
 	GetSmartFeedInPriorityLimit() *float64
 	// SetSmartFeedInPriorityLimit sets the smart feed-in limit

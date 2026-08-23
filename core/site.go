@@ -83,12 +83,13 @@ type Site struct {
 	curtailPercent *int
 
 	// battery settings
-	prioritySoc             float64  // prefer battery up to this Soc
-	bufferSoc               float64  // continue charging on battery above this Soc
-	bufferStartSoc          float64  // start charging on battery above this Soc
-	batteryDischargeControl bool     // prevent battery discharge for fast and planned charging
-	batteryGridChargeLimit  *float64 // grid charging limit
-	batteryGridDischarge    bool     // allow battery discharge to grid (experimental)
+	prioritySoc                      float64  // prefer battery up to this Soc
+	bufferSoc                        float64  // continue charging on battery above this Soc
+	bufferStartSoc                   float64  // start charging on battery above this Soc
+	batteryDischargeControl          bool     // prevent battery discharge for fast and planned charging
+	batteryGridChargeLimit           *float64 // grid charging limit
+	batteryGridChargeLimitPercentile *float64 // alternative to batteryGridChargeLimit: percentile (0-100] of the forward rate window
+	batteryGridDischarge             bool     // allow battery discharge to grid (experimental)
 
 	// grid settings
 	gridExportLimit float64 // static grid export power limit in W, 0 = disabled
@@ -477,6 +478,11 @@ func (site *Site) restoreSettings() error {
 	}
 	if v, err := settings.Float(keys.BatteryGridChargeLimit); err == nil {
 		if err := site.setBatteryGridChargeLimit(&v); err != nil && !errors.Is(err, ErrBatteryControlNotAvailable) {
+			return err
+		}
+	}
+	if v, err := settings.Float(keys.BatteryGridChargeLimitPercentile); err == nil {
+		if err := site.setBatteryGridChargeLimitPercentile(&v); err != nil && !errors.Is(err, ErrBatteryControlNotAvailable) {
 			return err
 		}
 	}
@@ -1297,9 +1303,9 @@ func (site *Site) update(lp updater) {
 	rate := site.currentRate(consumption)
 
 	// update battery after reading meters to ensure that (modbus) connection is open
-	batteryGridChargeActive := site.batteryGridChargeActive(rate)
+	batteryGridChargeActive := site.batteryGridChargeActive(rate, consumption)
 	site.publish(keys.BatteryGridChargeActive, batteryGridChargeActive)
-	site.updateBatteryMode(batteryGridChargeActive, rate)
+	site.updateBatteryMode(batteryGridChargeActive, rate, consumption)
 
 	// re-evaluate against the updated loadpoint state
 	site.publishSuggestions()

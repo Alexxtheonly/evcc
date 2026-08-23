@@ -2134,7 +2134,7 @@ func (site *Site) applyPlanGoal(lp loadpoint.API, bat *optimizer.BatteryConfig, 
 
 // TODO remove once smart cost limit usage becomes obsolete
 func applySmartCostLimit(lp loadpoint.API, demand []float32, grid api.Rates, minLen int) []float32 {
-	costLimit := lp.GetSmartCostLimit()
+	costLimit := resolveSmartCostLimit(lp, grid)
 	if costLimit == nil {
 		return demand
 	}
@@ -2209,7 +2209,7 @@ func applyPrecondition(lp loadpoint.API, demand []float32, minLen int) []float32
 }
 
 func (site *Site) applyBatteryGridChargeLimit(cMax float32, grid api.Rates, minLen int) []float32 {
-	limit := site.GetBatteryGridChargeLimit()
+	limit := site.resolveBatteryGridChargeLimit(grid)
 	if limit == nil {
 		return nil
 	}
