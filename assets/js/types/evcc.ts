@@ -1290,6 +1290,10 @@ export interface Rate {
   value: number;
   /** Whether this slot extends past a merged tariff's primary source, e.g. filled in by the secondary tariff beyond the primary's own known horizon. Not a general confidence flag: a tariff that is a prediction end to end (e.g. solar) reports false for every rate it produces. */
   forecast?: boolean;
+  /** Low end of the provider's confidence-interval forecast around value, e.g. Solcast's pv_estimate10. Absent when the provider does not supply a band for this rate. */
+  low?: number;
+  /** High end of the provider's confidence-interval forecast around value, e.g. Solcast's pv_estimate90. Absent when the provider does not supply a band for this rate. */
+  high?: number;
 }
 
 export interface Slot {

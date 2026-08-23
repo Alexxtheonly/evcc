@@ -134,10 +134,23 @@ func solcastRates(forecasts []solcast.Forecast, log *util.Logger) api.Rates {
 			Start: end.Add(-r.Period.Duration()),
 			End:   end,
 			Value: r.PvEstimate * 1e3,
+			Low:   solcastEstimate(r.PvEstimate10),
+			High:  solcastEstimate(r.PvEstimate90),
 		})
 	}
 
 	return data
+}
+
+// solcastEstimate converts a Solcast percentile estimate (kW, possibly absent) to the
+// same W unit as Rate.Value, preserving "absent from the response" as nil rather than
+// defaulting it to zero.
+func solcastEstimate(kw *float64) *float64 {
+	if kw == nil {
+		return nil
+	}
+	w := *kw * 1e3
+	return &w
 }
 
 // Rates implements the api.Tariff interface

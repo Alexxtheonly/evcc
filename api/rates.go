@@ -20,11 +20,17 @@ type Rate struct {
 	// Zero value (false) means "not past the primary's horizon" (or "no such
 	// concept applies"), the common case.
 	Forecast bool `json:"forecast,omitempty"`
+	// Low and High optionally bound Value with a provider's confidence-interval
+	// forecast, e.g. Solcast's pv_estimate10/pv_estimate90 around pv_estimate. nil
+	// means the provider does not supply a band for this rate, the common case -
+	// callers must treat a nil Low or High as "unknown", not as zero.
+	Low  *float64 `json:"low,omitempty"`
+	High *float64 `json:"high,omitempty"`
 }
 
 // IsZero returns is the rate is the zero value
 func (r Rate) IsZero() bool {
-	return r.Start.IsZero() && r.End.IsZero() && r.Value == 0 && !r.Forecast
+	return r.Start.IsZero() && r.End.IsZero() && r.Value == 0 && !r.Forecast && r.Low == nil && r.High == nil
 }
 
 // Rates is a slice of (future) tariff rates

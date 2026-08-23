@@ -261,3 +261,35 @@ func TestSlotWrapperPreservesForecastFlag(t *testing.T) {
 		assert.True(t, r.Forecast, "forecast slot %d", i)
 	}
 }
+
+// TestSlotWrapperPreservesBand ensures a source tariff's Low/High confidence band
+// survives the 15-minute expansion on the solar path (which also reshapes Value via
+// shapeSolar): every sub-slot of a parent inherits that parent's band unshaped, and a
+// parent slot with no band leaves its sub-slots without one too, rather than defaulting
+// them to zero.
+func TestSlotWrapperPreservesBand(t *testing.T) {
+	now := time.Now().Truncate(SlotDuration)
+	low, high := 50.0, 200.0
+
+	rr := api.Rates{
+		{Start: now, End: now.Add(time.Hour), Value: 100, Low: &low, High: &high},
+		{Start: now.Add(time.Hour), End: now.Add(2 * time.Hour), Value: 100}, // no band
+	}
+
+	w := &SlotWrapper{&testTariff{rates: rr, typ: api.TariffTypeSolar}}
+
+	res, err := w.Rates()
+	require.NoError(t, err)
+	require.Len(t, res, 8)
+
+	for i, r := range res[:4] {
+		require.NotNil(t, r.Low, "banded slot %d", i)
+		require.NotNil(t, r.High, "banded slot %d", i)
+		assert.Equal(t, low, *r.Low, "banded slot %d", i)
+		assert.Equal(t, high, *r.High, "banded slot %d", i)
+	}
+	for i, r := range res[4:] {
+		assert.Nil(t, r.Low, "unbanded slot %d", i)
+		assert.Nil(t, r.High, "unbanded slot %d", i)
+	}
+}

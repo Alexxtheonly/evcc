@@ -52,6 +52,14 @@ func (t *SlotWrapper) Rates() (api.Rates, error) {
 				End:      start.Add(SlotDuration),
 				Value:    vals[j],
 				Forecast: r.Forecast,
+				// Low/High are carried through unshaped, same as Forecast: shaping
+				// them independently of Value would need their own interpolation
+				// across slot boundaries, and a naive one risks Low ending up
+				// above High (or either above Value) at the edges. The parent
+				// slot's band is coarser than its shaped value but always
+				// consistent, so every sub-slot inherits it as-is.
+				Low:  r.Low,
+				High: r.High,
 			})
 		}
 	}

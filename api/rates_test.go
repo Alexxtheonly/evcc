@@ -38,7 +38,11 @@ func TestRates(t *testing.T) {
 }
 
 func TestRateIsZero(t *testing.T) {
+	low, high := 1.0, 2.0
+
 	assert.True(t, Rate{}.IsZero())
 	assert.False(t, Rate{Value: 1}.IsZero())
 	assert.False(t, Rate{Forecast: true}.IsZero(), "a rate explicitly marked forecast is not the zero value")
+	assert.False(t, Rate{Low: &low}.IsZero(), "a rate carrying a low estimate is not the zero value")
+	assert.False(t, Rate{High: &high}.IsZero(), "a rate carrying a high estimate is not the zero value")
 }
