@@ -18,7 +18,7 @@
 				/>
 				<button
 					type="button"
-					class="btn btn-sm border-0 text-truncate period-label"
+					class="btn btn-sm border-0 text-truncate period-label keyboard-focus-ring"
 					data-testid="savings-ledger-period-label"
 					:title="$t('forecast.savingsLedger.periodJumpToPresent')"
 					@click="jumpToPresent"
