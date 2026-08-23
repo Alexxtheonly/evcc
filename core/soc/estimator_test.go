@@ -221,10 +221,51 @@ func TestPlausibleChargeTaper(t *testing.T) {
 		{0, 11000, false},     // tail at or below the implausibility floor
 		{1000, 200000, false}, // plateau above the generous EVSE ceiling
 		{-500, 11000, false},  // negative reading, e.g. a sign error
+
+		// #28: same-magnitude min/max from a power-capped (e.g. PV-limited) session history,
+		// not an actual taper - both measured to inflate RemainingChargeDuration by 63-69% if
+		// trusted (see minPlausibleChargeSpreadRatio's doc comment)
+		{2500, 3000, false}, // PV-limited history, ratio 1.2
+		{2000, 2001, false}, // near-tie, ratio ~1.0005
+		{2000, 4000, true},  // exactly at the 2x floor: still plausible
+		{2000, 3999, false}, // just under the 2x floor: rejected
 	}
 
 	for _, c := range tc {
 		assert.Equal(t, c.want, PlausibleChargeTaper(c.minPower, c.maxPower), "min=%.0f max=%.0f", c.minPower, c.maxPower)
+	}
+}
+
+// TestSeedChargeTaperRejectsDegenerateSpread guards #28: a PV-limited or otherwise
+// power-capped session history must not be trusted as a real taper (see
+// minPlausibleChargeSpreadRatio) - SeedChargeTaper must ignore it and RemainingChargeDuration
+// must keep using the generic curve, not the degenerate estimate a collapsed powerPerSoc
+// produces (measured +63% and +69% for these two cases before this guard existed).
+func TestSeedChargeTaperRejectsDegenerateSpread(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	vehicle := api.NewMockVehicle(ctrl)
+	vehicle.EXPECT().Capacity().Return(75.0).AnyTimes() // 75 kWh pack
+
+	for _, tc := range []struct {
+		name               string
+		minPower, maxPower float64
+	}{
+		{"PV-limited history (2500W/3000W, ratio 1.2)", 2500, 3000},
+		{"near-tie history (2000W/2001W)", 2000, 2001},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ce := NewEstimator(util.NewLogger("foo"), vehicle)
+			ce.vehicleSoc = 20
+
+			before := ce.RemainingChargeDuration(80, 11000)
+			ce.SeedChargeTaper(tc.minPower, tc.maxPower)
+			after := ce.RemainingChargeDuration(80, 11000)
+
+			assert.Equal(t, before, after, "degenerate spread must be ignored, taper stays at the generic default")
+			// 20->80% at 11kW on the generic curve, ~4.81h - not the ~7.8-8.1h a collapsed
+			// powerPerSoc would produce
+			assert.Equal(t, RemainingChargeDuration(80, 11000, 20, 75), after)
+		})
 	}
 }
 

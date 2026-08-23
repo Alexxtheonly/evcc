@@ -33,6 +33,27 @@ const (
 	// reading, not against any particular vehicle's real charge curve, which varies widely.
 	minPlausibleChargePower = 100.0
 	maxPlausibleChargePower = 150000.0
+
+	// minPlausibleChargeSpreadRatio requires the learned plateau to be able to deliver at
+	// least this many times the learned tail power before the pair is trusted as a real
+	// taper. remainingChargeDuration's powerPerSoc = (maxPower-minPower)/50 collapses as the
+	// spread narrows, driving taperSoc hugely negative and forcing nearly the whole session
+	// through the linear-decay tail branch (average of chargePower and minPower) instead of
+	// the flat-power branch a session below the taper point should use.
+	//
+	// A near-equal (minPower, maxPower) pair does not describe an actual taper - it is what a
+	// PV-limited or otherwise power-capped session's min/max look like, both endpoints
+	// reflecting whatever power happened to be available rather than the vehicle's charge
+	// curve. Measured on a 75kWh pack, 20->80% at 11kW (correct: 4.81h): a PV-limited history
+	// of 2500W/3000W (ratio 1.2, below this floor) inflates the estimate to 7.84h (+63%); a
+	// near-tie 2000W/2001W (ratio ~1.0005) to 8.14h (+69%).
+	//
+	// A real taper is BMS-limited current fall-off approaching full soc, which typically drops
+	// tail power to a fraction of the plateau well before 100% - 2x is a conservative floor: it
+	// rejects both measured cases above while still passing the generic default
+	// (1000W/50000W, ratio 50) and a typical single-phase home wallbox taper (e.g.
+	// 1200W/11000W tapering to ~11% of plateau, ratio ~9).
+	minPlausibleChargeSpreadRatio = 2.0
 )
 
 // PlausibleEnergyPerSocStep reports whether step (Wh per soc percent) implies a charge
@@ -55,9 +76,13 @@ func PlausibleEnergyPerSocStep(step, capacity float64) bool {
 
 // PlausibleChargeTaper reports whether a learned (minPower, maxPower) charge-power pair is
 // physically sane: the plateau must deliver more power than the tapered tail, by definition,
-// and both must fall within a range a home or workplace EVSE could plausibly report.
+// both must fall within a range a home or workplace EVSE could plausibly report, and the
+// plateau must clear the tail by at least minPlausibleChargeSpreadRatio - a near-equal pair
+// is not a taper, it's a power-capped session (see minPlausibleChargeSpreadRatio).
 func PlausibleChargeTaper(minPower, maxPower float64) bool {
-	return minPower >= minPlausibleChargePower && maxPower > minPower && maxPower <= maxPlausibleChargePower
+	return minPower >= minPlausibleChargePower &&
+		maxPower <= maxPlausibleChargePower &&
+		maxPower >= minPower*minPlausibleChargeSpreadRatio
 }
 
 // BlendEnergyPerSocStep folds a newly learned gradient into a previously persisted one. A
