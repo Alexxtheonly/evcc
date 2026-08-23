@@ -23,6 +23,7 @@ const (
 	learnMinSocDrop         = 3.0                  // soc points that prove the vehicle drove
 	learnMinOdometerKm      = 1.0                  // odometer km that prove the vehicle drove
 	learnArtifactClusterLen = 5                    // identical wall-clock seconds marking an automation
+	learnMinSocSamples      = learnMinDepartures   // arrival soc estimate needs its own sample floor, not just len != 0
 )
 
 // departure is a validated vehicle departure
@@ -258,7 +259,11 @@ func LearnExpectedArrival(sessions Sessions, now time.Time) *ExpectedArrival {
 		}
 	}
 
-	if len(times) < learnMinDepartures || len(soc) == 0 {
+	// the energy estimate needs its own sample floor: departures() only requires exact
+	// SocEnd/SocStart pairs to contribute a socUsed value at all, so a history with plenty
+	// of arrival times but very few of them carrying usable soc data could otherwise let a
+	// single long trip set the reservation to a near-full pack.
+	if len(times) < learnMinDepartures || len(soc) < learnMinSocSamples {
 		return nil
 	}
 

@@ -277,6 +277,32 @@ func TestUnwrapMinutesOfDay(t *testing.T) {
 	assert.Equal(t, []float64{}, unwrapMinutesOfDay([]float64{}))
 }
 
+// TestLearnExpectedArrivalRequiresEnoughSocSamples pins the energy estimate's own sample
+// floor: departures() only requires SocEnd/SocStart to be present at all to contribute a
+// socUsed value, so a history with plenty of arrival times but almost none of them
+// carrying usable soc data must not fall back to trusting a single observation.
+func TestLearnExpectedArrivalRequiresEnoughSocSamples(t *testing.T) {
+	sessions := commuterSessions(8)
+
+	// strip SocStart from every arrival pair but one: driving is still proven via
+	// odometer movement (already present from commuterSessions), so departures() keeps
+	// producing plenty of validated departures with plenty of arrival times - just almost
+	// none of them carrying a usable socUsed.
+	kept := false
+	for i := range sessions {
+		if sessions[i].SocStart == nil {
+			continue
+		}
+		if !kept {
+			kept = true
+			continue
+		}
+		sessions[i].SocStart = nil
+	}
+
+	assert.Nil(t, LearnExpectedArrival(sessions, learnNow), "one soc sample is not enough to trust the estimate")
+}
+
 func TestLearnExpectedArrivalIgnoresSessionsOutsideWindow(t *testing.T) {
 	old := commuterSessions(8)
 	for i := range old {
