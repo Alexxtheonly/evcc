@@ -3,7 +3,9 @@ package settings
 import (
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/evcc-io/evcc/core/loadpoint"
 	serverdb "github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
@@ -108,4 +110,83 @@ func TestConfigSettingsHistoryFailedWriteNotRecorded(t *testing.T) {
 	s.SetString("mode", "pv")
 
 	assert.Empty(t, historyFor(t, "db:"+strconv.Itoa(conf.ID)+".mode"))
+}
+
+// TestConfigSettingsHistoryPointerValue reproduces the live row observed
+// minutes after deploy:
+//
+//	(1787510832, 'db:13.smartCostLimit', '<nil>', '0x2f1b02b637d8', 0)
+//
+// SetFloatPtr hands its *float64 straight to set(), which rendered it with
+// fmt.Sprint - meaningless once the process restarts, and useless for a
+// settings_history replay. The dereferenced float must be recorded instead.
+func TestConfigSettingsHistoryPointerValue(t *testing.T) {
+	require.NoError(t, serverdb.NewInstance("sqlite", ":memory:"))
+	t.Cleanup(func() { serverdb.Instance = nil })
+
+	conf, err := config.AddConfig(templates.Loadpoint, map[string]any{})
+	require.NoError(t, err)
+
+	key := "db:" + strconv.Itoa(conf.ID) + ".smartCostLimit"
+	s := NewConfigSettingsAdapter(util.NewLogger("foo"), &conf)
+
+	limit := 0.3
+	s.SetFloatPtr("smartCostLimit", &limit)
+
+	rows := historyFor(t, key)
+	require.Len(t, rows, 1)
+	assert.Nil(t, rows[0].Old)
+	assert.NotContains(t, rows[0].New, "0x")
+	assert.Equal(t, "0.3", rows[0].New)
+}
+
+// TestConfigSettingsHistoryNilPointerValue covers a nil *float64: it must
+// render as a distinguishable, human-readable marker, not conflated with the
+// SQL NULL that Old already uses to mean "no previous value".
+func TestConfigSettingsHistoryNilPointerValue(t *testing.T) {
+	require.NoError(t, serverdb.NewInstance("sqlite", ":memory:"))
+	t.Cleanup(func() { serverdb.Instance = nil })
+
+	conf, err := config.AddConfig(templates.Loadpoint, map[string]any{})
+	require.NoError(t, err)
+
+	key := "db:" + strconv.Itoa(conf.ID) + ".smartCostLimit"
+	s := NewConfigSettingsAdapter(util.NewLogger("foo"), &conf)
+
+	s.SetFloatPtr("smartCostLimit", nil)
+
+	rows := historyFor(t, key)
+	require.Len(t, rows, 1)
+	assert.Nil(t, rows[0].Old)            // no prior value: SQL NULL
+	assert.Equal(t, "<nil>", rows[0].New) // the written value: an explicit nil pointer
+}
+
+// TestConfigSettingsHistoryNestedPointerValue reproduces the second live row:
+//
+//	(1787510768, 'db:13.soc', 'map[estimate:true poll:map[...]]', '{{charging 1h0m0s} 0x2f1b00bc9878}', 0)
+//
+// SocConfig.Estimate is a *bool nested inside a struct passed to SetJson - the
+// address leaked exactly like the top-level *float64 case, just one level
+// deeper. The fix must walk the whole value, not just the top level.
+func TestConfigSettingsHistoryNestedPointerValue(t *testing.T) {
+	require.NoError(t, serverdb.NewInstance("sqlite", ":memory:"))
+	t.Cleanup(func() { serverdb.Instance = nil })
+
+	conf, err := config.AddConfig(templates.Loadpoint, map[string]any{})
+	require.NoError(t, err)
+
+	key := "db:" + strconv.Itoa(conf.ID) + ".soc"
+	s := NewConfigSettingsAdapter(util.NewLogger("foo"), &conf)
+
+	estimate := true
+	soc := loadpoint.SocConfig{
+		Poll:     loadpoint.PollConfig{Mode: loadpoint.PollCharging, Interval: time.Hour},
+		Estimate: &estimate,
+	}
+	require.NoError(t, s.SetJson("soc", soc))
+
+	rows := historyFor(t, key)
+	require.Len(t, rows, 1)
+	assert.NotContains(t, rows[0].New, "0x")
+	assert.Equal(t, "{{charging 1h0m0s} true}", rows[0].New)
 }

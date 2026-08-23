@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,10 +62,83 @@ func (s *ConfigSettings) set(key string, val any) {
 	if err != nil {
 		return
 	}
-	if newStr := fmt.Sprint(val); !existed {
+	if newStr := render(val); !existed {
 		dbsettings.RecordHistory(s.historyKey(key), nil, newStr)
-	} else if oldStr := fmt.Sprint(oldVal); oldStr != newStr {
+	} else if oldStr := render(oldVal); oldStr != newStr {
 		dbsettings.RecordHistory(s.historyKey(key), &oldStr, newStr)
+	}
+}
+
+// render renders val the way fmt's default %v verb would, except that
+// pointers - at any depth, not just the top level - are dereferenced instead
+// of printed as their memory address. A *float64 field (SmartCostLimit, the
+// Estimate field nested inside SocConfig, ...) previously rendered as
+// something like "0x2f1b02b637d8": meaningless once the process restarts and
+// unrecoverable for a settings_history replay. A nil pointer still renders as
+// "<nil>", same as fmt - that is a real, distinct value and must not be
+// confused with the SQL NULL the Old column uses for "no previous value".
+func render(val any) string {
+	return renderValue(reflect.ValueOf(val))
+}
+
+func renderValue(v reflect.Value) string {
+	if !v.IsValid() {
+		return "<nil>"
+	}
+
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if v.IsNil() {
+			return "<nil>"
+		}
+		return renderValue(v.Elem())
+	}
+
+	// respect an existing Stringer/error before descending further - time.Time,
+	// time.Duration and enum types like PollMode must keep rendering the way
+	// they always did
+	if v.CanInterface() {
+		switch iv := v.Interface().(type) {
+		case fmt.Stringer:
+			return iv.String()
+		case error:
+			return iv.Error()
+		}
+	}
+
+	switch v.Kind() {
+	case reflect.Struct:
+		parts := make([]string, 0, v.NumField())
+		for i := range v.NumField() {
+			f := v.Field(i)
+			if !f.CanInterface() {
+				// unexported field: none of the settings payloads have these;
+				// render a placeholder rather than panicking on Interface()
+				parts = append(parts, "?")
+				continue
+			}
+			parts = append(parts, renderValue(f))
+		}
+		return "{" + strings.Join(parts, " ") + "}"
+
+	case reflect.Slice, reflect.Array:
+		parts := make([]string, v.Len())
+		for i := range parts {
+			parts[i] = renderValue(v.Index(i))
+		}
+		return "[" + strings.Join(parts, " ") + "]"
+
+	case reflect.Map:
+		keys := v.MapKeys()
+		rendered := make([]string, len(keys))
+		for i, k := range keys {
+			rendered[i] = fmt.Sprint(k.Interface()) + ":" + renderValue(v.MapIndex(k))
+		}
+		slices.Sort(rendered)
+		return "map[" + strings.Join(rendered, " ") + "]"
+
+	default:
+		return fmt.Sprint(v.Interface())
 	}
 }
 
