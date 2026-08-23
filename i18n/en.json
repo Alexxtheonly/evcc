@@ -1217,6 +1217,12 @@
         "health": "Recorded while the optimizer was unhealthy",
         "modeChanged": "The applied mode changed again later in this slot - the point above is only a sample taken at its start.",
         "noVeto": "Nothing was vetoed in this slot.",
+        "outcome": {
+          "steady": "steady, nothing vetoed",
+          "vetoedCost": "vetoed, cost {delta}",
+          "vetoedSaved": "vetoed, saved {delta}",
+          "vetoedUnknown": "vetoed, delta not computable"
+        },
         "reason": "Why it differs",
         "suggested": "Suggested instead",
         "table": {
