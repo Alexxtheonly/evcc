@@ -1396,8 +1396,12 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 		minSoc := capacity * float64(lp.EffectiveMinSoc()) * 10   // Wh
 		maxSoc := capacity * float64(lp.EffectiveLimitSoc()) * 10 // Wh
 		bat.SInitial = float32(capacity * soc * 10)               // Wh
-		bat.SMin = min(bat.SInitial, float32(minSoc))             // clamp against current soc, as for the home battery
-		bat.SMax = max(bat.SInitial, float32(maxSoc))             // prevent infeasible if current soc above maximum
+		// unclamped: s_min is a soft penalty (optimizer.py s_min_pen), not a hard bound, so a
+		// current soc below minSoc is feasible - the solver forces charging toward minSoc the
+		// same way loadpoint.minSocNotReached does, instead of the clamp silently zeroing the
+		// penalty and letting the model ignore the floor entirely (see 587a3bdc6)
+		bat.SMin = float32(minSoc)
+		bat.SMax = max(bat.SInitial, float32(maxSoc)) // prevent infeasible if current soc above maximum
 	}
 
 	detail.Type = batteryTypeVehicle

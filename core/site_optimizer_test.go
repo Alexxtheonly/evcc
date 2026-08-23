@@ -465,14 +465,16 @@ func TestLoadpointRequestChargeGoal(t *testing.T) {
 		{"no capacity, energy limit partially charged", 0, 0, 30, 100, 10, 4000, 4000, 0, 10000},
 		{"no capacity, limit exceeded", 0, 0, 30, 100, 10, 11000, 11000, 0, 11000},
 		{"capacity but no soc, energy limit", 50, 0, 30, 100, 10, 0, 0, 0, 10000},
-		{"capacity but no soc, no energy limit", 50, 0, 30, 100, 0, 0, 0, 0, 50000},
+		{"capacity but no soc, no energy limit", 50, 0, 30, 100, 0, 0, 0, 15000, 50000},
 		// minSoc feeds the optimizer's floor so the plan reflects the same forced-charge
 		// threshold the loadpoint enforces, instead of silently allowing the model to run
 		// the vehicle down to empty.
 		{"min soc below current soc", 50, 40, 30, 100, 0, 0, 20000, 15000, 50000},
-		// minSoc above current soc: floor still applies, current state stays below it -
-		// the optimizer's soft s_min penalty (not a hard bound) makes this feasible.
-		{"min soc above current soc", 50, 20, 30, 100, 0, 0, 10000, 10000, 50000},
+		// minSoc above current soc: SMin is passed unclamped. s_min is a soft penalty in the
+		// solver (optimizer.py s_min_pen, not a hard bound on s), so starting below the floor
+		// stays feasible - the solver is pushed to charge back up to it instead of the
+		// constraint going away, which is what clamping SMin to the current soc would do.
+		{"min soc above current soc", 50, 20, 30, 100, 0, 0, 10000, 15000, 50000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
