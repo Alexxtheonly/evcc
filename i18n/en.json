@@ -1181,6 +1181,81 @@
       "range": "Range"
     },
     "priceZoom": "zoom in",
+    "savingsLedger": {
+      "chain": {
+        "battery": {
+          "label": "Battery, dumb rule",
+          "sub": "charge from surplus, discharge to house load, never from grid"
+        },
+        "control": {
+          "label": "Control",
+          "sub": "the real controller against the dumb-rule default, at the period-average price"
+        },
+        "pv": {
+          "label": "PV, used directly and exported",
+          "sub": "self-consumption priced at each slot's own rate, export at the realised feed-in price"
+        },
+        "routing": {
+          "label": "Routing",
+          "sub": "which sink the surplus went to, against the dumb-rule default"
+        },
+        "timing": {
+          "label": "Price timing",
+          "sub": "when energy was bought, sold or shifted, priced per slot"
+        }
+      },
+      "chainCaption": "Every euro below is the same euro. Each measure removes a slice from the top; what is left at the bottom is the bill.",
+      "chainUnavailable": "The battery-vs-baseline comparison isn't available for this period: {reason}",
+      "coverage": "Computed over {pct} of slots ({valid} of {total}). Excluded slots are dropped, never scaled up to cover the gap.",
+      "coverageChainDiverges": "The chart below is computed over {pct} of slots - fewer than the headline above, because it also needs battery and vehicle data the grid-only figure doesn't.",
+      "decisions": {
+        "applied": "Applied",
+        "delta": "Slot-local delta",
+        "deltaNote": "Prices only this one slot against its own starting charge, not what happened afterwards - not hindsight. A decision whose payoff shows up in a later slot can read the wrong sign here.",
+        "deltaUnknown": "Not computable for this slot.",
+        "empty": "No control decisions recorded in this period.",
+        "health": "Recorded while the optimizer was unhealthy",
+        "modeChanged": "The applied mode changed again later in this slot - the point above is only a sample taken at its start.",
+        "noVeto": "Nothing was vetoed in this slot.",
+        "outcome": {
+          "steady": "steady, nothing vetoed",
+          "vetoedCost": "vetoed, cost {delta}",
+          "vetoedSaved": "vetoed, saved {delta}",
+          "vetoedUnknown": "vetoed, delta not computable"
+        },
+        "reason": "Why it differs",
+        "suggested": "Suggested instead",
+        "table": {
+          "applied": "Applied",
+          "basis": "Basis",
+          "delta": "Δ",
+          "suggested": "Rejected",
+          "time": "Slot"
+        },
+        "tableToggle": "Table view",
+        "timelineToggle": "Timeline view",
+        "title": "Per-slot decisions",
+        "unhealthyCount": "{count} of these vetoes were recorded while the optimizer was unhealthy."
+      },
+      "estimated": "estimated",
+      "headline": {
+        "label": "Settlement",
+        "periodAverage": "period average",
+        "perSlot": "per-slot"
+      },
+      "headlineFootnote": "At {otherLabel} settlement this period would have been {other}.",
+      "heroLabel": "Grid bill for this period, at the {headline} price",
+      "loading": "Loading the savings ledger…",
+      "lossBanner": "This period the control loop cost more than the dumb-rule baseline it's compared against. Shown, not clamped.",
+      "measured": "measured",
+      "notesTitle": "Notes",
+      "periodJumpToPresent": "Jump to now",
+      "refuseTitle": "No figure for this period",
+      "stillPaid": "Still paid",
+      "stillPaidSub": "grid import at the settled price - the only figure your invoice can confirm",
+      "title": "What the system did with your money",
+      "withoutAnything": "Without PV, battery or control"
+    },
     "showLine": "show line",
     "solar": {
       "dayAfterTomorrow": "Day after tomorrow",

@@ -135,6 +135,28 @@ func TestBuildLedgerSlotsRefusesUnalignedRange(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestBuildLedgerSlotsRefusesInvertedRange covers D1: a reversed or identical
+// [from,to) used to fall through to a plain errors.New("invalid period: to must be
+// after from"), which savingsLedgerErrorStatus doesn't recognise, so the HTTP handler
+// reported 500 for what is a malformed request, not a server fault - the same failure
+// mode ErrLoadpointNoChargeMeter had before it got its own case (see that error's doc
+// comment). ErrLedgerRangeInverted gives the handler something to match on.
+func TestBuildLedgerSlotsRefusesInvertedRange(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 22, 0, 0, 0, 0, loc)
+
+	// reversed: to before from
+	_, err := buildLedgerSlots(context.Background(), base.Add(24*time.Hour), base, false, false)
+	require.ErrorIs(t, err, ErrLedgerRangeInverted)
+
+	// identical: to == from
+	_, err = buildLedgerSlots(context.Background(), base, base, false, false)
+	require.ErrorIs(t, err, ErrLedgerRangeInverted)
+}
+
 // TestComputeRealisedCostIgnoresBatterySocFailures covers the Priority-4 finding: one
 // shared filter previously served every ledger computation, so a slot with a missing
 // or invalid battery SoC reading was dropped from EVERY computation - including
