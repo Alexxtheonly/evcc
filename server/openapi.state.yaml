@@ -1812,6 +1812,18 @@ components:
           nullable: true
           items:
             $ref: "#/components/schemas/RepeatingPlan"
+        adaptivePlans:
+          description: Adaptive (learned) repeating plans. Used only while no repeating plans are stored.
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/RepeatingPlan"
+        adaptivePlansActive:
+          description: Whether adaptive plans currently drive charging.
+          type: boolean
+        adaptivePlanLearning:
+          description: Whether adaptive plans are learned from session history.
+          type: boolean
         planStrategy:
           $ref: "#/components/schemas/PlanStrategy"
           description: Charging plan strategy.

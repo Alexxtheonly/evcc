@@ -2100,6 +2100,32 @@
         }
       }
     },
+    "/vehicles/{name}/adaptiveplanlearning/{enable}": {
+      "post": {
+        "operationId": "setVehicleAdaptivePlanLearning",
+        "summary": "Set adaptive plan learning",
+        "description": "Learn repeating charging plans from the vehicle's own charging session history. Disabling clears the learned plans immediately.",
+        "externalDocs": {
+          "url": "https://docs.evcc.io/en/features/plans"
+        },
+        "tags": [
+          "vehicles"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/vehicleName"
+          },
+          {
+            "$ref": "#/components/parameters/enable"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/BooleanResult"
+          }
+        }
+      }
+    },
     "/db/backup": {
       "get": {
         "operationId": "downloadBackup",
@@ -4658,6 +4684,22 @@
             "items": {
               "$ref": "#/components/schemas/RepeatingPlan"
             }
+          },
+          "adaptivePlans": {
+            "description": "Adaptive (learned) repeating plans. Used only while no repeating plans are stored.",
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/RepeatingPlan"
+            }
+          },
+          "adaptivePlansActive": {
+            "description": "Whether adaptive plans currently drive charging.",
+            "type": "boolean"
+          },
+          "adaptivePlanLearning": {
+            "description": "Whether adaptive plans are learned from session history.",
+            "type": "boolean"
           },
           "planStrategy": {
             "$ref": "#/components/schemas/PlanStrategy",
