@@ -6,7 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benbjohnson/clock"
 	"github.com/evcc-io/evcc/api"
+	"github.com/evcc-io/evcc/core/metrics"
+	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
 	"github.com/evcc-io/evcc/util"
 	"github.com/stretchr/testify/assert"
@@ -93,6 +96,59 @@ func TestTimeseriesMarshal(t *testing.T) {
 			assert.Equal(t, tc.want, string(b))
 		})
 	}
+}
+
+// TestArchiveForecastSlotUnits pins the forecast archive (solarEnergy, documented Wh, fed
+// through metrics.ArchiveForecastSample) and the PV meter accumulation (Accumulator.AddPower,
+// kWh) to the same unit end to end. #29 suspected a 1000x mismatch between the two - this
+// drives both sides from the same physical quantity (a flat 4kW slot) and checks the ratio
+// querySolarScaleByLead actually computes, so a future unit regression on either side fails
+// loudly instead of silently deflating (or inflating) every scale by 1000.
+func TestArchiveForecastSlotUnits(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{log: util.NewLogger("foo")}
+
+	// forecast: flat 4kW covering the next 25h so all three archived lead times
+	// (1h/6h/24h) resolve inside the horizon
+	base := time.Now().Truncate(tariff.SlotDuration)
+	var solar api.Rates
+	for i := 0; i < 4*25+1; i++ {
+		t0 := base.Add(time.Duration(i) * tariff.SlotDuration)
+		solar = append(solar, api.Rate{Start: t0, End: t0.Add(tariff.SlotDuration), Value: 4000})
+	}
+
+	// force archiveForecastSlot past its partial-boot-slot skip so the first call writes
+	site.forecastArchiveSlot = base.Add(-tariff.SlotDuration)
+	site.archiveForecastSlot(solar)
+
+	// PV meter: persist the actual for the 1h-lead target slot, same flat 4kW
+	target := base.Add(time.Hour)
+	clk := clock.NewMock()
+	clk.Set(target)
+	c, err := metrics.NewCollector(metrics.PV, "test-pv", "", metrics.WithClock(clk))
+	require.NoError(t, err)
+	require.NoError(t, c.AddEnergy(nil, nil, 4000, false)) // starts the slot, no persist yet
+	clk.Add(tariff.SlotDuration)
+	require.NoError(t, c.AddEnergy(nil, nil, 4000, false)) // completes and persists `target`
+
+	rows, err := metrics.QueryLeadTimeSamples(base.Add(-time.Hour))
+	require.NoError(t, err)
+
+	var got *metrics.LeadTimeSample
+	for i := range rows {
+		if rows[i].LeadMinutes == 60 {
+			got = &rows[i]
+		}
+	}
+	require.NotNil(t, got, "the 1h-lead forecast row must be archived and joined to the actual")
+
+	// 4kW for 15min is 1.0 kWh on either side: not ~0.001 (forecast left in Wh) or
+	// ~1000 (actual mistakenly read as Wh)
+	assert.InDelta(t, 1.0, got.Forecast, 0.01)
+	assert.InDelta(t, 1.0, got.Actual, 0.01)
+	assert.InDelta(t, 1.0, got.Actual/got.Forecast, 0.01)
 }
 
 func TestPercentileOf(t *testing.T) {
