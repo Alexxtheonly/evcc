@@ -261,6 +261,26 @@ func terminalStorageValue(minImportPrice float32) float32 {
 	return max(0, minImportPrice*eta*terminalValueSafetyMargin)
 }
 
+// vehicleTerminalStorageValue is terminalStorageValue's counterpart for a vehicle, which is
+// built with DMax = 0 (see loadpointRequest): it never discharges back through the meter, so
+// the eta*p "realizable value" argument above does not apply - there is no eta_d leg for a
+// one-way store, the energy leaves via the road instead. What it is worth is what it would
+// otherwise have cost to put an equivalent Wh there, i.e. replacement cost, p/eta_c, the
+// formula terminalStorageValue's doc comment deliberately rejects for the home battery.
+//
+// Safety: the objective pairs s[-1]*p_a with -n*p_N and s gains eta_c*c on the way in
+// (optimizer.py:396-398, 623-624/630-631), so grid-charging a vehicle only improves the
+// objective when p_N[t] < p_a*eta_c for some slot t. With p_a = minImportPrice/eta*margin,
+// that threshold is p_a*eta = minImportPrice*margin, which is strictly below
+// minImportPrice itself (margin < 1) - no slot can ever be that cheap by definition of
+// minImportPrice. So a vehicle can only take energy the solver would otherwise export or
+// leave unused, never energy bought from the grid to bank the terminal bonus. This holds
+// for any margin <= 1; do not raise it without also bounding the vehicle's SoC (limitSoc),
+// since a margin > 1 opens exactly the grid-charging-for-the-bonus path this guards against.
+func vehicleTerminalStorageValue(minImportPrice float32) float32 {
+	return max(0, minImportPrice/eta*terminalValueSafetyMargin)
+}
+
 // currentSlotSuggestion maps the optimizer's first-slot corner result onto an advisory action.
 // Because the optimization is linear, the first slot is at an operating-range extreme, so it
 // maps cleanly onto the discrete battery mode / loadpoint intent that control would later apply.
@@ -1212,8 +1232,11 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 	// price (see safeCPriority).
 	minImportPrice := lo.Min(req.TimeSeries.PN)
 
-	// end of horizon Wh value
+	// end of horizon Wh value - home batteries get realizable value (eta*p), vehicles get
+	// replacement cost (p/eta) since DMax = 0 means they never pay eta_d back through the
+	// meter (see vehicleTerminalStorageValue)
 	pa := terminalStorageValue(minImportPrice)
+	vehiclePA := vehicleTerminalStorageValue(minImportPrice)
 
 	details = requestDetails{
 		Timestamps: asTimestamps(dt, now),
@@ -1335,7 +1358,11 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 	}
 
 	for _, b := range batteries {
-		b.cfg.PA = pa
+		if b.detail.Type == batteryTypeVehicle {
+			b.cfg.PA = vehiclePA
+		} else {
+			b.cfg.PA = pa
+		}
 		req.Batteries = append(req.Batteries, b.cfg)
 		details.BatteryDetails = append(details.BatteryDetails, b.detail)
 	}
@@ -1693,7 +1720,7 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 		CMax:           float32(lp.EffectiveMaxPower()),
 		DMax:           0,
 		CPriority:      safeCPriority(effectivePriorityToCPriority(lp.EffectivePriority()), minImportPrice),
-		// PA:             pa,
+		// PA: vehiclePA - set in the batteries loop in optimizerRequest, by detail.Type
 	}
 
 	if profile := loadpointProfile(lp, minLen); profile != nil {
@@ -1856,7 +1883,7 @@ func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measureme
 		SCapacity: float32(*b.Capacity * 1e3),         // Wh
 		SInitial:  float32(*b.Capacity * *b.Soc * 10), // Wh
 		CPriority: safeCPriority(homeBatteryCPriority, minImportPrice),
-		// PA:       pa,
+		// PA: pa - set in the batteries loop in optimizerRequest, by detail.Type
 	}
 
 	instance := dev.Instance()

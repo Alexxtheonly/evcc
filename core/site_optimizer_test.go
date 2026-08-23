@@ -734,6 +734,59 @@ func TestTerminalStorageValue(t *testing.T) {
 	assert.Equal(t, float32(0), terminalStorageValue(-0.0002), "negative minimum: floored at zero, not a liability")
 }
 
+// TestVehicleTerminalStorageValue covers the safety property that makes replacement-cost
+// pricing safe for a one-way store (DMax = 0): the objective only rewards grid-charging a
+// vehicle when p_N[t] < p_a*eta (optimizer.py:396-398, 623-624/630-631 - s gains eta_c*c,
+// s[-1] pays p_a). With p_a = minImportPrice/eta*margin, that threshold collapses to
+// minImportPrice*margin, strictly below minImportPrice itself since margin < 1 - and no
+// slot can undercut the horizon's own minimum. So a vehicle can only ever take energy that
+// would otherwise be exported or left idle, never energy bought from the grid to bank the
+// terminal bonus.
+func TestVehicleTerminalStorageValue(t *testing.T) {
+	cases := []struct {
+		name           string
+		minImportPrice float32
+	}{
+		{"typical positive price", 0.0002},
+		{"very small positive price", 1e-9},
+		{"flat curve", 0.00015},
+		{"zero", 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pa := vehicleTerminalStorageValue(tc.minImportPrice)
+
+			assert.GreaterOrEqual(t, pa, float32(0), "never negative")
+
+			if tc.minImportPrice > 0 {
+				// anti-arbitrage bound: no slot in the horizon prices below
+				// minImportPrice by definition, so pinning the threshold there covers
+				// every slot - grid-charging a vehicle to bank pa can never pay for
+				// itself.
+				assert.Less(t, pa*eta, tc.minImportPrice, "must stay below the grid-charge-to-hoard breakeven in every slot")
+			}
+		})
+	}
+
+	// negative minimum: dividing by eta (< 1) would otherwise make the liability larger in
+	// magnitude than minImportPrice itself (worse than the home formula's multiplication);
+	// the floor still applies regardless.
+	assert.Equal(t, float32(0), vehicleTerminalStorageValue(-0.0002), "negative minimum: floored at zero, not a liability")
+
+	// model bound: p_a feeds into penalty_base = max(real_prices_per_wh...) alongside
+	// max_import_price (optimizer.py:205-216), so a p_a above the horizon's most expensive
+	// slot would rescale every other penalty in the model. p_a < maxImportPrice holds
+	// whenever minImportPrice/maxImportPrice < eta/margin (~0.909 at eta=0.9, margin=0.99) -
+	// not an unconditional algebraic guarantee, but true for realistic day-ahead spreads,
+	// including the live site's own request (ratio ~0.40, see scratchpad/pvcar/lib2.py).
+	t.Run("model bound holds for a realistic spread", func(t *testing.T) {
+		minImportPrice, maxImportPrice := float32(0.0001984), float32(0.0004972) // live request
+		pa := vehicleTerminalStorageValue(minImportPrice)
+		assert.Less(t, pa, maxImportPrice, "p_a must stay below the horizon's most expensive slot")
+	})
+}
+
 func TestNextOccurrence(t *testing.T) {
 	now := time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 
