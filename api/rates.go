@@ -19,7 +19,7 @@ type Rate struct {
 
 // IsZero returns is the rate is the zero value
 func (r Rate) IsZero() bool {
-	return r.Start.IsZero() && r.End.IsZero() && r.Value == 0
+	return r.Start.IsZero() && r.End.IsZero() && r.Value == 0 && !r.Forecast
 }
 
 // Rates is a slice of (future) tariff rates
