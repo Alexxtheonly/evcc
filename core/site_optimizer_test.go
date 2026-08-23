@@ -454,18 +454,25 @@ func TestLoadpointRequestChargeGoal(t *testing.T) {
 	site := &Site{log: util.NewLogger("foo")}
 
 	for _, tc := range []struct {
-		name                  string
-		capacity, soc         float64 // kWh, percent
-		limitSoc              int     // percent
-		limitEnergy, charged  float64 // kWh, Wh
-		wantInitial, wantSMax float32 // Wh
+		name                            string
+		capacity, soc                   float64 // kWh, percent
+		minSoc, limitSoc                int     // percent
+		limitEnergy, charged            float64 // kWh, Wh
+		wantInitial, wantSMin, wantSMax float32 // Wh
 	}{
-		{"soc limit", 50, 20, 80, 0, 0, 10000, 40000},
-		{"no capacity, energy limit", 0, 0, 100, 10, 0, 0, 10000},
-		{"no capacity, energy limit partially charged", 0, 0, 100, 10, 4000, 4000, 10000},
-		{"no capacity, limit exceeded", 0, 0, 100, 10, 11000, 11000, 11000},
-		{"capacity but no soc, energy limit", 50, 0, 100, 10, 0, 0, 10000},
-		{"capacity but no soc, no energy limit", 50, 0, 100, 0, 0, 0, 50000},
+		{"soc limit", 50, 20, 0, 80, 0, 0, 10000, 0, 40000},
+		{"no capacity, energy limit", 0, 0, 30, 100, 10, 0, 0, 0, 10000},
+		{"no capacity, energy limit partially charged", 0, 0, 30, 100, 10, 4000, 4000, 0, 10000},
+		{"no capacity, limit exceeded", 0, 0, 30, 100, 10, 11000, 11000, 0, 11000},
+		{"capacity but no soc, energy limit", 50, 0, 30, 100, 10, 0, 0, 0, 10000},
+		{"capacity but no soc, no energy limit", 50, 0, 30, 100, 0, 0, 0, 0, 50000},
+		// minSoc feeds the optimizer's floor so the plan reflects the same forced-charge
+		// threshold the loadpoint enforces, instead of silently allowing the model to run
+		// the vehicle down to empty.
+		{"min soc below current soc", 50, 40, 30, 100, 0, 0, 20000, 15000, 50000},
+		// minSoc above current soc: floor still applies, current state stays below it -
+		// the optimizer's soft s_min penalty (not a hard bound) makes this feasible.
+		{"min soc above current soc", 50, 20, 30, 100, 0, 0, 10000, 10000, 50000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -477,6 +484,7 @@ func TestLoadpointRequestChargeGoal(t *testing.T) {
 			lp := loadpoint.NewMockAPI(ctrl)
 			lp.EXPECT().GetVehicle().Return(v).AnyTimes()
 			lp.EXPECT().GetSoc().Return(tc.soc).AnyTimes()
+			lp.EXPECT().EffectiveMinSoc().Return(tc.minSoc).AnyTimes()
 			lp.EXPECT().EffectiveLimitSoc().Return(tc.limitSoc).AnyTimes()
 			lp.EXPECT().GetLimitEnergy().Return(tc.limitEnergy).AnyTimes()
 			lp.EXPECT().GetChargedEnergy().Return(tc.charged).AnyTimes()
@@ -493,6 +501,7 @@ func TestLoadpointRequestChargeGoal(t *testing.T) {
 			req, _ := site.loadpointRequest(lp, 8, 15*time.Minute, nil, 0)
 
 			assert.Equal(t, tc.wantInitial, req.SInitial)
+			assert.Equal(t, tc.wantSMin, req.SMin)
 			assert.Equal(t, tc.wantSMax, req.SMax)
 		})
 	}
@@ -517,6 +526,7 @@ func TestLoadpointRequestCPriorityNegativePriceHorizon(t *testing.T) {
 		lp := loadpoint.NewMockAPI(ctrl)
 		lp.EXPECT().GetVehicle().Return(v).AnyTimes()
 		lp.EXPECT().GetSoc().Return(50.0).AnyTimes()
+		lp.EXPECT().EffectiveMinSoc().Return(0).AnyTimes()
 		lp.EXPECT().EffectiveLimitSoc().Return(100).AnyTimes()
 		lp.EXPECT().GetLimitEnergy().Return(0.0).AnyTimes()
 		lp.EXPECT().GetChargedEnergy().Return(0.0).AnyTimes()

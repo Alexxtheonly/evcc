@@ -1367,7 +1367,6 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 		CMin:           float32(lp.EffectiveMinPower()),
 		CMax:           float32(lp.EffectiveMaxPower()),
 		DMax:           0,
-		SMin:           0,
 		CPriority:      safeCPriority(effectivePriorityToCPriority(lp.EffectivePriority()), minImportPrice),
 		// PA:             pa,
 	}
@@ -1394,8 +1393,10 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 		bat.SInitial = float32(lp.GetChargedEnergy())    // Wh
 		bat.SMax = max(bat.SInitial, float32(limit*1e3)) // prevent infeasible if limit already exceeded
 	} else {
+		minSoc := capacity * float64(lp.EffectiveMinSoc()) * 10   // Wh
 		maxSoc := capacity * float64(lp.EffectiveLimitSoc()) * 10 // Wh
 		bat.SInitial = float32(capacity * soc * 10)               // Wh
+		bat.SMin = min(bat.SInitial, float32(minSoc))             // clamp against current soc, as for the home battery
 		bat.SMax = max(bat.SInitial, float32(maxSoc))             // prevent infeasible if current soc above maximum
 	}
 
