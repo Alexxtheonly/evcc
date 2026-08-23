@@ -13,7 +13,6 @@ import (
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/request"
 	"github.com/evcc-io/evcc/util/transport"
-	"github.com/jinzhu/now"
 )
 
 type Solcast struct {
@@ -104,30 +103,27 @@ func (t *Solcast) run(interval time.Duration, done chan error) {
 
 		once.Do(func() { close(done) })
 
-		data := make(api.Rates, 0, len(res.Forecasts))
-
-	NEXT:
-		for _, r := range res.Forecasts {
-			start := now.With(r.PeriodEnd).BeginningOfHour().Local()
-			rr := api.Rate{
-				Start: start,
-				End:   start.Add(time.Hour),
-				Value: r.PvEstimate * 1e3,
-			}
-			if r.Period.Duration() != time.Hour {
-				for i, r := range data {
-					if r.Start.Equal(rr.Start) {
-						data[i].Value = (r.Value + rr.Value) / 2
-						continue NEXT
-					}
-				}
-			}
-			data = append(data, rr)
-		}
-
-		mergeRatesAfter(t.data, data, beginningOfDay())
+		mergeRatesAfter(t.data, solcastRates(res.Forecasts), beginningOfDay())
 		once.Do(func() { close(done) })
 	}
+}
+
+// solcastRates converts Solcast's forecast periods to rates, preserving their native
+// resolution (e.g. 30 minutes) instead of collapsing them to hourly buckets. SlotWrapper
+// takes care of expanding sub-hourly slots to the common 15-minute grid.
+func solcastRates(forecasts []solcast.Forecast) api.Rates {
+	data := make(api.Rates, 0, len(forecasts))
+
+	for _, r := range forecasts {
+		end := r.PeriodEnd.Local()
+		data = append(data, api.Rate{
+			Start: end.Add(-r.Period.Duration()),
+			End:   end,
+			Value: r.PvEstimate * 1e3,
+		})
+	}
+
+	return data
 }
 
 // Rates implements the api.Tariff interface
