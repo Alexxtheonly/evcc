@@ -190,3 +190,56 @@ func TestConfigSettingsHistoryNestedPointerValue(t *testing.T) {
 	assert.NotContains(t, rows[0].New, "0x")
 	assert.Equal(t, "{{charging 1h0m0s} true}", rows[0].New)
 }
+
+// TestConfigSettingsHistoryBootReserializationIsNoOp reproduces the boot
+// false positive:
+//
+//	(1787510768, 'db:3.thresholds', 'map[disable:map[delay:1.8e+11 threshold:0] enable:map[delay:1.2e+11 threshold:-1000]]', '{{2m0s -1000} {3m0s 0}}', 0)
+//
+// After a restart, conf.Data holds the JSON-decoded generic form of whatever
+// was last persisted (maps, float64s). The first SetJson call after boot
+// passes the same value back as a typed Go struct. Nothing changed, but the
+// old dedup compared the two different string renderings and always found
+// them different. Change detection must compare decoded values instead.
+func TestConfigSettingsHistoryBootReserializationIsNoOp(t *testing.T) {
+	require.NoError(t, serverdb.NewInstance("sqlite", ":memory:"))
+	t.Cleanup(func() { serverdb.Instance = nil })
+
+	conf, err := config.AddConfig(templates.Loadpoint, map[string]any{})
+	require.NoError(t, err)
+
+	key := "db:" + strconv.Itoa(conf.ID) + ".thresholds"
+	s := NewConfigSettingsAdapter(util.NewLogger("foo"), &conf)
+
+	thresholds := loadpoint.ThresholdsConfig{
+		Enable:  loadpoint.ThresholdConfig{Delay: 2 * time.Minute, Threshold: -1000},
+		Disable: loadpoint.ThresholdConfig{Delay: 3 * time.Minute, Threshold: 0},
+	}
+
+	// first write: establishes the persisted (real) value
+	require.NoError(t, s.SetJson("thresholds", thresholds))
+	require.Len(t, historyFor(t, key), 1)
+
+	// simulate a restart: conf.Data now holds the JSON-decoded generic form,
+	// exactly what gorm's serializer:json would hand back on reload
+	conf.Data = map[string]any{
+		"thresholds": map[string]any{
+			"enable":  map[string]any{"delay": float64(2 * time.Minute), "threshold": float64(-1000)},
+			"disable": map[string]any{"delay": float64(3 * time.Minute), "threshold": float64(0)},
+		},
+	}
+
+	// the loadpoint re-applies its already-current config on init - same
+	// value, re-serialized as a typed struct
+	require.NoError(t, s.SetJson("thresholds", thresholds))
+
+	assert.Len(t, historyFor(t, key), 1, "identical re-serialization must not write a row")
+
+	// a genuine change to a nested field must still write one
+	thresholds.Enable.Threshold = -900
+	require.NoError(t, s.SetJson("thresholds", thresholds))
+
+	rows := historyFor(t, key)
+	require.Len(t, rows, 2, "a real nested-field change must still be recorded")
+	assert.Contains(t, rows[1].New, "-900")
+}

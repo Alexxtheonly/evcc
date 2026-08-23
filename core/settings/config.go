@@ -62,11 +62,56 @@ func (s *ConfigSettings) set(key string, val any) {
 	if err != nil {
 		return
 	}
-	if newStr := render(val); !existed {
+
+	newStr := render(val)
+	if !existed {
 		dbsettings.RecordHistory(s.historyKey(key), nil, newStr)
-	} else if oldStr := render(oldVal); oldStr != newStr {
-		dbsettings.RecordHistory(s.historyKey(key), &oldStr, newStr)
+		return
 	}
+
+	// oldVal and val are frequently not the same Go representation of the
+	// same data: after a restart, conf.Data holds whatever gorm's
+	// serializer:json last decoded (plain maps/slices/float64s), while a
+	// fresh Set* call passes a typed Go struct. Comparing their rendered
+	// strings treated every such re-serialization as a change, even when
+	// nothing moved - twelve of the first thirteen rows after the last
+	// startup were exactly this. Round-tripping both sides through JSON
+	// first normalizes them to the same shape, so the comparison reflects
+	// the actual data rather than its current Go type.
+	if valuesEqual(oldVal, val) {
+		return
+	}
+
+	oldStr := render(oldVal)
+	dbsettings.RecordHistory(s.historyKey(key), &oldStr, newStr)
+}
+
+// valuesEqual reports whether a and b represent the same data once both are
+// normalized to the same shape via a JSON round trip - see the comment in
+// set(). Marshaling failure is treated as "not equal" so a value we can't
+// reason about is never silently dropped from the audit trail.
+func valuesEqual(a, b any) bool {
+	ca, errA := canonicalize(a)
+	if errA != nil {
+		return false
+	}
+	cb, errB := canonicalize(b)
+	if errB != nil {
+		return false
+	}
+	return reflect.DeepEqual(ca, cb)
+}
+
+func canonicalize(val any) (any, error) {
+	b, err := json.Marshal(val)
+	if err != nil {
+		return nil, err
+	}
+	var res any
+	if err := json.Unmarshal(b, &res); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 // render renders val the way fmt's default %v verb would, except that
