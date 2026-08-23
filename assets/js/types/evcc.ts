@@ -1288,7 +1288,7 @@ export interface Rate {
   end: Date;
   /** Price per kWh in the configured currency or emissions in g/kWh. */
   value: number;
-  /** Whether this is a prediction rather than a settled price, e.g. a slot filled in by a secondary tariff beyond the primary's known horizon. */
+  /** Whether this slot extends past a merged tariff's primary source, e.g. filled in by the secondary tariff beyond the primary's own known horizon. Not a general confidence flag: a tariff that is a prediction end to end (e.g. solar) reports false for every rate it produces. */
   forecast?: boolean;
 }
 
