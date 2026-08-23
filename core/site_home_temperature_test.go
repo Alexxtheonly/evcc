@@ -102,7 +102,7 @@ func TestApplyHeatingDegree(t *testing.T) {
 		assert.Equal(t, profile, got)
 	})
 
-	t.Run("confident fit and a forecast: each slot corrected by its own forecast temperature", func(t *testing.T) {
+	t.Run("confident fit and a forecast: each slot corrected by its own forecast temperature, capped at the base value", func(t *testing.T) {
 		fit := heatingDegreeFit{slope: 500, meanHDD: 5} // 500 Wh per heating-degree
 		site.tariffs = &tariff.Tariffs{Temperature: temp}
 		site.heatingDegreeCached = func() (heatingDegreeResult, error) {
@@ -111,14 +111,33 @@ func TestApplyHeatingDegree(t *testing.T) {
 
 		start := time.Now().Truncate(tariff.SlotDuration)
 		temp.EXPECT().Rates().Return(api.Rates{
-			{Start: start, End: start.Add(tariff.SlotDuration), Value: 5},                                  // hdd=10, +5*500=2500Wh -> +2.5kWh
-			{Start: start.Add(tariff.SlotDuration), End: start.Add(2 * tariff.SlotDuration), Value: 15},    // hdd=0, -5*500=-2500Wh -> -2.5kWh
-			{Start: start.Add(2 * tariff.SlotDuration), End: start.Add(3 * tariff.SlotDuration), Value: 0}, // hdd=15, +10*500=5000Wh -> +5kWh
+			{Start: start, End: start.Add(tariff.SlotDuration), Value: 5},                                  // hdd=10, +5*500=2500Wh -> +2.5kWh raw, capped to +1.0kWh (base)
+			{Start: start.Add(tariff.SlotDuration), End: start.Add(2 * tariff.SlotDuration), Value: 15},    // hdd=0, -5*500=-2500Wh -> -2.5kWh raw, capped to -1.0kWh
+			{Start: start.Add(2 * tariff.SlotDuration), End: start.Add(3 * tariff.SlotDuration), Value: 0}, // hdd=15, +10*500=5000Wh -> +5kWh raw, capped to +1.0kWh
 		}, nil)
 
+		// each slot has a 1.0kWh base: an uncapped correction would put these at 3.5/-1.5/6.0 -
+		// #27's cap limits the swing to +/-100% of the slot's own base value
 		got := site.applyHeatingDegree([]float64{1.0, 1.0, 1.0})
-		assert.InDelta(t, 3.5, got[0], 1e-9)
-		assert.Equal(t, 0.0, got[1], "clamped at zero rather than going negative")
-		assert.InDelta(t, 6.0, got[2], 1e-9)
+		assert.InDelta(t, 2.0, got[0], 1e-9, "raw +2.5kWh capped to +1.0kWh (the base)")
+		assert.Equal(t, 0.0, got[1], "raw -2.5kWh capped to -1.0kWh, base+correction clamped at zero")
+		assert.InDelta(t, 2.0, got[2], 1e-9, "raw +5.0kWh capped to +1.0kWh (the base)")
+	})
+
+	t.Run("correction within the cap is applied uncapped", func(t *testing.T) {
+		fit := heatingDegreeFit{slope: 500, meanHDD: 5} // 500 Wh per heating-degree
+		site.tariffs = &tariff.Tariffs{Temperature: temp}
+		site.heatingDegreeCached = func() (heatingDegreeResult, error) {
+			return heatingDegreeResult{fit: fit, ok: true}, nil
+		}
+
+		start := time.Now().Truncate(tariff.SlotDuration)
+		temp.EXPECT().Rates().Return(api.Rates{
+			// hdd=6, (6-5)*500=500Wh -> +0.5kWh, well inside +/-2.0kWh (the base) - not capped
+			{Start: start, End: start.Add(tariff.SlotDuration), Value: 9},
+		}, nil)
+
+		got := site.applyHeatingDegree([]float64{2.0})
+		assert.InDelta(t, 2.5, got[0], 1e-9)
 	})
 }

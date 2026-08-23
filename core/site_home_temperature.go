@@ -21,9 +21,16 @@ func heatingDegree(tempC float64) float64 {
 }
 
 const (
-	// heatingDegreeMinSamples requires several days of paired (energy, temperature) slots -
-	// a single cold snap must not look like a fit.
-	heatingDegreeMinSamples = 500
+	// heatingDegreeMinSamples requires most of the 30-day lookback queryHeatingDegreeFit uses
+	// (2880 slots at 96/day) to be covered by paired (energy, temperature) samples, not just a
+	// handful of days. meanHDD (the fit's zero point) is computed only over this joined sample
+	// set, while the base profile applyHeatingDegree corrects is a separate 30-day average - if
+	// a temperature tariff gets configured during a cold snap, a low sample count would let
+	// meanHDD lock in that cold snap's average as "typical," under-correcting every forecast
+	// slot from then on. 2000 (~20.8 days) requires the joined window to already resemble the
+	// full 30-day one before the fit is trusted; a fresh setup instead runs on the unmodified
+	// profile until enough of the month has actually accrued.
+	heatingDegreeMinSamples = 2000
 
 	// heatingDegreeMinCorrelation is the minimum Pearson correlation between home load and
 	// heating-degree before the fit is trusted. This is the "demonstrated fit" gate: a site
@@ -139,7 +146,18 @@ func (site *Site) applyHeatingDegree(profile []float64) []float64 {
 		if err != nil {
 			continue // no forecast for this slot: leave the historical average in place
 		}
-		res[i] = max(0, res[i]+result.fit.adjust(rate.Value)/1e3) // Wh -> kWh
+
+		correction := result.fit.adjust(rate.Value) / 1e3 // Wh -> kWh
+
+		// cap the correction relative to the slot's own base value: an OLS slope driven by a
+		// thin or skewed sample set, applied to a forecast temperature far outside the fit
+		// window, must not be able to swing a slot to an arbitrary multiple of its historical
+		// average. Bounding it to +/-100% of the base keeps the corrected value within
+		// [0, 2x base] - generous enough for a real heating effect, not enough for the fit to
+		// run away.
+		correction = min(max(correction, -res[i]), res[i])
+
+		res[i] = max(0, res[i]+correction)
 	}
 
 	return res
