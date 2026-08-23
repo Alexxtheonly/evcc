@@ -173,6 +173,7 @@ type Loadpoint struct {
 	chargeCurrents []float64        // Phase currents
 	connectedTime  time.Time        // Time when vehicle was connected
 	connectPending bool             // connect notification deferred until vehicle detection settles
+	connectAtBoot  bool             // evVehicleConnect fired because a car was already plugged in at startup, not because it just plugged in (F7)
 	pvTimer        time.Time        // PV enabled/disable timer
 	phaseTimer     time.Time        // 1p3p switch timer
 	wakeUpTimer    *Timer           // Vehicle wake-up timeout
@@ -584,11 +585,20 @@ func (lp *Loadpoint) evVehicleConnectHandler() {
 
 	// record the connect time; Created is stamped at charge start, which under
 	// smart or scheduled charging can be well after the vehicle plugs in, so
-	// Created cannot serve as the decision-relevant plug-in moment on its own
-	lp.updateSession(func(s *session.Session) {
-		now := lp.clock.Now()
-		s.Connected = &now
-	})
+	// Created cannot serve as the decision-relevant plug-in moment on its own.
+	// F7: skip this on the first poll after a restart with a car already
+	// plugged in - evcc's start time is not the plug-in time, and stamping it
+	// as one would be indistinguishable from a real connect at that moment.
+	// Per ADR-011 honesty rule 4, the information genuinely isn't available,
+	// so it's left unset rather than fabricated.
+	if lp.connectAtBoot {
+		lp.connectAtBoot = false
+	} else {
+		lp.updateSession(func(s *session.Session) {
+			now := lp.clock.Now()
+			s.Connected = &now
+		})
+	}
 
 	// reset energy-based charging plan offset
 	lp.planEnergyOffset = 0
@@ -1210,6 +1220,15 @@ func (lp *Loadpoint) updateChargerStatus() (bool, error) {
 		lp.setStatus(status)
 
 		for _, ev := range statusEvents(prevStatus, status) {
+			// F7: a connect event on the first poll after startup (prevStatus
+			// == api.StatusNone) means the car was already plugged in, not
+			// that it just connected - evVehicleConnectHandler must not stamp
+			// session.Connected with the restart time in that case, since the
+			// real plug-in time genuinely isn't known.
+			if ev == evVehicleConnect && prevStatus == api.StatusNone {
+				lp.connectAtBoot = true
+			}
+
 			lp.bus.Publish(ev)
 
 			// send connect/disconnect events except during startup
