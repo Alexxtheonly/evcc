@@ -22,11 +22,33 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+var log = util.NewLogger("settings")
+
 // setting is a settings entry
 type setting struct {
 	dirty bool
 	Key   string `json:"key" gorm:"primarykey"`
 	Value string `json:"value"`
+}
+
+// settingHistory is one recorded write to a settings key. Settings on this
+// project have drifted silently more than once, unnoticed until much later;
+// without this, any later reconstruction of "what was configured at time T"
+// would have no choice but to substitute today's value for the whole past.
+//
+// Old is nil for a key's first-ever write - "the key did not exist yet" and
+// "the key existed with an empty value" are different facts, and collapsing
+// them into "" would erase exactly the distinction this table exists for.
+type settingHistory struct {
+	ID        uint    `gorm:"primarykey"`
+	Timestamp int64   `json:"ts" gorm:"column:ts;index"`
+	Key       string  `json:"key" gorm:"column:key;index"`
+	Old       *string `json:"old" gorm:"column:old"`
+	New       string  `json:"new" gorm:"column:new"`
+}
+
+func (settingHistory) TableName() string {
+	return "settings_history"
 }
 
 var (
@@ -36,12 +58,33 @@ var (
 
 func init() {
 	db.Register(func(db *gorm.DB) error {
-		if err := db.AutoMigrate(new(setting)); err != nil {
+		if err := db.AutoMigrate(new(setting), new(settingHistory)); err != nil {
 			return err
 		}
 
 		return db.Find(&settings).Error
 	})
+}
+
+// recordHistory appends a settings_history row for a value actually written by
+// SetString. Called with mu already held, so the change to the in-memory
+// settings slice and its history entry can never be observed out of order by
+// a concurrent reader. A nil db.Instance (unit tests exercising SetString/
+// String in isolation, without a database) is a silent no-op, matching the
+// test guard used throughout this codebase for optional persistence.
+func recordHistory(key string, old *string, val string) {
+	if db.Instance == nil {
+		return
+	}
+
+	if err := db.Instance.Create(&settingHistory{
+		Timestamp: time.Now().Unix(),
+		Key:       key,
+		Old:       old,
+		New:       val,
+	}).Error; err != nil {
+		log.ERROR.Printf("persist settings history: %v", err)
+	}
 }
 
 func Persist() error {
@@ -103,9 +146,12 @@ func SetString(key string, val string) {
 
 	if idx := slices.IndexFunc(settings, equal(key)); idx < 0 {
 		settings = append(settings, setting{true, key, val})
+		recordHistory(key, nil, val)
 	} else if settings[idx].Value != val {
+		old := settings[idx].Value
 		settings[idx].dirty = true
 		settings[idx].Value = val
+		recordHistory(key, &old, val)
 	}
 }
 
