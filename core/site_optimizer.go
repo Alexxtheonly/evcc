@@ -1221,7 +1221,17 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 
 	if site.circuit != nil {
 		if pMaxImp := site.circuit.GetMaxPower(); pMaxImp > 0 {
-			// hard grid import limit if no price penalty is set by PrcPExcImp
+			// hard grid import limit if no price penalty is set by PrcPExcImp.
+			//
+			// evcc never sets Grid.PrcPExcImp today (B4) - do not start without
+			// restoring the guard below first. Setting it DISABLES the solver's normal
+			// per-Wh overshoot penalty (optimizer.py's prc_e_grid_imp_pen, gated off at
+			// optimizer.py:431 whenever prc_p_exc_imp is set), so import overshoot gets
+			// CHEAPER, not more expensive - measured 22468.3Wh of overshoot with
+			// PrcPExcImp set vs 7485.5Wh without it, on the identical request. If a
+			// future change sets PrcPExcImp (e.g. a real demand-charge tariff), it must
+			// also keep prc_e_grid_imp_pen active, not silently swap one penalty out
+			// for a weaker one.
 			req.Grid.PMaxImp = float32(pMaxImp)
 		}
 	}
