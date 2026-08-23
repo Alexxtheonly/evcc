@@ -43,11 +43,15 @@ const (
 
 // batteryEta is the round-trip-efficiency building block this package falls back to
 // when the data can't defensibly support a derived one (see deriveBatteryPhysics).
-// Duplicated from core/site_optimizer.go's `eta = 0.9` rather than imported: core
-// already imports core/metrics, so the reverse import would cycle. Used one-way
-// (charge and discharge each apply it once), matching how core/site_optimizer.go
-// itself applies eta*eta for a round trip.
+// Used one-way (charge and discharge each apply it once), matching how
+// core/site_optimizer.go's own eta applies eta*eta for a round trip.
 const batteryEta = 0.9
+
+// BatteryEta is batteryEta, exported so core/site_optimizer.go's `eta` constant can be
+// defined as metrics.BatteryEta instead of an independently-typed 0.9 that could drift
+// from this one with nothing to catch it - core already imports core/metrics (the
+// reverse import would cycle), so this is a same-value const, not a duplicate.
+const BatteryEta = batteryEta
 
 // computeW0 is the no-PV, no-battery baseline: every kWh of load - household plus
 // every loadpoint's EV charging (see slotData.modelledLoadKWh) - is bought from the
@@ -248,7 +252,7 @@ func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
 		CapacitySource:  capacitySource,
 		EtaC:            batteryEta,
 		EtaD:            batteryEta,
-		EtaSource:       "constant (core/site_optimizer.go eta=0.9), not derived - see batteryEta",
+		EtaSource:       "constant (0.9), not derived - shared with core/site_optimizer.go's eta, see BatteryEta",
 		FloorFrac:       floorFrac,
 		FloorSource:     floorSource,
 		MaxChargeKWh:    maxChargeSlot,

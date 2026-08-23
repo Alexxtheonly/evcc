@@ -32,8 +32,12 @@ import (
 )
 
 const (
-	// eta is the efficiency of the battery charging/discharging
-	eta = 0.9
+	// eta is the efficiency of the battery charging/discharging. Defined as
+	// metrics.BatteryEta (core/metrics/ledger_worlds.go) rather than its own 0.9 so
+	// the savings ledger's counterfactual battery physics and the live optimizer
+	// can't silently drift onto different efficiency assumptions - a change here
+	// now changes both, or fails to compile if metrics.BatteryEta goes away.
+	eta = metrics.BatteryEta
 
 	// batteryPower is the fallback charge/discharge power of a battery without a
 	// api.BatteryPowerLimiter and without enough history for batteryPowerLimits to derive a
