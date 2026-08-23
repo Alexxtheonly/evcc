@@ -1208,6 +1208,28 @@ func (site *Site) sitePower(state siteState, totalChargePower, flexiblePower flo
 			// if battery is above bufferSoc allow using it for charging
 			batteryBuffered = bufferSoc > 0 && state.battery.Soc > bufferSoc
 			batteryStart = bufferStartSoc > 0 && state.battery.Soc >= bufferStartSoc
+
+			// the optimizer's own forecast (already computed for the UI battery
+			// forecast label) says whether the battery will refill by end of day
+			// regardless of what we do now - if so, an explicitly enabled buffer
+			// threshold is relaxed to the current (already-above-prioritySoc) soc,
+			// since holding back a battery that is going to fill back up anyway only
+			// costs today's charging, not tomorrow's buffer. A disabled threshold
+			// (0, "never buffer/start from battery") is never turned on by this -
+			// only a threshold the user did enable is relaxed, and only in the
+			// permissive direction: this can only make batteryBuffered/batteryStart
+			// true, never false, so no combination of forecast state ever produces a
+			// stricter answer than the static configuration on its own would.
+			if refills := batteryWillRefillToday(state.battery.Forecast, time.Now()); refills {
+				if bufferSoc > 0 && !batteryBuffered {
+					site.log.DEBUG.Printf("battery buffer relaxed: forecast to refill by end of day")
+					batteryBuffered = true
+				}
+				if bufferStartSoc > 0 && !batteryStart {
+					site.log.DEBUG.Printf("battery buffer start relaxed: forecast to refill by end of day")
+					batteryStart = true
+				}
+			}
 		}
 	}
 

@@ -16,6 +16,7 @@ import (
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
 	optimizer "github.com/evcc-io/optimizer/client"
+	"github.com/jinzhu/now"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -273,6 +274,50 @@ func TestBatteryForecastSocExtremes(t *testing.T) {
 				assert.InDelta(t, tc.low.soc, low.soc, 1e-3, "low.soc")
 				assert.Equal(t, tc.low.limit, low.limit, "low.limit")
 			}
+		})
+	}
+}
+
+// TestBatteryWillRefillToday covers the boundary sitePower's buffer relaxation relies on:
+// only a forecast that actually reached SMax (Limit), and does so before the end of the
+// current day, counts as "will refill by evening." A high point that never reached the
+// limit, or one that reaches it only on a later day, must not be trusted - the caller's
+// fallback (today's static buffer thresholds) is the safe default in both cases.
+func TestBatteryWillRefillToday(t *testing.T) {
+	asOf := time.Date(2026, 6, 15, 10, 0, 0, 0, time.Local)
+
+	tc := []struct {
+		name     string
+		forecast *types.BatteryForecast
+		want     bool
+	}{
+		{"no forecast at all", nil, false},
+		{"forecast with no highest point", &types.BatteryForecast{}, false},
+		{
+			"reaches SMax later today",
+			&types.BatteryForecast{Highest: &types.BatteryForecastPoint{Limit: true, Time: asOf.Add(4 * time.Hour)}},
+			true,
+		},
+		{
+			"trends up but never reaches SMax",
+			&types.BatteryForecast{Highest: &types.BatteryForecastPoint{Limit: false, Soc: 92, Time: asOf.Add(4 * time.Hour)}},
+			false,
+		},
+		{
+			"reaches SMax, but only tomorrow",
+			&types.BatteryForecast{Highest: &types.BatteryForecastPoint{Limit: true, Time: asOf.AddDate(0, 0, 1).Add(2 * time.Hour)}},
+			false,
+		},
+		{
+			"reaches SMax exactly at end of day",
+			&types.BatteryForecast{Highest: &types.BatteryForecastPoint{Limit: true, Time: now.With(asOf).EndOfDay()}},
+			true,
+		},
+	}
+
+	for _, c := range tc {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, batteryWillRefillToday(c.forecast, asOf))
 		})
 	}
 }

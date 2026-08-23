@@ -1459,6 +1459,24 @@ func batteryForecastSocExtremes(req []optimizer.BatteryConfig, resp []optimizer.
 	return high, low
 }
 
+// batteryWillRefillToday reports whether the optimizer's own forecast (see
+// batteryForecastSocExtremes, addBatteryForecastTotals) confidently shows the home
+// battery reaching its configured SMax (fully charged) at or before the end of the
+// day containing asOf. "Confidently" means the forecast actually reached the
+// limit, not just trended upward - Highest.Limit is only set once the simulated
+// SOC hits SMax, so a forecast that stays below it (e.g. an overcast day) reports
+// false here even though Highest is still populated.
+//
+// A nil forecast - no optimizer run yet, not sponsored, or the forecast was
+// cleared as stale (see clearSuggestions) - reports false, which is exactly the
+// "fall back to configured static behaviour" case callers need.
+func batteryWillRefillToday(forecast *types.BatteryForecast, asOf time.Time) bool {
+	if forecast == nil || forecast.Highest == nil || !forecast.Highest.Limit {
+		return false
+	}
+	return !forecast.Highest.Time.After(now.With(asOf).EndOfDay())
+}
+
 func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDuration time.Duration, grid api.Rates, minImportPrice float32) (optimizer.BatteryConfig, batteryDetail) {
 	bat := optimizer.BatteryConfig{
 		ChargeFromGrid: true,

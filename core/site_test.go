@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/evcc-io/evcc/api"
@@ -70,6 +71,65 @@ func TestSitePowerPriorityAdjustment(t *testing.T) {
 			assert.Equal(t, tc.expReconstructed, res.power+res.priorityAdjustment, "reconstructed (unadjusted) site power")
 		})
 	}
+}
+
+// TestSitePowerBatteryBufferRelaxedByForecast covers the §25 rule: a confident
+// same-day refill forecast may relax an *enabled* buffer threshold (make
+// batteryBuffered/batteryStart true where the static soc comparison alone would
+// not), but never turns on a threshold the user left at 0 (disabled), and never
+// relaxes anything without a forecast.
+func TestSitePowerBatteryBufferRelaxedByForecast(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	meter := api.NewMockMeter(ctrl) // sitePower only checks len(batteryMeters) > 0
+
+	refillsToday := &types.BatteryForecast{
+		Highest: &types.BatteryForecastPoint{Limit: true, Time: time.Now().Add(2 * time.Hour)},
+	}
+
+	newSite := func(bufferSoc, bufferStartSoc float64) *Site {
+		return &Site{
+			log:            util.NewLogger("foo"),
+			batteryMeters:  []config.Device[api.Meter]{config.NewStaticDevice(config.Named{}, api.Meter(meter))},
+			prioritySoc:    10,
+			bufferSoc:      bufferSoc,
+			bufferStartSoc: bufferStartSoc,
+		}
+	}
+
+	state := func(soc float64, forecast *types.BatteryForecast) siteState {
+		var s siteState
+		s.battery.Soc = soc
+		s.battery.Forecast = forecast
+		return s
+	}
+
+	t.Run("below threshold, no forecast: static behaviour, unchanged", func(t *testing.T) {
+		site := newSite(70, 80)
+		res := site.sitePower(state(60, nil), 0, 0)
+		assert.False(t, res.batteryBuffered)
+		assert.False(t, res.batteryStart)
+	})
+
+	t.Run("below threshold, confident refill forecast: both relaxed", func(t *testing.T) {
+		site := newSite(70, 80)
+		res := site.sitePower(state(60, refillsToday), 0, 0)
+		assert.True(t, res.batteryBuffered, "bufferSoc is enabled, forecast confirms refill")
+		assert.True(t, res.batteryStart, "bufferStartSoc is enabled, forecast confirms refill")
+	})
+
+	t.Run("bufferStartSoc disabled: forecast never turns it on", func(t *testing.T) {
+		site := newSite(70, 0)
+		res := site.sitePower(state(60, refillsToday), 0, 0)
+		assert.True(t, res.batteryBuffered)
+		assert.False(t, res.batteryStart, "explicitly disabled (0) must stay off regardless of forecast")
+	})
+
+	t.Run("already above threshold: forecast changes nothing observable", func(t *testing.T) {
+		site := newSite(70, 80)
+		res := site.sitePower(state(90, nil), 0, 0)
+		assert.True(t, res.batteryBuffered)
+		assert.True(t, res.batteryStart)
+	})
 }
 
 func TestGreenShare(t *testing.T) {
