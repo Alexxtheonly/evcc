@@ -616,6 +616,50 @@ func TestSafeCPriority(t *testing.T) {
 	assert.Equal(t, 0, safeCPriority(0, -0.0001), "already 0: stays 0")
 }
 
+// TestTerminalStorageValue pins the two bounds terminalStorageValue is built on: it must
+// never rise high enough to make grid-charging purely for the terminal bonus profitable at
+// the horizon's cheapest price (the hoarding failure mode), and it must never drop below
+// zero (the dumping failure mode a negative-price horizon would otherwise cause).
+func TestTerminalStorageValue(t *testing.T) {
+	cases := []struct {
+		name           string
+		minImportPrice float32
+	}{
+		{"typical positive price", 0.0002},
+		{"very small positive price", 1e-9},
+		{"flat curve", 0.00015},
+		{"zero", 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pa := terminalStorageValue(tc.minImportPrice)
+
+			assert.GreaterOrEqual(t, pa, float32(0), "never negative")
+
+			// arbitrage bound: charging 1 Wh into storage at minImportPrice costs
+			// minImportPrice/eta on the grid side (optimizer.py:623-631); if pa*eta
+			// exceeded minImportPrice, banking that charge purely for the terminal
+			// bonus would be pure profit at the horizon's cheapest slot, and every
+			// other slot is priced at or above minImportPrice so the same bound
+			// covers them too.
+			if tc.minImportPrice > 0 {
+				assert.Less(t, pa*eta, tc.minImportPrice, "must stay below the arbitrage breakeven")
+			}
+		})
+	}
+
+	// negative minimum: without the floor, dividing by eta (< 1) would push the value
+	// further negative than the old minImportPrice*eta formula did, turning stored energy
+	// into more of a liability than before instead of less.
+	assert.Equal(t, float32(0), terminalStorageValue(-0.0002), "negative minimum: floored at zero, not a liability")
+
+	// the new value must never fall below the old minImportPrice*eta*0.99 formula it
+	// replaces - that was the undervaluation this change fixes.
+	old := float32(0.0002) * eta * 0.99
+	assert.Greater(t, terminalStorageValue(0.0002), old, "must value stored energy above the old, undervaluing formula")
+}
+
 func TestBlendMeasured(t *testing.T) {
 	slots := []float64{100, 100, 100, 100, 100, 100}
 	blendMeasured(slots, 200, 4)
