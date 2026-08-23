@@ -1399,6 +1399,45 @@ func TestPersistControlSlotPaybackVetoPreservesSuggestion(t *testing.T) {
 	assert.Nil(t, price, "an unaccepted suggestion carries no price")
 }
 
+// TestPersistControlSlotAdvisoryModeRecordsSuggestion is the advisory-mode
+// counterpart to TestPersistControlSlotPaybackVetoPreservesSuggestion:
+// optimizerAutomatic is left off, so applied_mode is honestly "unknown" -
+// nothing is ever applied - but the vetted suggestion the optimizer derived
+// this run is real and worth recording anyway. Collecting that comparison
+// before automatic mode is ever switched on is the whole point of the
+// ledger: it lets a later decision to enable automatic mode be based on data
+// gathered while advisory, at zero control risk.
+func TestPersistControlSlotAdvisoryModeRecordsSuggestion(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{log: util.NewLogger("foo")}
+	// optimizerAutomatic is left false (the settings cache reloads empty from
+	// the fresh db above) - this is advisory mode
+	require.False(t, site.Automatic())
+
+	site.setOptimizerBatteryMode(optimizerDecision{
+		mode:          api.BatteryCharge,
+		suggestedMode: api.BatteryCharge,
+		price:         0.12,
+	})
+	require.Equal(t, api.BatteryUnknown, site.optimizerBatteryMode, "advisory mode never sets an applyable mode")
+
+	site.controlSlot = site.controlSlot.Add(-tariff.SlotDuration)
+	site.persistControlSlot()
+
+	var appliedMode, suggestedMode string
+	var price *float64
+	require.NoError(t, db.Instance.Raw(
+		"SELECT applied_mode, suggested_mode, price FROM control_slots",
+	).Row().Scan(&appliedMode, &suggestedMode, &price))
+
+	assert.Equal(t, api.BatteryUnknown.String(), appliedMode, "advisory mode never applies anything")
+	assert.Equal(t, api.BatteryCharge.String(), suggestedMode, "the vetted suggestion is recorded despite not being applied")
+	require.NotNil(t, price, "an accepted charge suggestion carries its price even though advisory mode never spent it")
+	assert.InDelta(t, 0.12, *price, 0.001)
+}
+
 // TestPersistOptimizerRunGate exercises the ADR-011 optimizer_runs slot gate.
 // Only the sampled Optimal/Feasible path is deduped to one row per slot, the
 // same partial-boot-slot skip and repeat-tick dedup as persistTariffs -

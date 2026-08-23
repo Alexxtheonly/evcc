@@ -529,7 +529,10 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 // optimizerBatteryModeConfirmDelay apart agree, so a degenerate LP optimum on
 // a flat price plateau cannot flap the battery every cycle. Reverting to
 // Unknown — automatic disabled, no suggestion, or disagreeing batteries — is
-// never delayed.
+// never delayed. Automatic disabled only ever affects the applyable mode:
+// the vetted suggestion behind it is still recorded (control_slots, ADR-011)
+// so the gap between what the optimizer would have done and what was
+// actually applied is auditable from before automatic mode was ever turned on.
 //
 // Must be called at most once per optimizer run (from applyOptimizerResult),
 // not at control-loop cadence: batterySuggestionMode reads the result far
@@ -563,10 +566,14 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 	switch {
 	case !site.Automatic():
 		// automatic mode may have been disabled between deriving and storing
-		// the candidate; re-check the flag inside the critical section
-		site.optimizerChargeVetoed = false
-		site.optimizerVetoReason = vetoReasonNone
-		site.optimizerSuggestedMode = api.BatteryUnknown
+		// the candidate; re-check the flag inside the critical section. Only
+		// the applyable mode is forced to Unknown here - chargeVetoed,
+		// vetoReason and suggestedMode were already set above from d and are
+		// left alone: they are UI/ledger annotation only (see their doc
+		// comments), the vetted candidate was genuinely derived this run
+		// whether or not automatic mode is on to act on it, and
+		// persistControlSlot needs it to compare what the optimizer would
+		// have done against what was actually applied even while advisory.
 		apply(api.BatteryUnknown)
 	case candidate == api.BatteryUnknown:
 		apply(api.BatteryUnknown)
