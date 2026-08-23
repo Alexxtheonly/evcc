@@ -1,8 +1,6 @@
 package core
 
 import (
-	"math"
-
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/types"
 )
@@ -78,7 +76,7 @@ func (lp *Loadpoint) optimizerCharging(s *types.Suggestion, mode api.ChargeMode,
 	// full power is grid-fed by definition and never counts as surplus
 	full := s.Charge >= lp.EffectiveMaxPower()-suggestionThreshold
 
-	if s.Action == actionCharge && !full && math.Abs(s.Grid) <= suggestionThreshold {
+	if surplusCharge(s, lp.EffectiveMaxPower()) {
 		// the charge power matches the forecast surplus, which only holds on average-
 		// the pv loop tracks the measured one, so its timers must keep running
 		if lp.pvTimer.Equal(elapsed) {

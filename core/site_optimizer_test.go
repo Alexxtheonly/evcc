@@ -1073,6 +1073,37 @@ func TestBlendScaleByLead(t *testing.T) {
 	require.Equal(t, []float64{200, 175}, short)
 }
 
+// TestSurplusCharge covers the predicate shared by optimizerCharging (defer to the pv loop)
+// and updatePower's #30541-style gate (add the priority adjustment back): "surplus charge"
+// means an active charge suggestion the site can cover without extra grid import - not a
+// forced full-power charge (always grid-fed by definition), and not a charge suggestion that
+// itself plans to import.
+func TestSurplusCharge(t *testing.T) {
+	const maxPower = 11000.0 // W
+
+	cases := []struct {
+		name string
+		s    *types.Suggestion
+		want bool
+	}{
+		{"nil suggestion: optimizer stale/absent/unsponsored", nil, false},
+		{"stop suggestion", &types.Suggestion{Action: actionStop}, false},
+		{"discharge suggestion", &types.Suggestion{Action: actionDischarge}, false},
+		{"full-power charge: grid-fed by definition, not surplus", &types.Suggestion{Action: actionCharge, Charge: maxPower}, false},
+		{"just under full power, within threshold: still full", &types.Suggestion{Action: actionCharge, Charge: maxPower - suggestionThreshold + 1}, false},
+		{"charge with planned grid import", &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 500}, false},
+		{"charge with planned grid export beyond threshold", &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: -500}, false},
+		{"partial charge, flat grid flow: surplus", &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 0}, true},
+		{"partial charge, grid flow within noise threshold: surplus", &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: suggestionThreshold}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, surplusCharge(tc.s, maxPower))
+		})
+	}
+}
+
 func TestCurrentSlotSuggestion(t *testing.T) {
 	// BYD-sized battery well between its SoC bounds
 	midSocConfig := optimizer.BatteryConfig{SCapacity: 19320, SMin: 966, SMax: 18354, SInitial: 10000}

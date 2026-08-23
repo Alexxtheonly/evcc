@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"slices"
@@ -152,6 +153,20 @@ const (
 // actionDischarge is the battery-to-grid discharge advisory. It has no matching
 // api.BatteryMode, so it always reads as actionable.
 const actionDischarge = "discharge"
+
+// surplusCharge reports whether s is an active recommendation to charge by following pv
+// surplus, as opposed to a forced grid-fed charge (full power, by definition, is always
+// grid-fed - see optimizerCharging) or no charge suggestion at all. s.Grid close to zero
+// means the plan expects the charge to be covered by surplus rather than drawing extra
+// import, the same condition optimizerCharging uses to decide whether to defer to the pv
+// control loop instead of driving the setpoint directly.
+func surplusCharge(s *types.Suggestion, maxPower float64) bool {
+	if s == nil || s.Action != actionCharge {
+		return false
+	}
+	full := s.Charge >= maxPower-suggestionThreshold
+	return !full && math.Abs(s.Grid) <= suggestionThreshold
+}
 
 // evSuggestion notifies when the optimizer's advisory action for a device changes
 const evSuggestion = "suggestion"
