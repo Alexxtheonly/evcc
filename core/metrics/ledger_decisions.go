@@ -26,12 +26,19 @@ import (
 // Coverage), or the site has no battery to simulate against. ADR-011 rule 3: absence
 // is never a sentinel.
 type DecisionRow struct {
-	Ts                time.Time `json:"ts"`
-	AppliedMode       string    `json:"appliedMode"`
-	SuggestedMode     string    `json:"suggestedMode"`
-	VetoReason        string    `json:"vetoReason,omitempty"`
-	HealthOk          bool      `json:"healthOk"`
-	HindsightDeltaEUR *float64  `json:"hindsightDeltaEur,omitempty"`
+	Ts            time.Time `json:"ts"`
+	AppliedMode   string    `json:"appliedMode"`
+	SuggestedMode string    `json:"suggestedMode"`
+	VetoReason    string    `json:"vetoReason,omitempty"`
+	HealthOk      bool      `json:"healthOk"`
+	// ModeChanged carries controlSlot's own flag forward: AppliedMode is a single
+	// point sample taken seconds into the slot, and Phase A's doc comment on that
+	// field says a reader must not assume it held for the whole 15 minutes when this
+	// is true. DecisionDeltas' hindsight replay simulates the FULL slot under
+	// AppliedMode regardless - dropping this flag would let a reader trust that
+	// simulation's precision more than the source data supports.
+	ModeChanged       bool     `json:"modeChanged"`
+	HindsightDeltaEUR *float64 `json:"hindsightDeltaEur,omitempty"`
 }
 
 // DecisionDeltas replays every control_slots row in [from,to). set and phys should
@@ -58,6 +65,7 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 			SuggestedMode: r.SuggestedMode,
 			VetoReason:    r.VetoReason,
 			HealthOk:      r.HealthOk,
+			ModeChanged:   r.ModeChanged,
 		}
 
 		if phys != nil && r.AppliedMode != r.SuggestedMode {

@@ -73,6 +73,28 @@ func TestDecisionDeltasHindsight(t *testing.T) {
 	require.Nil(t, rows[1].HindsightDeltaEUR)
 }
 
+// TestDecisionDeltasCarriesModeChanged covers the Priority-5 finding: AppliedMode is
+// a single point sample taken seconds into the slot (controlSlot's own doc comment),
+// and ModeChanged flags when it's known to not have held for the whole 15 minutes -
+// DecisionDeltas simulates the full slot under AppliedMode regardless, so dropping
+// this flag would understate how much to trust that simulation.
+func TestDecisionDeltasCarriesModeChanged(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 6, 12, 0, 0, 0, loc)
+
+	require.NoError(t, PersistControlSlot(base, batteryModeNormal, batteryModeNormal, "", true, nil))
+	require.NoError(t, MarkControlSlotModeChanged(base))
+
+	set := &ledgerSlotSet{}
+	rows, err := DecisionDeltas(context.Background(), base, base.Add(15*time.Minute), set, nil)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].ModeChanged)
+}
+
 func TestDecisionDeltasWithoutBatteryPhysics(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
