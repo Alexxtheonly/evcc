@@ -53,6 +53,24 @@
 					/>
 				</pattern>
 			</defs>
+			<!-- Drawn BEFORE the parts, not after: an overspend part's rectangle is drawn
+			     backward over ground the cursor already covered (see chainBarLayout's doc
+			     comment), which means its [x0,x1] range can fully overlap the residual's
+			     own [residualX0,1] range - residualX0 IS that part's x0 when it's the last
+			     segment. Found live against this site's real 2026-08-21..22 period (a
+			     genuine Control overspend, -e0.64): with the residual drawn last and
+			     opaque, it painted straight over the red segment AND both hatch overlays,
+			     making the whole overspend invisible - a worse bug than D4's reported
+			     colour-contrast issue, which assumed the segment was at least visible. -->
+			<rect
+				data-testid="savings-ledger-chain-residual"
+				:x="layout.residualX0 * 1000"
+				y="20"
+				:width="Math.max(2, layout.residualWidth * 1000)"
+				height="34"
+				rx="3"
+				class="residual-rect"
+			/>
 			<rect
 				v-for="part in layout.parts"
 				:key="part.key"
@@ -84,15 +102,6 @@
 				:width="segmentWidth(part)"
 				height="34"
 				fill="url(#savingsLedgerChainOverspendHatch)"
-			/>
-			<rect
-				data-testid="savings-ledger-chain-residual"
-				:x="layout.residualX0 * 1000"
-				y="20"
-				:width="Math.max(2, layout.residualWidth * 1000)"
-				height="34"
-				rx="3"
-				class="residual-rect"
 			/>
 			<text x="0" y="70" font-size="11" class="axis-label">
 				{{ fmtMoney(w0, currency, true, true) }}
