@@ -132,6 +132,11 @@ type Site struct {
 	optimizerChargeVetoed            bool                // last run suggested grid charging but a gate declined it
 	optimizerVetoReason              optimizerVetoReason // why the applied mode is not (fully) in effect, for UI annotation
 
+	// optimizerHealth is the last published operational status; see publishOptimizerHealth.
+	optimizerHealthOk      bool                  // whether the optimizer is currently producing results
+	optimizerHealthReason  optimizerHealthReason // why it is not, if it is not
+	optimizerHealthUpdated time.Time             // time of the last completed run attempt, zero if it never ran
+
 	adaptivePlansUpdated time.Time // last adaptive plan learning run, guarded by RWMutex
 
 	optimizerMu      sync.Mutex                     // guards optimizer runs

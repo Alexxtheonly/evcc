@@ -60,6 +60,7 @@ const (
 	OptimizerChargingStrategies = "optimizerChargingStrategies"
 	OptimizerDecision           = "optimizerDecision"    // vetted outcome of the last optimizer run, for UI annotation
 	OptimizerDiagnostics        = "optimizerDiagnostics" // economic benefit and constraint diagnostics of the last optimizer run
+	OptimizerHealth             = "optimizerHealth"      // whether the optimizer is currently producing results, and why not if not
 
 	// battery status
 	Battery     = "battery"

@@ -178,6 +178,8 @@ export interface State {
   optimizerDecision?: OptimizerDecision;
   /** @internal */
   optimizerDiagnostics?: OptimizerDiagnostics;
+  /** @internal */
+  optimizerHealth?: OptimizerHealth;
   /** Running evcc version. */
   version?: string;
   /** Latest available evcc version. */
@@ -1547,6 +1549,28 @@ export interface OptimizerDiagnostics {
   /** Total energy curtailed above the grid export limit across the horizon (Wh). */
   gridExportOvershoot: number;
   limitViolations: OptimizerLimitViolations;
+}
+
+/** Reason the optimizer is not currently producing results. */
+export enum OPTIMIZER_HEALTH_REASON {
+  /** Sponsorship is required to use the optimizer. */
+  NOT_SPONSORED = "notSponsored",
+  /** The experimental or optimizer setting is off. */
+  DISABLED = "disabled",
+  /** No battery, vehicle or loadpoint for it to act on. */
+  NOT_CONFIGURED = "notConfigured",
+  /** Not enough forecast data to plan a horizon. */
+  NO_TARIFF = "noTariff",
+  /** The run itself failed, e.g. the solver rejected the request. */
+  ERROR = "error",
+}
+
+/** Whether the optimizer is currently producing results, independent of what it decided. */
+export interface OptimizerHealth {
+  ok: boolean;
+  reason?: OPTIMIZER_HEALTH_REASON;
+  /** @format date-time */
+  updated?: string;
 }
 
 // Tariff zone configuration

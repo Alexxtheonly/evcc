@@ -368,3 +368,64 @@ func TestUpdateOptimizerLiveRateVetoConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// drainOptimizerHealth collects every optimizerHealth publish currently queued
+// on params, in order.
+func drainOptimizerHealth(params chan util.Param) []optimizerHealthPublish {
+	var res []optimizerHealthPublish
+	for {
+		select {
+		case p := <-params:
+			if p.Key == keys.OptimizerHealth {
+				res = append(res, p.Val.(optimizerHealthPublish))
+			}
+		default:
+			return res
+		}
+	}
+}
+
+// TestPublishOptimizerHealthGateDedupes guards against optimizerUpdateAsync's
+// not-sponsored/disabled early return spamming an unchanged status on every
+// control cycle - the overwhelmingly common case, since most installs never
+// enable the optimizer at all.
+func TestPublishOptimizerHealthGateDedupes(t *testing.T) {
+	params := make(chan util.Param, 64)
+	site := &Site{log: util.NewLogger("foo"), valueChan: params}
+
+	site.publishOptimizerHealthGate(optimizerHealthReasonDisabled)
+	site.publishOptimizerHealthGate(optimizerHealthReasonDisabled)
+	site.publishOptimizerHealthGate(optimizerHealthReasonDisabled)
+
+	got := drainOptimizerHealth(params)
+	require.Len(t, got, 1, "gate must only publish once for an unchanged reason")
+	assert.False(t, got[0].Ok)
+	assert.Equal(t, optimizerHealthReasonDisabled, got[0].Reason)
+	assert.True(t, got[0].Updated.IsZero(), "no run was attempted, so the last-run timestamp stays untouched")
+
+	// a change of reason (e.g. sponsorship also lapsed) publishes again
+	site.publishOptimizerHealthGate(optimizerHealthReasonNotSponsored)
+	got = drainOptimizerHealth(params)
+	require.Len(t, got, 1)
+	assert.Equal(t, optimizerHealthReasonNotSponsored, got[0].Reason)
+}
+
+// TestPublishOptimizerHealthAlwaysAdvances ensures a genuine run outcome is
+// never deduped, even when it repeats the previous one: a consumer relies on
+// Updated advancing to tell a healthy optimizer apart from one that silently
+// stopped running.
+func TestPublishOptimizerHealthAlwaysAdvances(t *testing.T) {
+	params := make(chan util.Param, 64)
+	site := &Site{log: util.NewLogger("foo"), valueChan: params}
+
+	site.publishOptimizerHealth(true, optimizerHealthReasonNone)
+	first := drainOptimizerHealth(params)
+	require.Len(t, first, 1)
+	assert.True(t, first[0].Ok)
+	assert.False(t, first[0].Updated.IsZero())
+
+	site.publishOptimizerHealth(true, optimizerHealthReasonNone)
+	second := drainOptimizerHealth(params)
+	require.Len(t, second, 1, "identical outcome must still be published")
+	assert.False(t, second[0].Updated.Before(first[0].Updated))
+}

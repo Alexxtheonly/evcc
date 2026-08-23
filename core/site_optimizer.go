@@ -564,6 +564,67 @@ func (site *Site) publishOptimizerDecision() {
 	site.publishOptimizerDecisionLocked()
 }
 
+// optimizerHealthReason explains why the optimizer is not currently producing
+// results. It is independent of optimizerVetoReason, which explains why a
+// result it did produce is not (fully) applied.
+type optimizerHealthReason string
+
+const (
+	optimizerHealthReasonNone          optimizerHealthReason = ""
+	optimizerHealthReasonNotSponsored  optimizerHealthReason = "notSponsored"  // sponsorship required to use the optimizer
+	optimizerHealthReasonDisabled      optimizerHealthReason = "disabled"      // experimental or optimizer setting is off
+	optimizerHealthReasonNotConfigured optimizerHealthReason = "notConfigured" // no battery, vehicle or loadpoint for it to act on
+	optimizerHealthReasonNoTariff      optimizerHealthReason = "noTariff"      // not enough forecast data to plan a horizon
+	optimizerHealthReasonError         optimizerHealthReason = "error"         // the run itself failed, e.g. the solver rejected the request
+)
+
+// optimizerHealthPublish is the wire format of the optimizer's operational
+// status - whether it is producing results at all, independent of what it
+// decided. Requested so a strategy relying on the optimizer can detect a
+// silently dead optimizer (e.g. after prices stop arriving) and fall back
+// instead of continuing to act on a stale plan.
+type optimizerHealthPublish struct {
+	Ok      bool                  `json:"ok"`
+	Reason  optimizerHealthReason `json:"reason,omitempty"`
+	Updated time.Time             `json:"updated,omitzero"`
+}
+
+// publishOptimizerHealth publishes the outcome of a completed run attempt -
+// Updated always advances to now. Called from optimizerUpdateAsync's deferred
+// handler for every outcome except errOptimizerNotReady, which leaves the
+// previous status in place for a silent retry on the next cycle.
+func (site *Site) publishOptimizerHealth(ok bool, reason optimizerHealthReason) {
+	site.Lock()
+	site.optimizerHealthOk = ok
+	site.optimizerHealthReason = reason
+	site.optimizerHealthUpdated = time.Now()
+	updated := site.optimizerHealthUpdated
+	site.Unlock()
+
+	site.publish(keys.OptimizerHealth, optimizerHealthPublish{Ok: ok, Reason: reason, Updated: updated})
+}
+
+// publishOptimizerHealthGate publishes why the optimizer isn't even attempting
+// to run (not sponsored, disabled) without touching the last-run timestamp -
+// no run was attempted. These gates are re-checked on every control cycle, so
+// the publish is skipped once the reason stops changing to avoid republishing
+// identical, information-free state continuously for the common case of an
+// optimizer that is simply not in use.
+func (site *Site) publishOptimizerHealthGate(reason optimizerHealthReason) {
+	site.Lock()
+	changed := site.optimizerHealthOk || site.optimizerHealthReason != reason
+	site.optimizerHealthOk = false
+	site.optimizerHealthReason = reason
+	updated := site.optimizerHealthUpdated
+	site.Unlock()
+
+	if !changed {
+		return
+	}
+
+	site.publish(keys.OptimizerHealth, optimizerHealthPublish{Ok: false, Reason: reason, Updated: updated})
+}
+
 // liveRateVetoLocked reports whether rate has moved past the price the active
 // charge decision was based on. Caller must already hold site.RLock or
 // site.Lock. Unlike the fork this ports from, there is no grid-charge-limit
@@ -795,6 +856,15 @@ const slotsPerHour = float64(time.Hour / tariff.SlotDuration)
 // startup); the slot gate is left open so the next cycle retries.
 var errOptimizerNotReady = errors.New("battery measurements not ready")
 
+// errOptimizerNotConfigured means there is no battery, vehicle or loadpoint
+// for the optimizer to act on - a legitimate idle state, not a failure.
+var errOptimizerNotConfigured = errors.New("no batteries configured for optimization")
+
+// errOptimizerNoTariff means too few forecast slots are available to plan a
+// meaningful horizon, typically because a required tariff is missing or its
+// data hasn't arrived yet.
+var errOptimizerNoTariff = errors.New("not enough forecast slots for meaningful optimization")
+
 // optimizerUpdateAsync runs the optimizer. In automatic mode it runs on every
 // loadpoint cycle since the loadpoint gate needs a fresh result, while advisory
 // suggestions only need one run per slot. Pass force to run regardless, e.g.
@@ -802,7 +872,13 @@ var errOptimizerNotReady = errors.New("battery measurements not ready")
 // optimizer is not active or a run is already in progress; the running update
 // reflects the change on its next run.
 func (site *Site) optimizerUpdateAsync(force bool) {
-	if !sponsor.IsAuthorized() || !optimizerEnabled() {
+	if !sponsor.IsAuthorized() {
+		site.publishOptimizerHealthGate(optimizerHealthReasonNotSponsored)
+		return
+	}
+
+	if !optimizerEnabled() {
+		site.publishOptimizerHealthGate(optimizerHealthReasonDisabled)
 		return
 	}
 
@@ -832,11 +908,24 @@ func (site *Site) optimizerUpdateAsync(force bool) {
 
 		site.optimizerUpdated = time.Now()
 
-		if err != nil {
+		switch {
+		case err == nil:
+			site.publishOptimizerHealth(true, optimizerHealthReasonNone)
+		case errors.Is(err, errOptimizerNotConfigured):
+			// stale advice must not linger
+			site.clearSuggestions()
+			site.publishOptimizerHealth(false, optimizerHealthReasonNotConfigured)
+		default:
 			site.log.ERROR.Println("optimizer:", err)
 
 			// stale advice must not linger
 			site.clearSuggestions()
+
+			reason := optimizerHealthReasonError
+			if errors.Is(err, errOptimizerNoTariff) {
+				reason = optimizerHealthReasonNoTariff
+			}
+			site.publishOptimizerHealth(false, reason)
 		}
 	}()
 
@@ -867,9 +956,9 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 
 	if expectedSlots := 8; minLen < expectedSlots {
 		if solarTariff != nil {
-			return req, details, fmt.Errorf("not enough forecast slots for meaningful optimization: %d < %d (grid=%d, feedIn=%d, solar=%d)", minLen, expectedSlots, len(grid), len(feedIn), len(solar))
+			return req, details, fmt.Errorf("%w: %d < %d (grid=%d, feedIn=%d, solar=%d)", errOptimizerNoTariff, minLen, expectedSlots, len(grid), len(feedIn), len(solar))
 		}
-		return req, details, fmt.Errorf("not enough forecast slots for meaningful optimization: %d < %d (grid=%d, feedIn=%d)", minLen, expectedSlots, len(grid), len(feedIn))
+		return req, details, fmt.Errorf("%w: %d < %d (grid=%d, feedIn=%d)", errOptimizerNoTariff, minLen, expectedSlots, len(grid), len(feedIn))
 	}
 
 	now := time.Now()
@@ -1041,7 +1130,7 @@ func (site *Site) optimizerUpdate(battery []types.Measurement) error {
 		if len(site.batteryMeters) > 0 {
 			return errOptimizerNotReady
 		}
-		return nil // nothing to optimize
+		return errOptimizerNotConfigured
 	}
 
 	// create the api client once and reuse it across runs to keep connections alive
