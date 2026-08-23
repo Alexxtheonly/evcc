@@ -242,3 +242,47 @@ func TestChainNotesFeedInZeroExplained(t *testing.T) {
 	})
 	require.True(t, found, "chain.Notes must explain that feed-in is configured at EUR 0 for this period, not silently zeroed")
 }
+
+// TestChainPublishesMeterResidual covers A1: R = grid_import - grid_export + pv +
+// battery_discharge - battery_charge - home - loadpoint is NOT an identity on real
+// data, even though HomeKWh is itself defined as this same residual at the power
+// level - grid/home are integrated from instantaneous power while PV/battery/
+// loadpoint come from device-register deltas on their own polling cadence, booked
+// into whichever slot the read landed in. This fixture deliberately seeds one such
+// mismatch (PV/loadpoint readings that don't quite balance against grid/home) and
+// asserts the residual is computed and published, not silently absorbed.
+func TestChainPublishesMeterResidual(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	pv := mustCreateEntity(t, PV, "pv1")
+	lp := mustCreateEntity(t, Loadpoint, "lp-1")
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 10, 12, 0, 0, 0, loc)
+
+	// R = grid_import(1.0) - grid_export(0) + pv(0.6) + 0 - 0 - home(0.5) - lp(1.0)
+	//   = 1.0 + 0.6 - 0.5 - 1.0 = 0.1kWh - a PV read that landed a touch late/early
+	// relative to the grid/home slot boundary, exactly the class this diagnostic
+	// exists to surface.
+	require.NoError(t, persist(grid, base, 1.0, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 0.5, 0, nil, false, false))
+	require.NoError(t, persist(pv, base, 0.6, 0, nil, false, false))
+	require.NoError(t, persist(lp, base, 1.0, 0, nil, false, false))
+	g, f := 0.30, 0.05
+	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
+
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, chain.MeterResidual.Slots)
+	require.InDelta(t, 0.1, chain.MeterResidual.SumKWh, 1e-9)
+	require.InDelta(t, 0.1, chain.MeterResidual.AbsSumKWh, 1e-9)
+
+	found := slices.ContainsFunc(chain.Notes, func(n string) bool {
+		return strings.Contains(n, "meterResidual")
+	})
+	require.True(t, found, "chain.Notes must point a reader at meterResidual")
+}

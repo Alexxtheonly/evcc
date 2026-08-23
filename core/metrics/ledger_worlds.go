@@ -625,6 +625,10 @@ type Chain struct {
 	Coverage       Coverage        `json:"coverage"`
 	BatteryPhysics *batteryPhysics `json:"batteryPhysics,omitempty"`
 	Control        *ControlSplit   `json:"control,omitempty"`
+	// MeterResidual is the A1 diagnostic (ledger_slots.go): the noise floor under
+	// every euro figure above, published rather than left implicit - see its own doc
+	// comment for why it is not expected to be zero.
+	MeterResidual MeterResidual `json:"meterResidual"`
 	// Notes are caveats ADR-011 rule 7 says must be labelled in the payload, not left
 	// to a code comment or an unwritten UI convention - which settlement figures a
 	// PeriodAverage price actually reflects, what Routing/Timing do and don't include,
@@ -671,6 +675,10 @@ const noteEVTimingUnattributed = "EV charge timing is not attributed to any meas
 // every export line in this payload is then EUR 0.00 by construction, indistinguishable
 // from a computation that silently lost every export unless this is said plainly.
 const noteFeedInZero = "feed-in price is EUR 0.00 for every slot in this period, so every export credit in this payload is EUR 0.00 - that reflects the configured/observed feed-in rate, not a computation error"
+
+// noteMeterResidual, always present: points a reader at meterResidual rather than
+// leaving it to be found only by knowing the field exists.
+const noteMeterResidual = "meterResidual (kWh, not EUR) is the measured gap between this period's sources and sinks - see its own doc comment for why it is not expected to be zero; treat it as the noise floor under every euro figure above"
 
 // allFeedInZero reports whether every slot's feed-in price is exactly 0 - see
 // noteFeedInZero.
@@ -764,7 +772,7 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	}
 
 	coverage := set.coverage()
-	notes := []string{noteInvoiceComparability}
+	notes := []string{noteInvoiceComparability, noteMeterResidual}
 	if control != nil {
 		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement, noteSlotFlowDeltaIsSlotLocal, phys.rateCeilingNote(), phys.floorNote())
 	}
@@ -784,6 +792,7 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 		Coverage:       coverage,
 		BatteryPhysics: phys,
 		Control:        control,
+		MeterResidual:  computeMeterResidual(set.Slots),
 		Notes:          notes,
 	}, nil
 }

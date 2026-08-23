@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -100,6 +101,42 @@ type slotData struct {
 // EV kWh. See ledger_worlds.go's doc comment for the worked-example consequence.
 func (s slotData) modelledLoadKWh() float64 {
 	return s.HomeKWh + s.LoadpointKWh
+}
+
+// MeterResidual is the A1 diagnostic: how far each valid slot's measured sources
+// (grid import, PV, battery discharge) fall short of or exceed its measured sinks
+// (grid export, home, loadpoint, battery charge). It is NOT an identity that must
+// equal zero, even though HomeKWh is itself defined as this same residual at the
+// power level (core/site.go's updatePower) - grid and home are both integrated from
+// instantaneous power in the same accumulator pass, while PV, battery and loadpoint
+// energy come from device-register deltas, each on their own polling cadence, booked
+// into whichever 15-minute slot the read happened to land in. A read a few seconds
+// either side of a slot boundary shows up here even though nothing is actually wrong.
+// This residual is the noise floor under every euro figure in this payload - it does
+// not itself carry a price (that's why it's kWh, not EUR), but a large one means the
+// other figures shouldn't be trusted to a precision finer than this.
+type MeterResidual struct {
+	// SumKWh is Σ R over every valid slot in the period - the net drift, which can
+	// partially cancel across slots.
+	SumKWh float64 `json:"sumKWh"`
+	// AbsSumKWh is Σ |R| - the total measurement noise, uncancelled.
+	AbsSumKWh float64 `json:"absSumKWh"`
+	Slots     int     `json:"slots"`
+}
+
+// computeMeterResidual computes MeterResidual over an already-built, already-filtered
+// slot set (see buildLedgerSlots) - every slot here already has a genuine, non-
+// excluded reading for every meter the site has configured, so R = 0 - 0 for a group
+// the site doesn't have (correctly, not fabricated) and a real per-slot figure for
+// every group it does.
+func computeMeterResidual(slots []slotData) MeterResidual {
+	var sum, abssum float64
+	for _, s := range slots {
+		r := s.GridImportKWh - s.GridExportKWh + s.PVKWh + s.BatteryDischargeKWh - s.BatteryChargeKWh - s.HomeKWh - s.LoadpointKWh
+		sum += r
+		abssum += math.Abs(r)
+	}
+	return MeterResidual{SumKWh: sum, AbsSumKWh: abssum, Slots: len(slots)}
 }
 
 // Coverage reports what fraction of a period's slots the ledger could actually
