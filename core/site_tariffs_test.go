@@ -2,11 +2,13 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/tariff"
+	"github.com/evcc-io/evcc/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -137,4 +139,72 @@ func TestPercentileOf(t *testing.T) {
 		p90, _ := percentileOf(ratios, 0.9, solarScaleMinSamples)
 		assert.Less(t, p50, p90)
 	})
+}
+
+// TestSolarScaleAt covers the interpolation solarScaleAt builds over
+// querySolarScaleByLead's per-lead-time buckets: the case this exists for
+// (§29) is a slot far in the future getting corrected with far-future bias
+// instead of the near-zero-lead nowcast every slot used to share.
+func TestSolarScaleAt(t *testing.T) {
+	site := &Site{log: util.NewLogger("foo")}
+
+	t.Run("no lead-time history falls back to flat nowcast, unchanged from before this existed", func(t *testing.T) {
+		site.solarScaleByLeadCached = func() (map[int]float64, error) { return nil, nil }
+
+		scaleAt := site.solarScaleAt(0.9)
+		assert.Equal(t, 0.9, scaleAt(0))
+		assert.Equal(t, 0.9, scaleAt(6*time.Hour))
+		assert.Equal(t, 0.9, scaleAt(48*time.Hour))
+	})
+
+	t.Run("interpolates between nowcast and archived lead buckets", func(t *testing.T) {
+		site.solarScaleByLeadCached = func() (map[int]float64, error) {
+			return map[int]float64{
+				int(time.Hour.Minutes()):      0.8,
+				int(24 * time.Hour.Minutes()): 0.6,
+			}, nil
+		}
+
+		scaleAt := site.solarScaleAt(1.0)
+		assert.Equal(t, 1.0, scaleAt(0), "the slot starting now uses the nowcast anchor")
+		assert.InDelta(t, 0.9, scaleAt(30*time.Minute), 0.001, "halfway between the nowcast and 1h anchors")
+		assert.InDelta(t, 0.8, scaleAt(time.Hour), 0.001)
+		assert.InDelta(t, 0.6, scaleAt(24*time.Hour), 0.001)
+		assert.InDelta(t, 0.6, scaleAt(48*time.Hour), 0.001, "beyond the last anchor clamps to it rather than extrapolating")
+	})
+
+	t.Run("a missing bucket is skipped, not treated as zero", func(t *testing.T) {
+		// only the 24h bucket has enough history; 1h and 6h are absent
+		site.solarScaleByLeadCached = func() (map[int]float64, error) {
+			return map[int]float64{int(24 * time.Hour.Minutes()): 0.5}, nil
+		}
+
+		scaleAt := site.solarScaleAt(1.0)
+		assert.InDelta(t, 0.75, scaleAt(12*time.Hour), 0.001, "interpolates straight from lead=0 to the 24h anchor")
+	})
+
+	t.Run("a query error falls back to the flat nowcast instead of failing the run", func(t *testing.T) {
+		site.solarScaleByLeadCached = func() (map[int]float64, error) { return nil, errors.New("boom") }
+
+		scaleAt := site.solarScaleAt(0.7)
+		assert.Equal(t, 0.7, scaleAt(12*time.Hour))
+	})
+}
+
+func TestScaleAndPruneByLead(t *testing.T) {
+	now := time.Now()
+	rr := api.Rates{
+		{Start: now, Value: 10},
+		{Start: now.Add(time.Hour), Value: 10},
+		{Start: now.Add(2 * time.Hour), Value: 10},
+	}
+
+	// scale halves per hour of lead, so each successive slot gets a smaller share
+	scaleAt := func(lead time.Duration) float64 { return 1 - lead.Seconds()/(2*time.Hour).Seconds()*0.5 }
+
+	got := scaleAndPruneByLead(rr, now, scaleAt, 3)
+	require.Len(t, got, 3)
+	assert.InDelta(t, 10, got[0], 0.001)
+	assert.InDelta(t, 7.5, got[1], 0.001)
+	assert.InDelta(t, 5, got[2], 0.001)
 }

@@ -9,12 +9,12 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// forecastLeadTimes are the offsets ahead of a forecasted slot's start that
+// ForecastLeadTimes are the offsets ahead of a forecasted slot's start that
 // ArchiveForecastSample samples: an hour out (imminent charge/discharge
 // decisions), six hours (most of a day-ahead plan) and a full day (the far end
 // of the horizon most slots spend most of their life in). Forecast error is not
 // uniform across these - a spread gives later analysis something to compare.
-var forecastLeadTimes = []time.Duration{time.Hour, 6 * time.Hour, 24 * time.Hour}
+var ForecastLeadTimes = []time.Duration{time.Hour, 6 * time.Hour, 24 * time.Hour}
 
 // forecastSample is one archived solar forecast reading: what the forecast held
 // for the slot starting at Slot, sampled roughly LeadMinutes before that slot
@@ -37,7 +37,7 @@ func (forecastSample) TableName() string {
 // entry point, not in its own init/db.Register - a test that only calls
 // SetupSchema must still get this table.
 
-// ArchiveForecastSample snapshots, for each of forecastLeadTimes, the forecast
+// ArchiveForecastSample snapshots, for each of ForecastLeadTimes, the forecast
 // energy of the slot that is currently that far ahead of now. energyAt is called
 // with the target slot's [from,to) bounds and must return the forecast energy in
 // Wh (mirroring solarEnergy's contract) plus ok=false when the target slot lies
@@ -65,7 +65,7 @@ func (forecastSample) TableName() string {
 func ArchiveForecastSample(now time.Time, energyAt func(from, to time.Time) (float64, bool)) error {
 	var errs error
 
-	for _, lead := range forecastLeadTimes {
+	for _, lead := range ForecastLeadTimes {
 		target := now.Add(lead).Truncate(tariff.SlotDuration)
 
 		energy, ok := energyAt(target, target.Add(tariff.SlotDuration))
@@ -85,4 +85,33 @@ func ArchiveForecastSample(now time.Time, energyAt func(from, to time.Time) (flo
 	}
 
 	return errs
+}
+
+// LeadTimeSample pairs one archived forecast reading with the actual PV energy
+// measured for the same slot, for a per-lead-time forecast bias calculation.
+type LeadTimeSample struct {
+	LeadMinutes int
+	Forecast    float64 // archived forecast energy for the slot, kWh
+	Actual      float64 // measured PV energy for the same slot, kWh
+}
+
+// QueryLeadTimeSamples joins forecast_samples against the PV meters' own slot
+// energy for slots from "from" onward. The join is an inner join on purpose: a
+// forecast_samples row for a slot that has not been measured yet (or never
+// will be, e.g. no PV configured) is silently skipped rather than treated as
+// a zero actual, which would bias every lead-time bucket toward "forecast
+// always over-predicts". Multiple PV meters are summed per slot, matching how
+// querySolarScale compares total PV against total forecast.
+func QueryLeadTimeSamples(from time.Time) ([]LeadTimeSample, error) {
+	var res []LeadTimeSample
+
+	err := db.Instance.Table("forecast_samples fs").
+		Select(`fs.lead_minutes AS lead_minutes, fs.energy AS forecast, SUM(m.energy) AS actual`).
+		Joins(`JOIN meters m ON m.ts = fs.slot`).
+		Joins(`JOIN entities e ON e.id = m.meter AND e."group" = ?`, PV).
+		Where("fs.slot >= ?", from.Unix()).
+		Group("fs.slot, fs.lead_minutes, fs.energy").
+		Scan(&res).Error
+
+	return res, err
 }

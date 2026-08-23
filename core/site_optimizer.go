@@ -1058,7 +1058,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		}
 
 		scale := site.effectiveSolarScale()
-		ftSlots := scaleAndPrune(solarEnergy, scale, minLen)
+		ftSlots := scaleAndPruneByLead(solarEnergy, now, site.effectiveSolarScaleAt(scale), minLen)
 
 		// decay the scale derived from measured vs forecasted energy of the last completed slot
 		if pv, fcst := site.measuredSlotEnergy(site.Meters.PVMetersRef...), site.measuredSlotEnergy(metrics.Forecast)*scale; pv > 0 && fcst > 0 {
@@ -2095,6 +2095,23 @@ func scaleAndPrune(rates api.Rates, scale float64, maxLen int) []float32 {
 
 	for _, slot := range rates {
 		res = append(res, float32(slot.Value*scale))
+		if len(res) >= maxLen {
+			break
+		}
+	}
+
+	return res
+}
+
+// scaleAndPruneByLead is scaleAndPrune's lead-time-aware counterpart: instead
+// of one flat scale for the whole horizon, scaleAt is evaluated per slot with
+// that slot's distance from now, so a 24h-ahead slot is corrected with 24h-ahead
+// bias and a slot starting now with nowcast bias (see solarScaleAt).
+func scaleAndPruneByLead(rates api.Rates, now time.Time, scaleAt func(lead time.Duration) float64, maxLen int) []float32 {
+	res := make([]float32, 0, maxLen)
+
+	for _, slot := range rates {
+		res = append(res, float32(slot.Value*scaleAt(slot.Start.Sub(now))))
 		if len(res) >= maxLen {
 			break
 		}

@@ -283,6 +283,18 @@ func (site *Site) effectiveSolarScale() float64 {
 	return site.solarScale()
 }
 
+// effectiveSolarScaleAt returns a function giving the solar forecast scale to
+// apply to a slot a given duration ahead of now, honoring GetSolarAdjusted():
+// disabled entirely returns a flat scale of 1 for every lead, matching
+// effectiveSolarScale. nowcast is the already-computed effectiveSolarScale()
+// result, reused as the lead=0 anchor instead of recomputing it.
+func (site *Site) effectiveSolarScaleAt(nowcast float64) func(lead time.Duration) float64 {
+	if !site.GetSolarAdjusted() {
+		return func(time.Duration) float64 { return 1 }
+	}
+	return site.solarScaleAt(nowcast)
+}
+
 const (
 	solarScaleWindow     = 30  // trailing window of days to consider
 	solarScaleMinSamples = 14  // minimum daily ratios before applying a scale
@@ -353,6 +365,96 @@ func (site *Site) querySolarScale(bod time.Time) (float64, error) {
 	}
 	site.log.DEBUG.Printf("solar scale P%.0f over %d days = %.3f", solarScalePercentile*100, len(ratios), scale)
 	return scale, nil
+}
+
+// leadTimeScaleWindow is the trailing history window for the per-lead-time solar
+// scale. Shorter than solarScaleWindow: forecast_samples accrues roughly one row
+// per 15-minute slot per lead time (see metrics.ArchiveForecastSample), so even a
+// couple of weeks gives far more samples than the once-a-day nowcast ratio.
+//
+// leadTimeScaleMinSamples is correspondingly higher than solarScaleMinSamples -
+// slot-level noise (passing clouds, a single misread) needs more samples to
+// average out than day-level noise does.
+const (
+	leadTimeScaleWindow     = 14
+	leadTimeScaleMinSamples = 50
+)
+
+// querySolarScaleByLead computes a solar forecast scale per archived lead time
+// (metrics.ForecastLeadTimes): the same percentile-of-ratio approach as
+// querySolarScale, but keyed by how far ahead of the slot the forecast was read
+// instead of collapsing every lead time into the near-zero-lead nowcast. A lead
+// time with too little history is simply absent from the result, so callers can
+// fall back to the nowcast scale for that range instead of trusting a percentile
+// computed from noise.
+func (site *Site) querySolarScaleByLead() (map[int]float64, error) {
+	from := time.Now().AddDate(0, 0, -leadTimeScaleWindow)
+
+	rows, err := metrics.QueryLeadTimeSamples(from)
+	if err != nil {
+		return nil, err
+	}
+
+	ratios := make(map[int][]float64)
+	for _, r := range rows {
+		// same fault-vs-bias reasoning as querySolarScale: a near-zero actual
+		// against a healthy forecast (or vice versa) is noise or a metering
+		// fault, not a bias to project forward
+		if r.Forecast > solarScaleMinEnergy && r.Actual > solarScaleMinEnergy {
+			ratios[r.LeadMinutes] = append(ratios[r.LeadMinutes], r.Actual/r.Forecast)
+		}
+	}
+
+	res := make(map[int]float64, len(ratios))
+	for lead, rr := range ratios {
+		if v, ok := percentileOf(rr, solarScalePercentile, leadTimeScaleMinSamples); ok {
+			res[lead] = v
+			site.log.DEBUG.Printf("solar scale P%.0f at lead %dmin over %d samples = %.3f", solarScalePercentile*100, lead, len(rr), v)
+		}
+	}
+
+	return res, nil
+}
+
+// solarScaleAt returns a function giving the solar forecast scale to apply to a
+// slot a given duration ahead of now. It is anchored at lead=0 with nowcast (the
+// existing querySolarScale result, unaffected by this), plus any
+// querySolarScaleByLead buckets that have enough history, linearly interpolated
+// between neighboring anchors and clamped to the nearest anchor beyond the ends.
+// With no per-lead history at all, lead=0 is the only anchor and every lead
+// resolves to nowcast - identical to the flat scale used before this existed.
+func (site *Site) solarScaleAt(nowcast float64) func(lead time.Duration) float64 {
+	byLead, err := site.solarScaleByLeadCached()
+	if err != nil {
+		site.log.ERROR.Printf("solar scale by lead time: %v, falling back to nowcast scale", err)
+		byLead = nil
+	}
+
+	type anchor struct {
+		lead  time.Duration
+		scale float64
+	}
+
+	anchors := []anchor{{0, nowcast}}
+	for _, lead := range metrics.ForecastLeadTimes {
+		if v, ok := byLead[int(lead.Minutes())]; ok {
+			anchors = append(anchors, anchor{lead, v})
+		}
+	}
+
+	return func(lead time.Duration) float64 {
+		if lead <= anchors[0].lead {
+			return anchors[0].scale
+		}
+		for i := 1; i < len(anchors); i++ {
+			if lead <= anchors[i].lead {
+				prev, next := anchors[i-1], anchors[i]
+				w := float64(lead-prev.lead) / float64(next.lead-prev.lead)
+				return prev.scale + w*(next.scale-prev.scale)
+			}
+		}
+		return anchors[len(anchors)-1].scale
+	}
 }
 
 // percentileOf returns the p-th percentile (0..1) of values by nearest-rank on the

@@ -30,9 +30,9 @@ func TestArchiveForecastSample(t *testing.T) {
 
 	var samples []forecastSample
 	require.NoError(t, db.Instance.Order("lead_minutes").Find(&samples).Error)
-	require.Len(t, samples, len(forecastLeadTimes), "one row per lead time")
+	require.Len(t, samples, len(ForecastLeadTimes), "one row per lead time")
 
-	for i, lead := range forecastLeadTimes {
+	for i, lead := range ForecastLeadTimes {
 		want := now.Add(lead).Truncate(15 * time.Minute)
 		s := samples[i]
 		require.Equal(t, int(lead.Minutes()), s.LeadMinutes)
@@ -49,13 +49,53 @@ func TestArchiveForecastSample(t *testing.T) {
 
 	var count int64
 	require.NoError(t, db.Instance.Model(new(forecastSample)).Count(&count).Error)
-	require.Equal(t, int64(len(forecastLeadTimes)), count, "an overlapping call for the same now must not duplicate rows")
+	require.Equal(t, int64(len(ForecastLeadTimes)), count, "an overlapping call for the same now must not duplicate rows")
 
 	require.NoError(t, db.Instance.Order("lead_minutes").Find(&samples).Error)
-	for i, lead := range forecastLeadTimes {
+	for i, lead := range ForecastLeadTimes {
 		want := now.Add(lead).Truncate(15 * time.Minute)
 		require.InDelta(t, float64(want.Unix())/1e3, samples[i].Energy, 1e-9, "first observation must not be overwritten")
 	}
+}
+
+// TestQueryLeadTimeSamples verifies the forecast_samples/meters join: a slot with a
+// matching PV reading comes back paired with its lead time, a slot with none (not
+// measured yet) is silently dropped rather than surfacing as a zero actual, and
+// multiple PV meters for the same slot are summed.
+func TestQueryLeadTimeSamples(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	pv1, err := createEntity(PV, "pv1", "")
+	require.NoError(t, err)
+	pv2, err := createEntity(PV, "pv2", "")
+	require.NoError(t, err)
+
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC).Truncate(15 * time.Minute)
+	measuredSlot := base
+	unmeasuredSlot := base.Add(15 * time.Minute)
+
+	require.NoError(t, db.Instance.Create(&forecastSample{Slot: measuredSlot.Unix(), LeadMinutes: 60, Energy: 2.0}).Error)
+	require.NoError(t, db.Instance.Create(&forecastSample{Slot: measuredSlot.Unix(), LeadMinutes: 1440, Energy: 1.5}).Error)
+	require.NoError(t, db.Instance.Create(&forecastSample{Slot: unmeasuredSlot.Unix(), LeadMinutes: 60, Energy: 3.0}).Error)
+
+	require.NoError(t, db.Instance.Create(&meter{Meter: pv1.Id, Timestamp: measuredSlot.Unix(), Energy: 1.2}).Error)
+	require.NoError(t, db.Instance.Create(&meter{Meter: pv2.Id, Timestamp: measuredSlot.Unix(), Energy: 0.6}).Error)
+	// unmeasuredSlot deliberately has no meter row
+
+	rows, err := QueryLeadTimeSamples(base)
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "only the measured slot's two lead-time rows, the unmeasured slot is dropped")
+
+	byLead := make(map[int]LeadTimeSample, len(rows))
+	for _, r := range rows {
+		byLead[r.LeadMinutes] = r
+	}
+
+	require.InDelta(t, 2.0, byLead[60].Forecast, 1e-9)
+	require.InDelta(t, 1.8, byLead[60].Actual, 1e-9, "both PV meters summed")
+	require.InDelta(t, 1.5, byLead[1440].Forecast, 1e-9)
+	require.InDelta(t, 1.8, byLead[1440].Actual, 1e-9)
 }
 
 // TestArchiveForecastSampleOutsideHorizon verifies that a lead time whose target
