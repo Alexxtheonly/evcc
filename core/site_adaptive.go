@@ -68,8 +68,18 @@ func (site *Site) updateAdaptivePlans() {
 func (site *Site) updateAdaptivePlan(v vehicle.API, sessions session.Sessions) {
 	plans := session.LearnRepeatingPlans(sessions, time.Now())
 
-	current, _ := v.GetAdaptivePlans()
-	if len(plans) == 0 && len(current) == 0 || reflect.DeepEqual(plans, current) {
+	current, updated := v.GetAdaptivePlans()
+	// SetAdaptivePlans is the only place that stamps Updated, and
+	// GetEffectiveRepeatingPlans distrusts a stored plan once it is older than
+	// vehicle.AdaptivePlansValidity - so a stable, still-correct plan that keeps
+	// re-learning the same value would never get re-stamped and would silently go
+	// stale after that window, exactly the repeating case this feature targets
+	// (same fix as updateExpectedArrival below). Forcing a re-write once the stored
+	// copy is comfortably past half that window keeps the original goal (skip
+	// writes/publishes for no reason) while guaranteeing it never actually expires
+	// out from under a still-valid plan.
+	unchanged := len(plans) == 0 && len(current) == 0 || reflect.DeepEqual(plans, current)
+	if unchanged && time.Since(updated) < vehicle.AdaptivePlansValidity/2 {
 		return
 	}
 
