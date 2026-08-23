@@ -1203,8 +1203,12 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 			Full: matchSoc(batRes.StateOfCharge, func(soc float32) bool {
 				return soc >= batReq.SMax
 			}),
+			// empty means the battery is actually drained, not merely at its configured
+			// minSoc floor - SMin is a soft target the solver can plan below (see
+			// site_optimizer.go's loadpointRequest), so a vehicle sitting under its minSoc
+			// while plugged in and not yet charged back up is not "empty"
 			Empty: matchSoc(batRes.StateOfCharge, func(soc float32) bool {
-				return soc <= batReq.SMin
+				return soc <= 0
 			}),
 		})
 

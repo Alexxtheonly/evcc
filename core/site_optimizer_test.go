@@ -828,3 +828,51 @@ func TestNewOptimizerDiagnosticsPublish(t *testing.T) {
 	assert.False(t, empty.LimitViolations.GridImportLimitExceeded)
 	assert.False(t, empty.LimitViolations.GridExportLimitHit)
 }
+
+// TestApplyOptimizerResultEmptyMeansActuallyEmpty guards the evopt-batteries "empty"
+// diagnostic: it must mean the battery is actually drained (soc reaches 0), not merely at
+// its configured SMin floor. SMin is a soft target the solver can plan below (see
+// loadpointRequest, 587a3bdc6) - a vehicle sitting under its minSoc while plugged in and not
+// yet charged back up is not "empty", and reporting it as such is misleading regardless of
+// SMin being a real, nonzero floor (as configured here).
+func TestApplyOptimizerResultEmptyMeansActuallyEmpty(t *testing.T) {
+	params := make(chan util.Param, 64)
+	site := &Site{log: util.NewLogger("foo"), valueChan: params}
+
+	req := optimizer.OptimizationInput{
+		TimeSeries: optimizer.TimeSeries{Dt: []int{900}},
+		Batteries:  []optimizer.BatteryConfig{{SMin: 15000, SMax: 50000}},
+	}
+	res := optimizer.OptimizationResult{
+		// stays under SMin (15000) throughout but never actually reaches 0
+		Batteries: []optimizer.BatteryResult{{StateOfCharge: []float32{10000, 5000, 2000}}},
+	}
+	details := []batteryDetail{{}}
+
+	drainBatteries := func() []batteryResult {
+		for {
+			select {
+			case p := <-params:
+				if p.Key == "evopt-batteries" {
+					return p.Val.([]batteryResult)
+				}
+			default:
+				return nil
+			}
+		}
+	}
+
+	site.applyOptimizerResult(req, details, res)
+
+	got := drainBatteries()
+	require.Len(t, got, 1)
+	assert.True(t, got[0].Empty.IsZero(), "must not report empty just for being under SMin")
+
+	// now genuinely empty from the first slot: below SMin AND at 0
+	res.Batteries[0].StateOfCharge = []float32{0, 0, 0}
+	site.applyOptimizerResult(req, details, res)
+
+	got = drainBatteries()
+	require.Len(t, got, 1)
+	assert.False(t, got[0].Empty.IsZero(), "a soc of 0 must be reported empty")
+}
