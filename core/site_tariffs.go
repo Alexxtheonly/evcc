@@ -217,8 +217,13 @@ func (site *Site) archiveForecastSlot(solar api.Rates) {
 		return
 	}
 
-	if err := metrics.ArchiveForecastSample(slot, func(from, to time.Time) float64 {
-		return solarEnergy(solar, from, to)
+	if err := metrics.ArchiveForecastSample(slot, func(from, to time.Time) (float64, bool) {
+		// target slot outside the forecast's own horizon: solarEnergy would return 0 for
+		// "no data" indistinguishably from a real zero, so report not-ok instead
+		if len(solar) == 0 || from.Before(solar[0].Start) || to.After(solar[len(solar)-1].End) {
+			return 0, false
+		}
+		return solarEnergy(solar, from, to), true
 	}); err != nil {
 		site.log.ERROR.Printf("archive solar forecast: %v", err)
 	}

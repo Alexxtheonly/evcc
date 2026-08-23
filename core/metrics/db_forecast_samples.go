@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"errors"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -38,9 +39,15 @@ func (forecastSample) TableName() string {
 
 // ArchiveForecastSample snapshots, for each of forecastLeadTimes, the forecast
 // energy of the slot that is currently that far ahead of now. energyAt is called
-// with the target slot's [from,to) bounds and must return Wh, mirroring
-// solarEnergy's contract; the result is archived in kWh like the rest of the
-// schema.
+// with the target slot's [from,to) bounds and must return the forecast energy in
+// Wh (mirroring solarEnergy's contract) plus ok=false when the target slot lies
+// outside the forecast horizon entirely - a provider simply has no opinion about
+// it yet, which is not the same thing as it having forecast zero production.
+// Archiving that "no data" case as an Energy of 0 would make it indistinguishable
+// from a real overnight zero, so those lead times are skipped for this tick: the
+// row is written later, once its target slot actually falls inside the horizon,
+// or never if it never does. The result, when ok, is archived in kWh like the
+// rest of the schema.
 //
 // Callers are expected to throttle to once per 15min slot (as persistTariffs
 // does for tariff values) - at that cadence, a fixed lead time's target slot
@@ -48,20 +55,34 @@ func (forecastSample) TableName() string {
 // at most once over the process's lifetime and the table grows by a small,
 // bounded number of rows per slot rather than per update cycle. OnConflict is a
 // safety net for an overlapping call after a restart, not a refinement path.
-func ArchiveForecastSample(now time.Time, energyAt func(from, to time.Time) float64) error {
+//
+// A write failure for one lead time does not abort the remaining lead times:
+// each (slot, lead) pair only ever gets one chance at being written (DoNothing
+// means a later call for the same pair is a no-op, not a retry), so returning
+// early on the first error would permanently drop coverage for every later,
+// unrelated lead time in the same call. Errors are joined and returned together
+// after all lead times have been attempted.
+func ArchiveForecastSample(now time.Time, energyAt func(from, to time.Time) (float64, bool)) error {
+	var errs error
+
 	for _, lead := range forecastLeadTimes {
 		target := now.Add(lead).Truncate(tariff.SlotDuration)
+
+		energy, ok := energyAt(target, target.Add(tariff.SlotDuration))
+		if !ok {
+			continue
+		}
 
 		sample := forecastSample{
 			Slot:        target.Unix(),
 			LeadMinutes: int(lead.Minutes()),
-			Energy:      energyAt(target, target.Add(tariff.SlotDuration)) / 1e3, // Wh -> kWh
+			Energy:      energy / 1e3, // Wh -> kWh
 		}
 
 		if err := db.Instance.Clauses(clause.OnConflict{DoNothing: true}).Create(&sample).Error; err != nil {
-			return err
+			errs = errors.Join(errs, err)
 		}
 	}
 
-	return nil
+	return errs
 }
