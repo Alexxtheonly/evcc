@@ -442,11 +442,14 @@ func (s *HTTPd) RegisterSystemHandler(site *core.Site, pub publisher, cache *uti
 		api.Use(ensureDbAuth(auth))
 
 		routes := map[string]route{
-			"backup":        {"GET", "/backup", getBackup()},
-			"restore":       {"POST", "/restore", restoreDatabase(shutdown)},
-			"reset":         {"POST", "/reset", resetDatabase(shutdown)},
-			"deleteenergy":  {"DELETE", "/metrics/energy", deleteEnergyHandler},
-			"deletetariffs": {"DELETE", "/metrics/tariffs", deleteTariffsHandler},
+			"backup":                {"GET", "/backup", getBackup()},
+			"restore":               {"POST", "/restore", restoreDatabase(shutdown)},
+			"reset":                 {"POST", "/reset", resetDatabase(shutdown)},
+			"deleteenergy":          {"DELETE", "/metrics/energy", deleteEnergyHandler},
+			"deletetariffs":         {"DELETE", "/metrics/tariffs", deleteTariffsHandler},
+			"deletecontrolslots":    {"DELETE", "/metrics/control-slots", deleteControlSlotsHandler},
+			"deleteoptimizerruns":   {"DELETE", "/metrics/optimizer-runs", deleteOptimizerRunsHandler},
+			"deletesettingshistory": {"DELETE", "/settings/history", deleteSettingsHistoryHandler},
 		}
 
 		for _, r := range routes {

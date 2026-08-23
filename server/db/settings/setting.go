@@ -106,6 +106,19 @@ func RecordHistory(key string, old *string, val string) {
 	persistHistory(settingHistory{Timestamp: time.Now().Unix(), Key: key, Old: old, New: val})
 }
 
+// DeleteHistory removes the settings_history rows in [from,to). Both bounds
+// are required, a full wipe is /api/db/reset. F9 (ADR-011): the manual-
+// delete endpoints only ever covered energy and tariffs before this - this
+// closes that gap for settings_history.
+func DeleteHistory(from, to time.Time) (int64, error) {
+	if from.IsZero() || to.IsZero() {
+		return 0, errors.New("missing from/to")
+	}
+
+	res := db.Instance.Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Delete(new(settingHistory))
+	return res.RowsAffected, res.Error
+}
+
 func Persist() error {
 	mu.Lock()
 	defer mu.Unlock()

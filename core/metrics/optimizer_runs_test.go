@@ -117,6 +117,35 @@ func TestPersistOptimizerRunNonSampledCollisionUpdates(t *testing.T) {
 	assert.Equal(t, "Error", status, "the later run wins rather than being silently dropped")
 }
 
+// TestDeleteOptimizerRuns covers F9: a manual-delete endpoint for
+// optimizer_runs, matching the existing energy/tariffs ones.
+func TestDeleteOptimizerRuns(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.AutoMigrate(new(optimizerRun)))
+
+	base := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
+	for i := range 4 {
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		require.NoError(t, PersistOptimizerRun(ts, "Optimal", nil, nil, nil, nil, nil, true))
+	}
+
+	count := func() int64 {
+		var n int64
+		require.NoError(t, db.Instance.Model(new(optimizerRun)).Count(&n).Error)
+		return n
+	}
+	require.Equal(t, int64(4), count())
+
+	// both bounds are required
+	_, err := DeleteOptimizerRuns(time.Time{}, base)
+	require.Error(t, err)
+
+	rows, err := DeleteOptimizerRuns(base, base.Add(30*time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), rows)
+	assert.Equal(t, int64(2), count())
+}
+
 // TestPersistOptimizerRunLegacyRow simulates a row written before the
 // diagnostic columns existed: querying it back must return nil, not 0.
 func TestPersistOptimizerRunLegacyRow(t *testing.T) {

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"errors"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -91,4 +92,17 @@ func MarkControlSlotModeChanged(ts time.Time) error {
 	}
 
 	return db.Instance.Model(new(controlSlot)).Where("ts = ?", ts.Unix()).Update("mode_changed", true).Error
+}
+
+// DeleteControlSlots removes the slots in [from,to). Both bounds are
+// required, a full wipe is /api/db/reset. F9 (ADR-011): the manual-delete
+// endpoints only ever covered energy and tariffs before this - this closes
+// that gap for control_slots.
+func DeleteControlSlots(from, to time.Time) (int64, error) {
+	if from.IsZero() || to.IsZero() {
+		return 0, errors.New("missing from/to")
+	}
+
+	res := db.Instance.Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Delete(new(controlSlot))
+	return res.RowsAffected, res.Error
 }

@@ -2,6 +2,7 @@ package settings
 
 import (
 	"testing"
+	"time"
 
 	serverdb "github.com/evcc-io/evcc/server/db"
 	"github.com/stretchr/testify/assert"
@@ -109,6 +110,38 @@ func TestSettingsHistoryDelete(t *testing.T) {
 	// deleting a key that was never set is a no-op, not a fabricated removal
 	require.NoError(t, Delete("never-set"))
 	assert.Empty(t, history(t, "never-set"))
+}
+
+// TestDeleteHistory covers F9: a manual-delete endpoint for settings_history,
+// matching the existing energy/tariffs ones.
+func TestDeleteHistory(t *testing.T) {
+	setupHistoryTest(t)
+
+	SetString("foo", "1")
+	SetString("foo", "2")
+	SetString("foo", "3")
+	rows := history(t, "foo")
+	require.Len(t, rows, 3)
+
+	// give the three rows deterministic, distinct timestamps - persistHistory
+	// stamps real time, which a fast test run could otherwise collapse into
+	// the same wall-clock second
+	base := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
+	for i, r := range rows {
+		require.NoError(t, serverdb.Instance.Table("settings_history").
+			Where("id = ?", r.ID).
+			Update("ts", base.Add(time.Duration(i)*time.Minute).Unix()).Error)
+	}
+
+	// both bounds are required
+	_, err := DeleteHistory(time.Time{}, base)
+	require.Error(t, err)
+
+	// half-open range covers the first two rows, not the third
+	deleted, err := DeleteHistory(base, base.Add(90*time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), deleted)
+	assert.Len(t, history(t, "foo"), 1)
 }
 
 func TestSettingsHistoryIndependentKeys(t *testing.T) {

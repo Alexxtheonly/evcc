@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,6 +56,35 @@ func TestPersistControlSlot(t *testing.T) {
 
 	require.NoError(t, db.Instance.Where("ts = ?", slot.Unix()).First(&res).Error)
 	require.Equal(t, "charge", res.AppliedMode)
+}
+
+// TestDeleteControlSlots covers F9: a manual-delete endpoint for
+// control_slots, matching the existing energy/tariffs ones.
+func TestDeleteControlSlots(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.AutoMigrate(new(controlSlot)))
+
+	base := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
+	for i := range 4 {
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		require.NoError(t, PersistControlSlot(ts, "normal", "normal", "", true, nil))
+	}
+
+	count := func() int64 {
+		var n int64
+		require.NoError(t, db.Instance.Model(new(controlSlot)).Count(&n).Error)
+		return n
+	}
+	require.Equal(t, int64(4), count())
+
+	// both bounds are required
+	_, err := DeleteControlSlots(time.Time{}, base)
+	require.Error(t, err)
+
+	rows, err := DeleteControlSlots(base, base.Add(30*time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), rows)
+	assert.Equal(t, int64(2), count())
 }
 
 // TestPersistControlSlotLegacyRow simulates a row written before a column

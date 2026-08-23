@@ -7,6 +7,7 @@ import (
 
 	"github.com/evcc-io/evcc/core/metrics"
 	"github.com/evcc-io/evcc/server/db"
+	dbsettings "github.com/evcc-io/evcc/server/db/settings"
 	"github.com/evcc-io/evcc/util"
 )
 
@@ -85,6 +86,75 @@ func deleteTariffsHandler(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusBadRequest
 		}
 		jsonError(w, status, err)
+		return
+	}
+
+	jsonWrite(w, deleteResult{rows})
+}
+
+// deleteControlSlotsHandler removes persisted control_slots rows (ADR-011/F9)
+func deleteControlSlotsHandler(w http.ResponseWriter, r *http.Request) {
+	if db.Instance == nil {
+		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
+		return
+	}
+
+	from, to, err := timeRange(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	rows, err := metrics.DeleteControlSlots(from, to)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	jsonWrite(w, deleteResult{rows})
+}
+
+// deleteOptimizerRunsHandler removes persisted optimizer_runs rows (ADR-011/F9)
+func deleteOptimizerRunsHandler(w http.ResponseWriter, r *http.Request) {
+	if db.Instance == nil {
+		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
+		return
+	}
+
+	from, to, err := timeRange(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	rows, err := metrics.DeleteOptimizerRuns(from, to)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	jsonWrite(w, deleteResult{rows})
+}
+
+// deleteSettingsHistoryHandler removes persisted settings_history rows
+// (ADR-011/F9). Deleting a value's own current row is already covered by
+// the existing settings API; this only prunes the audit trail of past
+// writes, not the settings themselves.
+func deleteSettingsHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	if db.Instance == nil {
+		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
+		return
+	}
+
+	from, to, err := timeRange(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	rows, err := dbsettings.DeleteHistory(from, to)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err)
 		return
 	}
 
