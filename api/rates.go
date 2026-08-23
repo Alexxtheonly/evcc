@@ -11,6 +11,10 @@ type Rate struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
 	Value float64   `json:"value"`
+	// Forecast marks a rate as a prediction rather than a settled price, e.g. a slot
+	// filled in by a secondary tariff beyond the primary's known horizon (see
+	// tariff.Merged). Zero value (false) means settled/known, the common case.
+	Forecast bool `json:"forecast,omitempty"`
 }
 
 // IsZero returns is the rate is the zero value

@@ -236,3 +236,28 @@ func TestSolarNegativeSlot(t *testing.T) {
 		assert.Equal(t, -1.0, r.Value, "slot %d", i)
 	}
 }
+
+// TestSlotWrapperPreservesForecastFlag ensures the forecast/settled provenance a source
+// tariff (e.g. tariff.Merged) attaches to a slot survives the 15-minute expansion instead
+// of being silently dropped when each sub-slot is rebuilt.
+func TestSlotWrapperPreservesForecastFlag(t *testing.T) {
+	now := time.Now().Truncate(SlotDuration)
+
+	rr := api.Rates{
+		{Start: now, End: now.Add(time.Hour), Value: 0.10, Forecast: false},
+		{Start: now.Add(time.Hour), End: now.Add(2 * time.Hour), Value: 0.20, Forecast: true},
+	}
+
+	w := &SlotWrapper{&testTariff{rates: rr, typ: api.TariffTypePriceForecast}}
+
+	res, err := w.Rates()
+	require.NoError(t, err)
+	require.Len(t, res, 8)
+
+	for i, r := range res[:4] {
+		assert.False(t, r.Forecast, "settled slot %d", i)
+	}
+	for i, r := range res[4:] {
+		assert.True(t, r.Forecast, "forecast slot %d", i)
+	}
+}

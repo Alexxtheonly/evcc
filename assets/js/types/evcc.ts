@@ -1288,6 +1288,8 @@ export interface Rate {
   end: Date;
   /** Price per kWh in the configured currency or emissions in g/kWh. */
   value: number;
+  /** Whether this is a prediction rather than a settled price, e.g. a slot filled in by a secondary tariff beyond the primary's known horizon. */
+  forecast?: boolean;
 }
 
 export interface Slot {

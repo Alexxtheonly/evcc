@@ -48,15 +48,20 @@ func TestMergedRates(t *testing.T) {
 	rates, err := ext.Rates()
 	require.NoError(t, err)
 
-	// Should have primary rates plus secondary rates that start at or after primary ends
+	// Should have primary rates plus secondary rates that start at or after primary ends,
+	// with the secondary-filled tail marked as forecast since it extends past the
+	// primary's known (settled) horizon
 	expected := api.Rates{
 		{Start: now, End: now.Add(time.Hour), Value: 0.10},
 		{Start: now.Add(time.Hour), End: now.Add(2 * time.Hour), Value: 0.12},
-		{Start: now.Add(2 * time.Hour), End: now.Add(3 * time.Hour), Value: 0.22},
-		{Start: now.Add(3 * time.Hour), End: now.Add(4 * time.Hour), Value: 0.24},
+		{Start: now.Add(2 * time.Hour), End: now.Add(3 * time.Hour), Value: 0.22, Forecast: true},
+		{Start: now.Add(3 * time.Hour), End: now.Add(4 * time.Hour), Value: 0.24, Forecast: true},
 	}
 
 	assert.Equal(t, expected, rates)
+
+	// the secondary tariff's own cached rates must not be mutated by marking the copy
+	assert.False(t, secondaryRates[1].Forecast, "secondary source rates must stay untouched")
 }
 
 func TestMergedPrimaryFailure(t *testing.T) {

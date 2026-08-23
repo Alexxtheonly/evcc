@@ -78,7 +78,13 @@ func (t *Merged) Rates() (api.Rates, error) {
 	if idx, found := slices.BinarySearchFunc(secondaryRates, primaryEnd, func(r api.Rate, t time.Time) int {
 		return r.Start.Compare(t)
 	}); found {
-		return append(result, secondaryRates[idx:]...), nil
+		// mark the gap-filled tail as forecast so consumers can tell a settled price
+		// from a prediction beyond the primary tariff's known horizon
+		gap := slices.Clone(secondaryRates[idx:])
+		for i := range gap {
+			gap[i].Forecast = true
+		}
+		return append(result, gap...), nil
 	}
 
 	t.log.WARN.Printf("secondary tariff does not align gapless with primary, ignoring secondary")

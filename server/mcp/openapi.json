@@ -2874,6 +2874,10 @@
           "value": {
             "description": "Price per kWh in the configured currency or emissions in g/kWh.",
             "type": "number"
+          },
+          "forecast": {
+            "description": "Whether this is a prediction rather than a settled price, e.g. a slot filled in by a secondary tariff beyond the primary's known horizon.",
+            "type": "boolean"
           }
         },
         "required": [
