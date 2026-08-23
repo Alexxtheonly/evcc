@@ -13,26 +13,34 @@ import (
 // 10kWh and batteryEta (0.9). It exists purely so deriveBatteryPhysics has enough
 // single-direction SoC evidence to derive a capacity in tests, without depending on
 // the package's real accumulator/collector machinery.
+//
+// Each row's SocTemp is the SoC at the START of that row's own slot - matching the
+// production writer (see meter.SocTemp's doc comment in db.go, and
+// Accumulator.setSocTemp) - so a row's own Energy/ReturnEnergy is what causes the NEXT
+// row's SoC, not its own. A trailing zero-energy marker row supplies the final SoC
+// reading so the last discharge slot has a "next" delta to be derived from.
 func seedBatteryCalibration(t *testing.T, bat entity, start time.Time) {
 	t.Helper()
 
 	soc := 20.0
 	ts := start
-	require.NoError(t, persist(bat, ts, 0, 0, &soc, false, false))
 
 	for range 3 {
-		ts = ts.Add(15 * time.Minute)
-		soc += 9.0 // 1.0kWh * eta(0.9) / capacity(10kWh) = 9 percentage points
 		s := soc
 		require.NoError(t, persist(bat, ts, 1.0, 0, &s, false, false))
+		soc += 9.0 // 1.0kWh * eta(0.9) / capacity(10kWh) = 9 percentage points
+		ts = ts.Add(15 * time.Minute)
 	}
 
 	for range 3 {
-		ts = ts.Add(15 * time.Minute)
-		soc -= 100.0 / 9.0 // (1.0kWh / eta(0.9)) / capacity(10kWh)
 		s := soc
 		require.NoError(t, persist(bat, ts, 0, 1.0, &s, false, false))
+		soc -= 100.0 / 9.0 // (1.0kWh / eta(0.9)) / capacity(10kWh)
+		ts = ts.Add(15 * time.Minute)
 	}
+
+	s := soc
+	require.NoError(t, persist(bat, ts, 0, 0, &s, false, false))
 }
 
 func TestDeriveBatteryPhysics(t *testing.T) {
@@ -70,6 +78,95 @@ func TestDeriveBatteryPhysicsRefusesWithoutEnoughHistory(t *testing.T) {
 	require.NoError(t, persist(bat, base.Add(15*time.Minute), 0.1, 0, &soc1, false, false))
 
 	_, err := deriveBatteryPhysics()
+	require.ErrorIs(t, err, ErrBatteryPhysicsUnavailable)
+}
+
+// TestDeriveBatteryPhysicsPrefersPersistedCapacity covers the Priority-2 decision: a
+// device-reported capacity (persisted via Collector.SetCapacity, mirroring what
+// core/site.go does with api.BatteryCapacity) must win over derivation, even when the
+// battery's history alone would derive a different number - a hardware fact evcc
+// already knows beats an estimate.
+func TestDeriveBatteryPhysicsPrefersPersistedCapacity(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	bat := mustCreateEntity(t, Battery, "bat1")
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc)) // would derive 10.0kWh
+
+	require.NoError(t, bat.updateCapacity(13.5))
+
+	phys, err := deriveBatteryPhysics()
+	require.NoError(t, err)
+	require.InDelta(t, 13.5, phys.CapacityKWh, 1e-9)
+	require.Contains(t, phys.CapacitySource, "device-reported")
+}
+
+// TestDeriveBatteryCapacityFromHistoryRampThenStop is the alignment-bug regression:
+// soc_temp is recorded at slot START, so a ΔSoC between two consecutive readings was
+// caused by the EARLIER row's energy. A charge ramp (two slots of unequal power)
+// immediately followed by a stop (zero energy, flat SoC) is exactly the shape that
+// breaks the off-by-one pairing - it would attribute the smaller slot's tiny SoC
+// movement to the larger slot's energy, and silently drop the transition the larger
+// slot actually caused because the following (stopped) row shows zero energy.
+func TestDeriveBatteryCapacityFromHistoryRampThenStop(t *testing.T) {
+	const capacity = 10.0 // true capacity, kWh
+
+	// row0: 0.5kWh charge -> causes a 4.5pp rise by row1 (0.5*0.9/10)
+	// row1: 2.5kWh charge -> causes a 22.5pp rise by row2 (2.5*0.9/10)
+	// row2: stop, no further movement
+	soc0 := 0.20
+	soc1 := soc0 + 0.5*batteryEta/capacity
+	soc2 := soc1 + 2.5*batteryEta/capacity
+
+	base := time.Unix(1_700_000_000, 0)
+	rows := []batteryHistoryRow{
+		{Ts: base.Unix(), ChargeKWh: 0.5, SocFrac: &soc0},
+		{Ts: base.Add(15 * time.Minute).Unix(), ChargeKWh: 2.5, SocFrac: &soc1},
+		{Ts: base.Add(30 * time.Minute).Unix(), SocFrac: &soc2},
+	}
+
+	got, source, err := deriveBatteryCapacityFromHistory(rows)
+	require.NoError(t, err)
+	require.Contains(t, source, "fallback")
+	// the off-by-one pairing (cur's energy instead of prev's) would attribute row1's
+	// 2.5kWh to row0's 4.5pp delta alone (dropping row1's own much larger 22.5pp
+	// delta entirely, since row2 shows zero energy), deriving 2.5*0.9/0.045 = 50kWh -
+	// 5x the true capacity. The fix must land within rounding of the true 10kWh.
+	require.InDelta(t, capacity, got, 1e-6)
+}
+
+// TestDeriveBatteryCapacityFromHistoryRefusesOnDisagreement covers the "don't average
+// two numbers that don't agree" fix: a charge-derived and discharge-derived estimate
+// more than capacityDisagreementFrac apart must refuse, not blend into a number
+// neither side supports (e.g. averaging 10kWh and 20kWh into a fabricated 15kWh).
+func TestDeriveBatteryCapacityFromHistoryRefusesOnDisagreement(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+
+	// 3 charge windows of 1.0kWh each imply capacity 10 (chargeSocSum 0.27, over the
+	// 0.20 evidence floor). 4 discharge windows of 1.0kWh each imply capacity 20
+	// (dischargeSocSum ~0.222, also over the floor) - same energy magnitude, opposite
+	// direction, evidently the same battery, and yet an honest 2x disagreement.
+	soc := []float64{0.20}
+	for range 3 {
+		soc = append(soc, soc[len(soc)-1]+1.0*batteryEta/10.0)
+	}
+	for range 4 {
+		soc = append(soc, soc[len(soc)-1]-1.0/batteryEta/20.0)
+	}
+
+	rows := make([]batteryHistoryRow, len(soc))
+	for i := range soc {
+		rows[i] = batteryHistoryRow{Ts: base.Add(time.Duration(i) * 15 * time.Minute).Unix(), SocFrac: &soc[i]}
+		switch {
+		case i < 3:
+			rows[i].ChargeKWh = 1.0
+		case i < 7:
+			rows[i].DischargeKWh = 1.0
+		}
+	}
+
+	_, _, err := deriveBatteryCapacityFromHistory(rows)
 	require.ErrorIs(t, err, ErrBatteryPhysicsUnavailable)
 }
 

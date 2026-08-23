@@ -174,6 +174,24 @@ func (c *Collector) SetSocTemp(value float64, isTemp bool) error {
 	return c.entity.updateIsTemp(isTemp)
 }
 
+// updateCapacity persists the entity's device-reported capacity (kWh) if it changed.
+func (e *entity) updateCapacity(kWh float64) error {
+	if e.CapacityKWh != nil && *e.CapacityKWh == kWh {
+		return nil
+	}
+
+	e.CapacityKWh = &kWh
+	return db.Instance.Model(e).UpdateColumn("capacity_kwh", kWh).Error
+}
+
+// SetCapacity records a battery's device-reported capacity (api.BatteryCapacity), so
+// the savings ledger's world chain (core/metrics/ledger_worlds.go's
+// deriveBatteryPhysics) can use a hardware fact evcc already knows instead of
+// estimating one from noisy charge/discharge SoC windows.
+func (c *Collector) SetCapacity(kWh float64) error {
+	return c.entity.updateCapacity(kWh)
+}
+
 func (c *Collector) EnergyProfile(from time.Time) (*[96]float64, error) {
 	return energyProfile(c.entity, from)
 }

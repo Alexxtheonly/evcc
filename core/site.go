@@ -929,6 +929,11 @@ func (site *Site) updateBatteryMeters() {
 		if mm[i].Soc != nil {
 			c.SetSocTemp(*mm[i].Soc, false)
 		}
+		if mm[i].Capacity != nil {
+			if err := c.SetCapacity(*mm[i].Capacity); err != nil {
+				site.log.ERROR.Printf("persist battery %d capacity: %v", i+1, err)
+			}
+		}
 	}
 
 	site.publishBattery()

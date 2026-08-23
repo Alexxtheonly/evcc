@@ -30,6 +30,7 @@ type entity struct {
 	IsTemp            bool     `gorm:"column:is_temp"`             // soc_temp holds temperature, not soc
 	EnergyMeter       *float64 `gorm:"column:energy_meter"`        // kWh, at last persisted slot
 	ReturnEnergyMeter *float64 `gorm:"column:return_energy_meter"` // kWh, at last persisted slot
+	CapacityKWh       *float64 `gorm:"column:capacity_kwh"`        // battery only: device-reported capacity (api.BatteryCapacity), see Collector.SetCapacity
 }
 
 func init() {

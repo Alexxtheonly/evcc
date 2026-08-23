@@ -17,7 +17,9 @@ package metrics
 // into a car as if it had been exported for feed-in revenue.
 
 import (
+	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -109,14 +111,26 @@ const minSocDeltaFrac = 0.02
 // all - one or two noisy windows must not anchor a number this consequential.
 const minCapacityEvidenceFrac = 0.20
 
-// ErrBatteryPhysicsUnavailable means the battery's history doesn't hold enough clean,
-// single-direction SoC movement to derive a capacity - the counterfactual battery (W2)
-// and the decision replay (item 4) both refuse rather than guess a number with no
-// basis (ADR-011 rule 4).
+// ErrBatteryPhysicsUnavailable means neither a persisted device capacity nor the
+// battery's history (enough clean, single-direction SoC movement, agreeing across
+// charge and discharge) is available to establish a capacity - the counterfactual
+// battery (W2) and the decision replay (item 4) both refuse rather than guess a number
+// with no basis (ADR-011 rule 4).
 var ErrBatteryPhysicsUnavailable = errors.New("not enough battery history to derive capacity")
 
-// deriveBatteryPhysics estimates the counterfactual battery's capacity from the
-// site's own charge/discharge history, using the full recorded history (a hardware
+// capacityDisagreementFrac is the largest fractional difference between the
+// charge-derived and discharge-derived capacity estimates that's still trusted enough
+// to average. Averaging two estimates that disagree by more than this (e.g. 20kWh and
+// 8kWh into 14kWh) fabricates a number neither side's evidence actually supports -
+// refuse instead.
+const capacityDisagreementFrac = 0.15
+
+// deriveBatteryPhysics establishes the counterfactual battery's capacity, preferring
+// the device-reported capacity persisted via Collector.SetCapacity (core/site.go reads
+// api.BatteryCapacity every battery-meter cycle - a hardware fact evcc already knows)
+// and falling back to deriving one from the site's own charge/discharge SoC history,
+// labelled as a fallback, only when persisted capacity isn't available for every
+// configured battery. Either way this uses the full recorded history (a hardware
 // property, not something scoped to the requested period) rather than [from,to).
 func deriveBatteryPhysics() (batteryPhysics, error) {
 	ids, err := batteryEntityIDs()
@@ -133,13 +147,10 @@ func deriveBatteryPhysics() (batteryPhysics, error) {
 	}
 
 	var (
-		chargeKWhSum, chargeSocSum       float64
-		dischargeKWhSum, dischargeSocSum float64
-		minSocFrac                       = 1.0
-		maxChargeSlot, maxDischargeSlot  float64
-		haveSoc                          bool
+		minSocFrac                      = 1.0
+		maxChargeSlot, maxDischargeSlot float64
+		haveSoc                         bool
 	)
-
 	for _, r := range rows {
 		if r.SocFrac != nil {
 			haveSoc = true
@@ -153,13 +164,84 @@ func deriveBatteryPhysics() (batteryPhysics, error) {
 		}
 	}
 
+	capacityKWh, capacitySource, err := resolveBatteryCapacity(ids, rows)
+	if err != nil {
+		return batteryPhysics{}, err
+	}
+
+	floorFrac, floorSource := 0.0, "no SoC history, defaulted to 0%"
+	if haveSoc {
+		floorFrac, floorSource = minSocFrac, "lowest observed SoC in history"
+	}
+
+	return batteryPhysics{
+		CapacityKWh:     capacityKWh,
+		CapacitySource:  capacitySource,
+		EtaC:            batteryEta,
+		EtaD:            batteryEta,
+		EtaSource:       "constant (core/site_optimizer.go eta=0.9), not derived - see batteryEta",
+		FloorFrac:       floorFrac,
+		FloorSource:     floorSource,
+		MaxChargeKWh:    maxChargeSlot,
+		MaxDischargeKWh: maxDischargeSlot,
+	}, nil
+}
+
+// persistedBatteryCapacityKWh sums each battery entity's persisted capacity_kwh
+// column. ok is true only when EVERY entity in ids has a value - a site with two
+// batteries where only one reports capacity has no honest total, so this falls
+// through to full derivation rather than silently summing a partial figure.
+func persistedBatteryCapacityKWh(ids []int) (sum float64, ok bool, err error) {
+	var caps []sql.NullFloat64
+	if err := db.Instance.Model(new(entity)).Where("id IN ?", ids).Pluck("capacity_kwh", &caps).Error; err != nil {
+		return 0, false, err
+	}
+	if len(caps) != len(ids) {
+		return 0, false, nil
+	}
+	for _, c := range caps {
+		if !c.Valid {
+			return 0, false, nil
+		}
+		sum += c.Float64
+	}
+	return sum, true, nil
+}
+
+// resolveBatteryCapacity prefers persisted device capacity over derivation - see
+// deriveBatteryPhysics' doc comment for why.
+func resolveBatteryCapacity(ids []int, rows []batteryHistoryRow) (float64, string, error) {
+	if sum, ok, err := persistedBatteryCapacityKWh(ids); err != nil {
+		return 0, "", err
+	} else if ok {
+		return sum, "device-reported capacity, persisted", nil
+	}
+
+	return deriveBatteryCapacityFromHistory(rows)
+}
+
+// deriveBatteryCapacityFromHistory is the fallback capacity estimator: matched,
+// contiguous, single-direction SoC windows from the site's own charge/discharge
+// history. Deriving BOTH round-trip efficiency and capacity independently from the
+// same ΔSoC/ΔEnergy windows isn't defensible (two unknowns, one equation per window),
+// so this treats batteryEta as known and solves for capacity using it.
+func deriveBatteryCapacityFromHistory(rows []batteryHistoryRow) (float64, string, error) {
+	var chargeKWhSum, chargeSocSum float64
+	var dischargeKWhSum, dischargeSocSum float64
+
 	for i := 1; i < len(rows); i++ {
 		prev, cur := rows[i-1], rows[i]
 
 		// only trust a window that is contiguous (no restart/gap between the two
-		// readings), single-direction (no simultaneous charge and discharge, which
-		// would make the SoC delta ambiguous between the two), and has both SoC
-		// readings
+		// readings) and has both SoC readings. soc_temp is recorded at SLOT START
+		// (see meter.SocTemp's doc comment in db.go), so a delta between consecutive
+		// readings was caused by the EARLIER row's energy (prev), not the later
+		// row's (cur). Pairing it with cur instead attributes each slot's real
+		// energy to the wrong SoC movement - on a smooth, uniform run the error is
+		// small, but a ramp immediately followed by a stop (a grid-forced charge
+		// that then holds) can attribute an entire real charge to a slot that moved
+		// zero energy and drop the transition that actually caused the movement,
+		// fabricating a capacity off by a large, unpredictable factor.
 		if cur.Ts-prev.Ts != int64(quarterHourSeconds) || prev.SocFrac == nil || cur.SocFrac == nil {
 			continue
 		}
@@ -167,11 +249,11 @@ func deriveBatteryPhysics() (batteryPhysics, error) {
 		delta := *cur.SocFrac - *prev.SocFrac
 
 		switch {
-		case cur.ChargeKWh > 0 && cur.DischargeKWh == 0 && delta >= minSocDeltaFrac:
-			chargeKWhSum += cur.ChargeKWh
+		case prev.ChargeKWh > 0 && prev.DischargeKWh == 0 && delta >= minSocDeltaFrac:
+			chargeKWhSum += prev.ChargeKWh
 			chargeSocSum += delta
-		case cur.DischargeKWh > 0 && cur.ChargeKWh == 0 && delta <= -minSocDeltaFrac:
-			dischargeKWhSum += cur.DischargeKWh
+		case prev.DischargeKWh > 0 && prev.ChargeKWh == 0 && delta <= -minSocDeltaFrac:
+			dischargeKWhSum += prev.DischargeKWh
 			dischargeSocSum += -delta
 		}
 	}
@@ -187,38 +269,21 @@ func deriveBatteryPhysics() (batteryPhysics, error) {
 		capFromDischarge = dischargeKWhSum / batteryEta / dischargeSocSum
 	}
 
-	var capacityKWh float64
-	var source string
 	switch {
 	case haveCharge && haveDischarge:
-		capacityKWh = (capFromCharge + capFromDischarge) / 2
-		source = "derived from charge and discharge SoC windows"
+		hi, lo := max(capFromCharge, capFromDischarge), min(capFromCharge, capFromDischarge)
+		if hi <= 0 || (hi-lo)/hi > capacityDisagreementFrac {
+			return 0, "", fmt.Errorf("%w: charge-derived %.2fkWh and discharge-derived %.2fkWh disagree by more than %.0f%%",
+				ErrBatteryPhysicsUnavailable, capFromCharge, capFromDischarge, capacityDisagreementFrac*100)
+		}
+		return (capFromCharge + capFromDischarge) / 2, "derived (fallback) from charge and discharge SoC windows", nil
 	case haveCharge:
-		capacityKWh = capFromCharge
-		source = "derived from charge-only SoC windows"
+		return capFromCharge, "derived (fallback) from charge-only SoC windows", nil
 	case haveDischarge:
-		capacityKWh = capFromDischarge
-		source = "derived from discharge-only SoC windows"
+		return capFromDischarge, "derived (fallback) from discharge-only SoC windows", nil
 	default:
-		return batteryPhysics{}, ErrBatteryPhysicsUnavailable
+		return 0, "", ErrBatteryPhysicsUnavailable
 	}
-
-	floorFrac, floorSource := 0.0, "no SoC history, defaulted to 0%"
-	if haveSoc {
-		floorFrac, floorSource = minSocFrac, "lowest observed SoC in history"
-	}
-
-	return batteryPhysics{
-		CapacityKWh:     capacityKWh,
-		CapacitySource:  source,
-		EtaC:            batteryEta,
-		EtaD:            batteryEta,
-		EtaSource:       "constant (core/site_optimizer.go eta=0.9), not derived - see batteryEta",
-		FloorFrac:       floorFrac,
-		FloorSource:     floorSource,
-		MaxChargeKWh:    maxChargeSlot,
-		MaxDischargeKWh: maxDischargeSlot,
-	}, nil
 }
 
 const quarterHourSeconds = 15 * 60
