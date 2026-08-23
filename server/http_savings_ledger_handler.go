@@ -40,21 +40,7 @@ func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
 
 	ledger, err := metrics.ComputeLedger(r.Context(), from, to)
 	if err != nil {
-		var refused *metrics.ErrBeforeTariffStart
-		switch {
-		case errors.As(err, &refused):
-			jsonError(w, http.StatusUnprocessableEntity, err)
-		case errors.Is(err, metrics.ErrLedgerRangeTooLarge), errors.Is(err, metrics.ErrLedgerRangeUnaligned):
-			jsonError(w, http.StatusBadRequest, err)
-		// ComputeLedger degrades a battery-physics refusal to a null Chain rather
-		// than failing the whole request (see Ledger's doc comment), so these two
-		// only reach here via a caller that skips that degradation - still not a
-		// server fault (ADR-011 rule 4: a refusal, not a crash), so 422 not 500.
-		case errors.Is(err, metrics.ErrBatteryPhysicsUnavailable), errors.Is(err, metrics.ErrSocGap):
-			jsonError(w, http.StatusUnprocessableEntity, err)
-		default:
-			jsonError(w, http.StatusInternalServerError, err)
-		}
+		jsonError(w, savingsLedgerErrorStatus(err), err)
 		return
 	}
 
@@ -64,4 +50,37 @@ func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", int(maxAge.Seconds())))
 
 	jsonWrite(w, ledger)
+}
+
+// savingsLedgerErrorStatus maps a ComputeLedger error to an HTTP status. Pulled out
+// of savingsLedgerHandler so the mapping itself is unit-testable without driving the
+// full metrics/db stack (see http_savings_ledger_handler_test.go) - a case missing
+// here previously fell to the default 500, which is exactly what happened to
+// metrics.ErrLoadpointNoChargeMeter: a refusal (ADR-011 rule 4: a configured
+// loadpoint with no charge-meter history) reported as a server fault instead of the
+// 422 every other refusal in this switch gets.
+func savingsLedgerErrorStatus(err error) int {
+	var refused *metrics.ErrBeforeTariffStart
+	switch {
+	case errors.As(err, &refused):
+		return http.StatusUnprocessableEntity
+	case errors.Is(err, metrics.ErrLedgerRangeTooLarge), errors.Is(err, metrics.ErrLedgerRangeUnaligned):
+		return http.StatusBadRequest
+	// ComputeLedger degrades a battery-physics refusal to a null Chain rather than
+	// failing the whole request (see Ledger's doc comment), so these three only
+	// reach here via a caller that skips that degradation - still not a server
+	// fault (ADR-011 rule 4: a refusal, not a crash), so 422 not 500.
+	case errors.Is(err, metrics.ErrBatteryPhysicsUnavailable),
+		errors.Is(err, metrics.ErrSocGap),
+		errors.Is(err, metrics.ErrBatteryRateCeilingUnavailable):
+		return http.StatusUnprocessableEntity
+	// a configured loadpoint with no charge-meter history at all - refusing to
+	// model a car-free household rather than silently guessing one (see
+	// ErrLoadpointNoChargeMeter's doc comment). A request-shape/data problem, not a
+	// server fault.
+	case errors.Is(err, metrics.ErrLoadpointNoChargeMeter):
+		return http.StatusUnprocessableEntity
+	default:
+		return http.StatusInternalServerError
+	}
 }
