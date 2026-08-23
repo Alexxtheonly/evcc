@@ -219,6 +219,64 @@ func TestLearnExpectedArrivalRequiresMinimumHistory(t *testing.T) {
 	assert.Nil(t, LearnExpectedArrival(commuterSessions(1), learnNow), "one week is not enough")
 }
 
+// TestLearnExpectedArrivalHandlesMidnightWrap pins the fix for a vehicle that usually
+// arrives around 23:30 but occasionally rolls past midnight to ~00:15: split at raw
+// minutes-of-day, 00:15 sorts as the smallest value in the set and the early (0.1)
+// quantile reports it directly - a day earlier than the cluster it actually belongs to.
+func TestLearnExpectedArrivalHandlesMidnightWrap(t *testing.T) {
+	var sessions Sessions
+	day := learnNow.AddDate(0, 0, -30)
+
+	for i := range 20 {
+		d := day.AddDate(0, 0, i)
+		dep := time.Date(d.Year(), d.Month(), d.Day(), 18, 0, i, 0, time.UTC)
+
+		var arr time.Time
+		if i%5 == 0 {
+			// occasionally rolls past midnight
+			arr = time.Date(d.Year(), d.Month(), d.Day()+1, 0, 15, i, 0, time.UTC)
+		} else {
+			arr = time.Date(d.Year(), d.Month(), d.Day(), 23, 30, i, 0, time.UTC)
+		}
+
+		socEnd, socStart := 60.0, 50.0
+		sessions = append(sessions, Session{
+			Created:      dep.Add(-8 * time.Hour),
+			Disconnected: &dep,
+			Vehicle:      "car",
+			SocEnd:       &socEnd,
+		}, Session{
+			Created:  arr,
+			Vehicle:  "car",
+			SocStart: &socStart,
+		})
+	}
+
+	arrival := LearnExpectedArrival(sessions, learnNow)
+	require.NotNil(t, arrival)
+
+	// the early edge of a cluster centered on 23:30 with occasional 00:15 rollovers must
+	// stay in the 23:xx range - the wrap bug reported 00:15, a full day early
+	assert.GreaterOrEqual(t, arrival.TimeOfDay, 23*60, "must stay in the 23:xx cluster, not wrap to just after midnight")
+	assert.Less(t, arrival.TimeOfDay, 24*60)
+}
+
+func TestUnwrapMinutesOfDay(t *testing.T) {
+	// cluster spanning midnight: 00:15 unwraps to 24:15 (1455) so it sorts after 23:30
+	// instead of before it
+	wrapped := []float64{15, 1410, 1410, 1425}
+	got := unwrapMinutesOfDay(wrapped)
+	assert.Equal(t, []float64{1410, 1410, 1425, 1455}, got)
+
+	// no midnight crossing: the largest gap is the wrap itself, values pass through
+	notWrapped := []float64{600, 610, 620}
+	assert.Equal(t, notWrapped, unwrapMinutesOfDay(notWrapped))
+
+	// fewer than 2 values: nothing to unwrap
+	assert.Equal(t, []float64{700}, unwrapMinutesOfDay([]float64{700}))
+	assert.Equal(t, []float64{}, unwrapMinutesOfDay([]float64{}))
+}
+
 func TestLearnExpectedArrivalIgnoresSessionsOutsideWindow(t *testing.T) {
 	old := commuterSessions(8)
 	for i := range old {

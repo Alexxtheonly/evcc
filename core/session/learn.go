@@ -265,7 +265,7 @@ func LearnExpectedArrival(sessions Sessions, now time.Time) *ExpectedArrival {
 	slices.Sort(times)
 	slices.Sort(soc)
 
-	timeOfDay := int(quantile(times, 0.1))
+	timeOfDay := int(quantile(unwrapMinutesOfDay(times), 0.1)) % 1440
 	timeOfDay -= timeOfDay % 15
 
 	return &ExpectedArrival{
@@ -276,4 +276,44 @@ func LearnExpectedArrival(sessions Sessions, now time.Time) *ExpectedArrival {
 
 func minutesOfDay(t time.Time) float64 {
 	return float64(t.Hour()*60+t.Minute()) + float64(t.Second())/60
+}
+
+// unwrapMinutesOfDay re-bases a sorted set of time-of-day values (each in [0, 1440)) so a
+// cluster spanning midnight sorts and quantiles correctly. Splitting at 00:00 is wrong for
+// a vehicle that usually arrives late and sometimes rolls past midnight: 00:15 sorts as the
+// smallest value in the set instead of "15 minutes after the usual ~23:30", so an early
+// quantile taken directly over raw minutes-of-day reports 00:15 - roughly a day earlier
+// than the cluster it is actually part of.
+//
+// Finds the largest gap between consecutive values on the 24h circle (the point least
+// likely to fall inside the real cluster) and cuts there instead of at midnight: every
+// value before the cut gets +1440 so the whole cluster becomes one contiguous, correctly
+// ordered run. Callers must fold the final quantile result back with % 1440. With the
+// largest gap being the wrap itself, the values already fit within a day and are returned
+// unchanged.
+func unwrapMinutesOfDay(sorted []float64) []float64 {
+	n := len(sorted)
+	if n < 2 {
+		return sorted
+	}
+
+	gapIdx, gap := -1, sorted[0]+1440-sorted[n-1]
+	for i := range n - 1 {
+		if g := sorted[i+1] - sorted[i]; g > gap {
+			gapIdx, gap = i, g
+		}
+	}
+	if gapIdx < 0 {
+		return sorted
+	}
+
+	res := make([]float64, n)
+	for i, v := range sorted {
+		if i <= gapIdx {
+			v += 1440
+		}
+		res[i] = v
+	}
+	slices.Sort(res)
+	return res
 }
