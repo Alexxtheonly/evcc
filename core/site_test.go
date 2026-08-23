@@ -7,7 +7,9 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/evcc-io/evcc/api"
+	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/core/types"
+	"github.com/evcc-io/evcc/tariff"
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
 	"github.com/stretchr/testify/assert"
@@ -336,4 +338,95 @@ func TestCollectMetersFlagsFailedPower(t *testing.T) {
 
 	assert.Equal(t, 0.0, mm[2].Power)
 	assert.False(t, failedFlags[2], "ErrNotAvailable is a permanent capability gap, not a failure")
+}
+
+// testUpdater satisfies the updater interface: a loadpoint.MockAPI plus a stub Update that
+// records the sitePower it was called with, and a settable gate() so tests can drive the
+// optimizer suggestion updatePower reads.
+type testUpdater struct {
+	*loadpoint.MockAPI
+	suggestion  *types.Suggestion
+	sitePowerAt float64
+}
+
+func (u *testUpdater) gate() *types.Suggestion { return u.suggestion }
+
+func (u *testUpdater) Update(sitePower, _ float64, _, _ api.Rates, _, _ bool, _ float64, _, _ *float64, _ *bool) {
+	u.sitePowerAt = sitePower
+}
+
+// TestUpdatePowerOptimizerSurplusGate covers the second gate added on top of the #30541
+// battery-boost carve-out: when the optimizer's current suggestion for this loadpoint is an
+// active surplus-charge, the battery-priority adjustment is added back so pvMaxCurrent sees
+// the surplus the optimizer already allocated, instead of prioritySoc hiding it a layer
+// below. Any suggestion that is not an active surplus-charge - including the nil case
+// clearSuggestions produces for a stale/absent/unsponsored optimizer - must leave today's
+// static prioritySoc behaviour completely unchanged.
+func TestUpdatePowerOptimizerSurplusGate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	meter := api.NewMockMeter(ctrl) // sitePower only checks len(batteryMeters) > 0
+
+	const maxPower = 11000.0 // W
+
+	newSite := func() *Site {
+		return &Site{
+			log:           util.NewLogger("foo"),
+			batteryMeters: []config.Device[api.Meter]{config.NewStaticDevice(config.Named{}, api.Meter(meter))},
+			prioritySoc:   50,
+			tariffs:       &tariff.Tariffs{},
+		}
+	}
+
+	// battery charging below prioritySoc: sitePower() itself withholds -2100W
+	// (priorityAdjustment) from the plain surplus of -2000W, leaving 100W - see
+	// TestSitePowerPriorityAdjustment's "charging below prioritySoc" case.
+	state := siteState{battery: types.BatteryState{Soc: 30, Power: -2000}}
+
+	runBoost := func(t *testing.T, boost int, suggestion *types.Suggestion) float64 {
+		t.Helper()
+
+		lp := &testUpdater{MockAPI: loadpoint.NewMockAPI(ctrl), suggestion: suggestion}
+		lp.EXPECT().GetMode().Return(api.ModeNow).AnyTimes()
+		lp.EXPECT().GetBatteryBoost().Return(boost).AnyTimes()
+		lp.EXPECT().EffectiveMaxPower().Return(maxPower).AnyTimes()
+
+		newSite().updatePower(lp, state, 0, nil, nil)
+
+		return lp.sitePowerAt
+	}
+
+	run := func(t *testing.T, suggestion *types.Suggestion) float64 {
+		t.Helper()
+		return runBoost(t, boostDisabled, suggestion)
+	}
+
+	t.Run("no suggestion: gate closed, static prioritySoc behaviour unchanged", func(t *testing.T) {
+		assert.Equal(t, 100.0, run(t, nil))
+	})
+
+	t.Run("stop suggestion: gate closed", func(t *testing.T) {
+		assert.Equal(t, 100.0, run(t, &types.Suggestion{Action: actionStop}))
+	})
+
+	t.Run("full-power charge: grid-fed by definition, not surplus, gate closed", func(t *testing.T) {
+		assert.Equal(t, 100.0, run(t, &types.Suggestion{Action: actionCharge, Charge: maxPower}))
+	})
+
+	t.Run("charge suggestion with planned grid import: not surplus, gate closed", func(t *testing.T) {
+		assert.Equal(t, 100.0, run(t, &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 500}))
+	})
+
+	t.Run("active surplus-charge: gate opens, unadjusted site power restored", func(t *testing.T) {
+		assert.Equal(t, -2000.0, run(t, &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 0}))
+	})
+
+	// Both carve-outs can be true at once - a boosting loadpoint that is also an active
+	// surplus-charge - and are not mutually exclusive, so they must share one branch. Two
+	// sequential ifs would add priorityAdjustment twice (100 + (-2100) + (-2100) = -4100),
+	// handing pvMaxCurrent surplus that does not exist; the adjustment must apply exactly
+	// once, same as the single-condition case above.
+	t.Run("boost active and active surplus-charge together: adjustment applied exactly once", func(t *testing.T) {
+		assert.Equal(t, -2000.0, runBoost(t, boostStart, &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 0}))
+	})
 }

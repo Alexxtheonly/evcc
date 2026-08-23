@@ -1015,6 +1015,37 @@ func TestBlendScaleByLead(t *testing.T) {
 	require.Equal(t, []float64{200, 175}, short)
 }
 
+// TestSurplusCharge covers the predicate shared by optimizerCharging (defer to the pv loop)
+// and updatePower's #30541-style gate (add the priority adjustment back): "surplus charge"
+// means an active charge suggestion the site can cover without extra grid import - not a
+// forced full-power charge (always grid-fed by definition), and not a charge suggestion that
+// itself plans to import.
+func TestSurplusCharge(t *testing.T) {
+	const maxPower = 11000.0 // W
+
+	cases := []struct {
+		name string
+		s    *types.Suggestion
+		want bool
+	}{
+		{"nil suggestion: optimizer stale/absent/unsponsored", nil, false},
+		{"stop suggestion", &types.Suggestion{Action: actionStop}, false},
+		{"discharge suggestion", &types.Suggestion{Action: actionDischarge}, false},
+		{"full-power charge: grid-fed by definition, not surplus", &types.Suggestion{Action: actionCharge, Charge: maxPower}, false},
+		{"just under full power, within threshold: still full", &types.Suggestion{Action: actionCharge, Charge: maxPower - suggestionThreshold + 1}, false},
+		{"charge with planned grid import", &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 500}, false},
+		{"charge with planned grid export beyond threshold", &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: -500}, false},
+		{"partial charge, flat grid flow: surplus", &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: 0}, true},
+		{"partial charge, grid flow within noise threshold: surplus", &types.Suggestion{Action: actionCharge, Charge: 5000, Grid: suggestionThreshold}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, surplusCharge(tc.s, maxPower))
+		})
+	}
+}
+
 func TestCurrentSlotSuggestion(t *testing.T) {
 	// BYD-sized battery well between its SoC bounds
 	midSocConfig := optimizer.BatteryConfig{SCapacity: 19320, SMin: 966, SMax: 18354, SInitial: 10000}
@@ -1366,6 +1397,45 @@ func TestPersistControlSlotPaybackVetoPreservesSuggestion(t *testing.T) {
 	assert.Equal(t, api.BatteryCharge.String(), suggestedMode, "the rejected suggestion is still visible")
 	assert.Equal(t, string(vetoReasonPayback), vetoReason)
 	assert.Nil(t, price, "an unaccepted suggestion carries no price")
+}
+
+// TestPersistControlSlotAdvisoryModeRecordsSuggestion is the advisory-mode
+// counterpart to TestPersistControlSlotPaybackVetoPreservesSuggestion:
+// optimizerAutomatic is left off, so applied_mode is honestly "unknown" -
+// nothing is ever applied - but the vetted suggestion the optimizer derived
+// this run is real and worth recording anyway. Collecting that comparison
+// before automatic mode is ever switched on is the whole point of the
+// ledger: it lets a later decision to enable automatic mode be based on data
+// gathered while advisory, at zero control risk.
+func TestPersistControlSlotAdvisoryModeRecordsSuggestion(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{log: util.NewLogger("foo")}
+	// optimizerAutomatic is left false (the settings cache reloads empty from
+	// the fresh db above) - this is advisory mode
+	require.False(t, site.Automatic())
+
+	site.setOptimizerBatteryMode(optimizerDecision{
+		mode:          api.BatteryCharge,
+		suggestedMode: api.BatteryCharge,
+		price:         0.12,
+	})
+	require.Equal(t, api.BatteryUnknown, site.optimizerBatteryMode, "advisory mode never sets an applyable mode")
+
+	site.controlSlot = site.controlSlot.Add(-tariff.SlotDuration)
+	site.persistControlSlot()
+
+	var appliedMode, suggestedMode string
+	var price *float64
+	require.NoError(t, db.Instance.Raw(
+		"SELECT applied_mode, suggested_mode, price FROM control_slots",
+	).Row().Scan(&appliedMode, &suggestedMode, &price))
+
+	assert.Equal(t, api.BatteryUnknown.String(), appliedMode, "advisory mode never applies anything")
+	assert.Equal(t, api.BatteryCharge.String(), suggestedMode, "the vetted suggestion is recorded despite not being applied")
+	require.NotNil(t, price, "an accepted charge suggestion carries its price even though advisory mode never spent it")
+	assert.InDelta(t, 0.12, *price, 0.001)
 }
 
 // TestPersistOptimizerRunGate exercises the ADR-011 optimizer_runs slot gate.

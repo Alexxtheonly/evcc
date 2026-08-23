@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"slices"
@@ -152,6 +153,20 @@ const (
 // actionDischarge is the battery-to-grid discharge advisory. It has no matching
 // api.BatteryMode, so it always reads as actionable.
 const actionDischarge = "discharge"
+
+// surplusCharge reports whether s is an active recommendation to charge by following pv
+// surplus, as opposed to a forced grid-fed charge (full power, by definition, is always
+// grid-fed - see optimizerCharging) or no charge suggestion at all. s.Grid close to zero
+// means the plan expects the charge to be covered by surplus rather than drawing extra
+// import, the same condition optimizerCharging uses to decide whether to defer to the pv
+// control loop instead of driving the setpoint directly.
+func surplusCharge(s *types.Suggestion, maxPower float64) bool {
+	if s == nil || s.Action != actionCharge {
+		return false
+	}
+	full := s.Charge >= maxPower-suggestionThreshold
+	return !full && math.Abs(s.Grid) <= suggestionThreshold
+}
 
 // evSuggestion notifies when the optimizer's advisory action for a device changes
 const evSuggestion = "suggestion"
@@ -514,7 +529,10 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 // optimizerBatteryModeConfirmDelay apart agree, so a degenerate LP optimum on
 // a flat price plateau cannot flap the battery every cycle. Reverting to
 // Unknown — automatic disabled, no suggestion, or disagreeing batteries — is
-// never delayed.
+// never delayed. Automatic disabled only ever affects the applyable mode:
+// the vetted suggestion behind it is still recorded (control_slots, ADR-011)
+// so the gap between what the optimizer would have done and what was
+// actually applied is auditable from before automatic mode was ever turned on.
 //
 // Must be called at most once per optimizer run (from applyOptimizerResult),
 // not at control-loop cadence: batterySuggestionMode reads the result far
@@ -548,10 +566,14 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 	switch {
 	case !site.Automatic():
 		// automatic mode may have been disabled between deriving and storing
-		// the candidate; re-check the flag inside the critical section
-		site.optimizerChargeVetoed = false
-		site.optimizerVetoReason = vetoReasonNone
-		site.optimizerSuggestedMode = api.BatteryUnknown
+		// the candidate; re-check the flag inside the critical section. Only
+		// the applyable mode is forced to Unknown here - chargeVetoed,
+		// vetoReason and suggestedMode were already set above from d and are
+		// left alone: they are UI/ledger annotation only (see their doc
+		// comments), the vetted candidate was genuinely derived this run
+		// whether or not automatic mode is on to act on it, and
+		// persistControlSlot needs it to compare what the optimizer would
+		// have done against what was actually applied even while advisory.
 		apply(api.BatteryUnknown)
 	case candidate == api.BatteryUnknown:
 		apply(api.BatteryUnknown)
