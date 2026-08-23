@@ -1893,18 +1893,8 @@ func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measureme
 		if maxSoc == 0 {
 			maxSoc = 100 // empty/unset maxsoc means no upper limit
 		}
-		// SMax stays clamped against current soc to prevent infeasible if it is above the
-		// configured limit - s <= s_max is enforced elsewhere as a real bound (app.py's
-		// s_max_pen/s constraints), so a soc above maxSoc would otherwise have no feasible
-		// s[0].
-		//
-		// SMin is left unclamped: like the vehicle path in loadpointRequest, s_min is a soft
-		// penalty (optimizer.py: s_min_pen[i][t] >= bat.s_min - s[i][t], lines 615/618-622),
-		// not a hard bound, so a current soc below minSoc is feasible - the solver forces
-		// charging back toward minSoc the same way it already does for vehicles, instead of
-		// the clamp silently zeroing the penalty and letting the floor go unenforced for as
-		// long as the pack sits below it.
-		bat.SMin = float32(*b.Capacity * minSoc * 10)                // Wh
+		// clamp against current soc to prevent infeasible if it is outside the configured limits
+		bat.SMin = min(bat.SInitial, float32(*b.Capacity*minSoc*10)) // Wh
 		bat.SMax = max(bat.SInitial, float32(*b.Capacity*maxSoc*10)) // Wh
 	}
 

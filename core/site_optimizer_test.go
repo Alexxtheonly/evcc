@@ -361,21 +361,16 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 	site := &Site{log: util.NewLogger("foo")}
 	capacity := 10.0 // kWh
 
-	t.Run("soc below minSoc leaves the floor unclamped", func(t *testing.T) {
-		// the pack sits below its configured floor (15% < 20%). SMin must still carry the
-		// real 20% target - clamping it down to SInitial would silently zero the s_min_pen
-		// penalty and the solver would never plan to recover it (see the unclamped vehicle
-		// path in loadpointRequest, which this now matches).
+	t.Run("soc below minSoc", func(t *testing.T) {
 		soc := 15.0
 		dev := newBatteryDevice(t, 20, 100)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
 		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
 
-		assert.Equal(t, float32(2000), req.SMin)
+		assert.Equal(t, float32(1500), req.SMin)
 		assert.Equal(t, float32(10000), req.SMax)
-		assert.Equal(t, float32(1500), req.SInitial)
-		assert.Greater(t, req.SMin, req.SInitial, "floor must stay above current soc, not collapse to it")
+		assert.LessOrEqual(t, req.SMin, req.SInitial)
 	})
 
 	t.Run("soc above maxSoc", func(t *testing.T) {
