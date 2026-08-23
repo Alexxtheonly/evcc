@@ -155,8 +155,13 @@ func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (row
 
 	var res []row
 	if err := db.Instance.WithContext(ctx).Table("meters").
+		// recovered/incomplete were added by AutoMigrate with no DEFAULT, so every
+		// pre-migration row has them NULL - COALESCE(...) = 0 treats NULL the same
+		// as false (not recovered, not incomplete), matching
+		// Collector.LastSlotEnergy's convention and batteryHistoryRows below.
 		Select(`ts, COALESCE(SUM(energy), 0) AS energy, COALESCE(SUM(return_energy), 0) AS return_energy,
-			AVG(soc_temp) AS soc_frac, MAX(CASE WHEN recovered OR incomplete THEN 1 ELSE 0 END) AS excluded`).
+			AVG(soc_temp) AS soc_frac,
+			MAX(CASE WHEN COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0 THEN 0 ELSE 1 END) AS excluded`).
 		Where("meter IN ? AND ts >= ? AND ts < ?", ids, from.Unix(), to.Unix()).
 		Group("ts").
 		Scan(&res).Error; err != nil {

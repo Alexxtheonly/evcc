@@ -103,6 +103,30 @@ func TestDeriveBatteryPhysicsPrefersPersistedCapacity(t *testing.T) {
 	require.Contains(t, phys.CapacitySource, "device-reported")
 }
 
+// TestBatteryHistoryRowsIncludesPreMigrationNullRows covers the NULL-handling fix:
+// recovered/incomplete were added by AutoMigrate with no DEFAULT, so every
+// pre-migration meters row has them NULL. A plain "recovered = false" comparison
+// excludes a NULL via SQL's three-valued logic, which would have silently discarded a
+// site's entire pre-migration battery history from the capacity derivation.
+func TestBatteryHistoryRowsIncludesPreMigrationNullRows(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	bat := mustCreateEntity(t, Battery, "bat1")
+
+	// bypass persist() (which always writes explicit 0/1) to simulate a genuine
+	// pre-migration row with NULL recovered/incomplete columns.
+	require.NoError(t, db.Instance.Exec(
+		"INSERT INTO meters (meter, ts, energy, return_energy, soc_temp, recovered, incomplete) VALUES (?, ?, ?, ?, ?, NULL, NULL)",
+		bat.Id, time.Now().Unix(), 1.5, 0.0, 42.0,
+	).Error)
+
+	rows, err := batteryHistoryRows(context.Background(), []int{bat.Id})
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "a NULL recovered/incomplete row must be treated as valid data, not silently dropped")
+	require.InDelta(t, 1.5, rows[0].ChargeKWh, 1e-9)
+}
+
 // TestDeriveBatteryCapacityFromHistoryRampThenStop is the alignment-bug regression:
 // soc_temp is recorded at slot START, so a ΔSoC between two consecutive readings was
 // caused by the EARLIER row's energy. A charge ramp (two slots of unequal power)

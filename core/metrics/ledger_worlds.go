@@ -366,7 +366,15 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 	var res []row
 	if err := db.Instance.WithContext(ctx).Table("meters").
 		Select(`ts, COALESCE(SUM(energy), 0) AS energy, COALESCE(SUM(return_energy), 0) AS return_energy, AVG(soc_temp) AS soc_frac`).
-		Where("meter IN ? AND recovered = ? AND incomplete = ? AND ts >= ?", ids, false, false, since).
+		// recovered/incomplete were added by AutoMigrate with no DEFAULT, so every
+		// pre-migration row has them NULL. "= false" excludes a NULL via SQL's
+		// three-valued logic (NULL = false is NULL, not true), which would silently
+		// discard a site's entire pre-migration battery history - COALESCE(...) = 0
+		// treats NULL the same as false (not recovered, not incomplete), matching
+		// Collector.LastSlotEnergy's convention and ledger_slots.go's
+		// queryGroupSlots (whose CASE/OR NULL-propagation happens to agree, but
+		// implicitly - this makes both paths say the same thing explicitly).
+		Where("meter IN ? AND COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0 AND ts >= ?", ids, since).
 		Group("ts").
 		Order("ts").
 		Scan(&res).Error; err != nil {
