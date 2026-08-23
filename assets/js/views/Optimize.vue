@@ -201,6 +201,10 @@ export default defineComponent({
 		isSponsor(): boolean {
 			return !!store.state.sponsor?.status?.name;
 		},
+		// Sign-flipped for display only (positive = paying the grid). The value itself
+		// is the solver's raw objective, not a settled cost - see OptimizeHeader's
+		// netCostDisplay/COST_TOOLTIP for why it must not be rendered as currency
+		// (ADR-011 rule 6: it includes a terminal battery-value credit).
 		netCost(): number {
 			return (this.evopt?.res?.objective_value || 0) * -1;
 		},

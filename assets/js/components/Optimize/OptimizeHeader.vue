@@ -78,14 +78,14 @@
 				</div>
 			</div>
 
-			<!-- Net grid cost -->
+			<!-- Solver objective (NOT a settled grid cost - see COST_TOOLTIP / ADR-011 rule 6) -->
 			<div class="field col-12 col-md-6 col-lg-3">
 				<div class="field-head">
 					<div class="field-label small text-uppercase fw-bold evcc-gray">
-						Net grid cost
+						Solver objective
 					</div>
 					<div class="field-caption small evcc-gray mt-1">
-						over the next {{ horizonHours }} hours
+						estimate, next {{ horizonHours }} hours
 					</div>
 				</div>
 				<div class="field-value gap-2">
@@ -139,9 +139,11 @@ const STATUS_TOOLTIP =
 	"<strong>Not solved</strong>: optimization hasn't finished yet.";
 
 const COST_TOOLTIP =
-	"Forecasted net grid cost over the optimization window: energy bought minus sold, " +
-	"with leftover battery charge credited at the lowest price. Lower is better, " +
-	"positive means you pay the grid, negative means you receive a credit.";
+	"The solver's own objective value for this plan, in currency-scaled solver units - " +
+	"NOT a settled cost. It includes a terminal credit for leftover battery charge at the " +
+	"end of the horizon, which hasn't actually been earned yet, so it will not match a real " +
+	"invoice. Lower is better; positive roughly means paying the grid, negative roughly " +
+	"means a credit.";
 
 export default defineComponent({
 	name: "OptimizeHeader",
@@ -199,8 +201,14 @@ export default defineComponent({
 		isCredit(): boolean {
 			return this.netCost < 0;
 		},
+		// Deliberately NOT fmtMoney: netCost is the solver's objective value, not a
+		// settled cost (ADR-011 rule 6 - it includes a terminal battery-value credit
+		// that hasn't been earned yet). fmtMoney's currency styling (symbol, locale
+		// currency grouping/rounding) would present it as if it were exactly what the
+		// user will pay - fmtNumber plus the plain currency code communicates the
+		// same rough magnitude without that implication.
 		netCostDisplay(): string {
-			return this.fmtMoney(this.netCost, this.currency, true, true);
+			return `${this.fmtNumber(this.netCost, 2)} ${this.currency}`;
 		},
 	},
 	mounted() {
