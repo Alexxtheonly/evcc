@@ -677,11 +677,17 @@ func TestNextOccurrence(t *testing.T) {
 	// later today
 	assert.Equal(t, time.Date(2026, 8, 23, 18, 30, 0, 0, time.UTC), nextOccurrence(18*60+30, now))
 
-	// already passed today: rolls to tomorrow
-	assert.Equal(t, time.Date(2026, 8, 24, 6, 0, 0, 0, time.UTC), nextOccurrence(6*60, now))
+	// already passed today without showing up: pinned to now, not deferred a full day -
+	// this is the case right after the predicted (early-quantile) time, when arrival is
+	// most likely, so the reservation must stay live rather than vanish until tomorrow
+	assert.Equal(t, now, nextOccurrence(6*60, now))
 
 	// exactly now: today, not pushed out a day
 	assert.Equal(t, now, nextOccurrence(14*60, now))
+
+	// a new calendar day naturally produces a fresh, still-future occurrence again
+	tomorrow := time.Date(2026, 8, 24, 0, 5, 0, 0, time.UTC)
+	assert.Equal(t, time.Date(2026, 8, 24, 6, 0, 0, 0, time.UTC), nextOccurrence(6*60, tomorrow))
 }
 
 func TestArrivalSlot(t *testing.T) {
@@ -718,7 +724,7 @@ func TestExpectedArrivalDemand(t *testing.T) {
 		v := vehicle.NewMockAPI(ctrl)
 		v.EXPECT().GetExpectedArrivalLearning().Return(false)
 
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
 		assert.Nil(t, got)
 	})
 
@@ -729,8 +735,16 @@ func TestExpectedArrivalDemand(t *testing.T) {
 		v.EXPECT().GetExpectedArrivalLearning().Return(true)
 		v.EXPECT().Instance().Return(mv).AnyTimes()
 
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, map[api.Vehicle]bool{mv: true})
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, map[api.Vehicle]bool{mv: true}, false, 0)
 		assert.Nil(t, got, "already connected: never modelled twice")
+	})
+
+	t.Run("an unidentified connected vehicle suppresses every prediction", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		v := vehicle.NewMockAPI(ctrl) // no expectations: must not be called at all
+
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, true, 0)
+		assert.Nil(t, got, "unidentified vehicle physically connected: could be any configured vehicle, so none are predicted")
 	})
 
 	t.Run("no confident prediction", func(t *testing.T) {
@@ -741,7 +755,7 @@ func TestExpectedArrivalDemand(t *testing.T) {
 		v.EXPECT().Instance().Return(mv).AnyTimes()
 		v.EXPECT().GetExpectedArrival().Return(session.ExpectedArrival{}, time.Time{})
 
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
 		assert.Nil(t, got, "absent vehicle with no usable history changes nothing")
 	})
 
@@ -753,7 +767,7 @@ func TestExpectedArrivalDemand(t *testing.T) {
 		v.EXPECT().Instance().Return(mv).AnyTimes()
 		v.EXPECT().GetExpectedArrival().Return(arrival, now.Add(-vehicle.AdaptivePlansValidity-time.Hour))
 
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
 		assert.Nil(t, got, "stale prediction is not trusted")
 	})
 
@@ -765,11 +779,11 @@ func TestExpectedArrivalDemand(t *testing.T) {
 		v.EXPECT().Instance().Return(mv).AnyTimes()
 		v.EXPECT().GetExpectedArrival().Return(arrival, now)
 
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
 		assert.Nil(t, got)
 	})
 
-	t.Run("confident prediction lands at the right slot", func(t *testing.T) {
+	t.Run("confident prediction lands in a single slot when it fits under the clamp", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mv := newVehicleMock(t, 50) // 50 kWh
 		v := vehicle.NewMockAPI(ctrl)
@@ -778,11 +792,44 @@ func TestExpectedArrivalDemand(t *testing.T) {
 		v.EXPECT().Instance().Return(mv).AnyTimes()
 		v.EXPECT().GetExpectedArrival().Return(arrival, now)
 
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		// 30% of 50kWh = 15kWh = 15000Wh; a 100kW clamp covers that in one 15min slot (25000Wh)
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 100000)
 		require.Len(t, got, 4)
+		assert.Equal(t, []float32{0, 15000, 0, 0}, got, "at slot 1 (12:20 falls in [12:15,12:30))")
+	})
 
-		// 30% of 50kWh = 15kWh = 15000Wh, at slot 1 (12:20 falls in [12:15,12:30))
-		assert.Equal(t, []float32{0, 15000, 0, 0}, got)
+	t.Run("prediction exceeding the per-slot clamp spreads into later slots", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mv := newVehicleMock(t, 50) // 50 kWh
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().Name().Return("car").AnyTimes()
+		v.EXPECT().GetExpectedArrivalLearning().Return(true)
+		v.EXPECT().Instance().Return(mv).AnyTimes()
+		v.EXPECT().GetExpectedArrival().Return(arrival, now)
+
+		// 30% of 50kWh = 15000Wh; a 20kW clamp caps each 15min slot at 5000Wh, so a single
+		// slot (180kW-equivalent, the real regression: 45kWh in one 15min slot implies
+		// 180kW) can never happen - the energy must spread across three slots instead.
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 20000)
+		require.Len(t, got, 4)
+		assert.Equal(t, []float32{0, 5000, 5000, 5000}, got)
+	})
+
+	t.Run("energy left over once the horizon ends is dropped, not wrapped or errored", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mv := newVehicleMock(t, 50) // 50 kWh
+		v := vehicle.NewMockAPI(ctrl)
+		v.EXPECT().Name().Return("car").AnyTimes()
+		v.EXPECT().GetExpectedArrivalLearning().Return(true)
+		v.EXPECT().Instance().Return(mv).AnyTimes()
+		v.EXPECT().GetExpectedArrival().Return(session.ExpectedArrival{TimeOfDay: 12*60 + 20, SocUsed: 90}, now)
+
+		// 90% of 50kWh = 45000Wh; a 20kW clamp only fits 5000Wh/slot across the 3 slots
+		// from the arrival slot to the horizon end (15000Wh total) - the remaining 30000Wh
+		// has nowhere in this request to go and is silently dropped.
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 20000)
+		require.Len(t, got, 4)
+		assert.Equal(t, []float32{0, 5000, 5000, 5000}, got)
 	})
 
 	t.Run("prediction beyond the horizon is not modelled", func(t *testing.T) {
@@ -793,9 +840,33 @@ func TestExpectedArrivalDemand(t *testing.T) {
 		v.EXPECT().Instance().Return(mv).AnyTimes()
 		v.EXPECT().GetExpectedArrival().Return(session.ExpectedArrival{TimeOfDay: 23 * 60, SocUsed: 30}, now)
 
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil)
+		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
 		assert.Nil(t, got, "arrival predicted well past this request's short horizon")
 	})
+}
+
+func TestSpreadDemand(t *testing.T) {
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	timestamps := []time.Time{now, now.Add(15 * time.Minute), now.Add(30 * time.Minute), now.Add(45 * time.Minute)}
+	horizonEnd := now.Add(time.Hour)
+
+	// 20kW clamp over 15min slots (0.25h) caps each slot at 5000Wh
+	demand := make([]float32, 4)
+	placed := spreadDemand(demand, 1, 12000, timestamps, horizonEnd, 20000)
+	assert.Equal(t, float32(12000), placed, "5000 in slot 1, 5000 in slot 2, remaining 2000 in slot 3")
+	assert.Equal(t, []float32{0, 5000, 5000, 2000}, demand)
+
+	// starting at the last slot, only that slot's capacity is available before horizonEnd
+	demand2 := make([]float32, 4)
+	placed2 := spreadDemand(demand2, 3, 12000, timestamps, horizonEnd, 20000)
+	assert.Equal(t, float32(5000), placed2)
+	assert.Equal(t, []float32{0, 0, 0, 5000}, demand2)
+
+	// energy under the clamp lands entirely in the starting slot
+	demand3 := make([]float32, 4)
+	placed3 := spreadDemand(demand3, 0, 3000, timestamps, horizonEnd, 20000)
+	assert.Equal(t, float32(3000), placed3)
+	assert.Equal(t, []float32{3000, 0, 0, 0}, demand3)
 }
 
 func TestBlendMeasured(t *testing.T) {

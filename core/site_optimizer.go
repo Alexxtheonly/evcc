@@ -1129,6 +1129,13 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 	// physically present and modelled as a battery (or as unmodelled load).
 	connected := make(map[api.Vehicle]bool)
 
+	// true when a physically connected loadpoint's vehicle could not be identified. Its
+	// identity being unknown means it could be any of the vehicles considered for an
+	// expected-arrival prediction below, so that prediction has to be suppressed entirely
+	// rather than risk crediting an already-connected vehicle's demand twice - see
+	// expectedArrivalDemand.
+	var unidentifiedConnected bool
+
 	for id, lp := range site.ActiveLoadpoints() {
 		// ignore disconnected loadpoints, including StatusNone
 		if s := lp.GetStatus(); s != api.StatusB && s != api.StatusC {
@@ -1138,6 +1145,8 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		v := lp.GetVehicle()
 		if v != nil {
 			connected[v] = true
+		} else {
+			unidentifiedConnected = true
 		}
 
 		// no vehicle capacity and no session energy limit to model against:
@@ -1171,8 +1180,11 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 
 	// vehicles predicted to return later in the horizon, but not connected anywhere right
 	// now, get modelled as anticipated demand on the same footing as unmodelled loadpoint
-	// load - see expectedArrivalDemand for why this can't be a battery entry.
-	for i, v := range site.expectedArrivalDemand(site.Vehicles().Settings(), minLen, now, details.Timestamps, grid[minLen-1].End, connected) {
+	// load - see expectedArrivalDemand for why this can't be a battery entry. Spread at the
+	// site's own grid import limit when one is configured, since that is a real ceiling on
+	// what can actually be drawn; expectedArrivalDemand falls back to a conservative
+	// default otherwise.
+	for i, v := range site.expectedArrivalDemand(site.Vehicles().Settings(), minLen, now, details.Timestamps, grid[minLen-1].End, connected, unidentifiedConnected, req.Grid.PMaxImp) {
 		req.TimeSeries.Gt[i] += v
 	}
 
@@ -1735,6 +1747,15 @@ func unmodelledPower(lp loadpoint.API) float64 {
 	return max(0, power)
 }
 
+// expectedArrivalFallbackMaxPower bounds how fast a predicted-but-not-yet-connected
+// vehicle's reserved energy is assumed to be able to arrive when the site has no
+// configured circuit limit to derive a tighter bound from - conservative three-phase 16A
+// AC home charging, well below what a single vehicle's onboard charger typically exceeds.
+// expectedArrivalDemand's caller prefers the site's own grid import limit (Grid.PMaxImp)
+// when one is configured, since that is a real, site-specific ceiling on what can actually
+// be drawn; this only covers the unconfigured case.
+const expectedArrivalFallbackMaxPower = 11000 // W
+
 // expectedArrivalDemand returns anticipated home demand (Wh, one entry per slot, nil if
 // there is none to add) for vehicles that are opted into expected-arrival learning, are
 // not currently connected anywhere on the site, and have a confident, still-valid learned
@@ -1743,16 +1764,46 @@ func unmodelledPower(lp loadpoint.API) float64 {
 // This cannot be modelled as a virtual battery: BatteryConfig.CMax is one scalar for the
 // whole horizon (see the optimizer client, e.g. client/types.go), so there is no way to
 // keep a battery entry at zero charge rate before the vehicle actually arrives and open it
-// up only from that slot on. Without that, the solver would happily "pre-charge" a vehicle
-// that in reality has nowhere to receive that energy yet - the same failure mode this
-// feature exists to prevent, just shifted earlier. Adding the anticipated energy straight
-// into Gt (the fixed demand series, the same mechanism unmodelled loadpoint load already
-// uses a few lines up) reserves for it without ever pretending it is a controllable
-// battery: it never enters req.Batteries, so nothing downstream - the optimizer result,
-// applyOptimizerResult, the suggestion/mode logic - can mistake it for a connected
-// vehicle's battery, and it cannot make the request infeasible since Gt is already an
-// uncapped, always-feasible input (a real load spike has the same effect).
-func (site *Site) expectedArrivalDemand(vehicles []vehicle.API, minLen int, now time.Time, timestamps []time.Time, horizonEnd time.Time, connected map[api.Vehicle]bool) []float32 {
+// up only from that slot on - the solver would happily "pre-charge" a vehicle that in
+// reality has nowhere to receive that energy yet, the same failure mode this feature
+// exists to prevent, just shifted earlier. BatteryConfig.SGoal does not fix this either:
+// it only adds a floor on the state of charge at a given future time step
+// (optimizer.py:634-639), it does not zero out the charge rate in the slots before that
+// step, so the same pre-charging failure mode survives unchanged. A virtual entry also has
+// nowhere safe to live downstream: every consumer of req.Batteries (the current-slot
+// suggestion, applyOptimizerResult, mode mapping) assumes each entry is a real, connected
+// device, and a phantom entry with no loadpoint behind it would need every one of those
+// taught to recognize and skip it.
+//
+// So the anticipated energy still goes straight into Gt, the fixed demand series (the same
+// mechanism unmodelled loadpoint load already uses a few lines up): it never enters
+// req.Batteries, so nothing downstream can mistake it for a connected vehicle's battery,
+// and it cannot make the request infeasible since Gt is already an uncapped,
+// always-feasible input (a real load spike has the same effect). What changed is *how* it
+// enters Gt: spread from the predicted arrival slot forward at maxPower per slot rather
+// than dropped into one slot whole. A single slot cannot absorb a real car's worth of
+// energy - 45 kWh in one 15-minute slot implies 180 kW - and Gt is uncapped, so nothing
+// stopped the solver from reporting a plan that assumes it anyway; measured against a
+// p_max_imp of 11 kW that showed up as grid_import_limit_exceeded with 41.25 kWh of
+// overshoot, and pinned the horizon's reported peak for the whole request since the
+// spike outweighs anything attenuate_*_peaks could smooth against.
+func (site *Site) expectedArrivalDemand(vehicles []vehicle.API, minLen int, now time.Time, timestamps []time.Time, horizonEnd time.Time, connected map[api.Vehicle]bool, unidentifiedConnected bool, maxPower float32) []float32 {
+	if unidentifiedConnected {
+		// a physically connected vehicle whose identity the site could not resolve is
+		// already counted as unmodelled load by the caller. Because its identity is
+		// unknown by definition, it could be any one of the vehicles below - crediting one
+		// of them with a predicted arrival on top of that unmodelled load risks double
+		// counting it. There is no signal today that disambiguates "this specific
+		// configured vehicle" from "an unidentified vehicle is plugged in somewhere", so
+		// the safe answer is to model no predicted arrivals at all while this is true,
+		// rather than guess which vehicle it isn't.
+		return nil
+	}
+
+	if maxPower <= 0 {
+		maxPower = expectedArrivalFallbackMaxPower
+	}
+
 	var demand []float32
 
 	for _, v := range vehicles {
@@ -1788,21 +1839,61 @@ func (site *Site) expectedArrivalDemand(vehicles []vehicle.API, minLen int, now 
 		if demand == nil {
 			demand = make([]float32, minLen)
 		}
-		demand[slot] += energy
+		placed := spreadDemand(demand, slot, energy, timestamps, horizonEnd, maxPower)
 
-		site.log.DEBUG.Printf("optimizer: expected arrival %s: %.0fWh at slot %d (%v)", v.Name(), energy, slot, timestamps[slot])
+		site.log.DEBUG.Printf("optimizer: expected arrival %s: %.0fWh from slot %d (%v), capped at %.0fW", v.Name(), placed, slot, timestamps[slot], maxPower)
 	}
 
 	return demand
 }
 
-// nextOccurrence returns the next time minutesAfterMidnight occurs at or after now, today
-// if it hasn't passed yet, otherwise tomorrow.
+// spreadDemand adds energy (Wh) into demand starting at slot, advancing through later
+// slots as needed and capping what lands in any one slot at maxPower (W) so a single
+// prediction never implies a charging rate nothing could physically deliver - see
+// expectedArrivalDemand's doc comment. Returns how much was actually placed; any remainder
+// that would fall beyond the last slot is dropped, the same horizon cutoff arrivalSlot
+// already applies to where the demand starts.
+func spreadDemand(demand []float32, slot int, energy float32, timestamps []time.Time, horizonEnd time.Time, maxPower float32) float32 {
+	var placed float32
+
+	for i := slot; i < len(demand) && energy > 0; i++ {
+		end := horizonEnd
+		if i+1 < len(timestamps) {
+			end = timestamps[i+1]
+		}
+
+		hours := float32(end.Sub(timestamps[i]).Hours())
+		if hours <= 0 {
+			continue
+		}
+
+		take := min(maxPower*hours, energy)
+		demand[i] += take
+		placed += take
+		energy -= take
+	}
+
+	return placed
+}
+
+// nextOccurrence returns the next time minutesAfterMidnight occurs at or after now: today
+// if it hasn't happened yet, or now itself if today's occurrence has already passed
+// without whatever it marks (here, a predicted vehicle arrival) actually happening.
+//
+// Deferring a full day whenever the predicted time has passed - the original behaviour -
+// makes the reservation vanish for the rest of the day at precisely the moment arrival is
+// most likely: TimeOfDay is deliberately the early (0.1) quantile of observed arrivals
+// (see LearnExpectedArrival), so most historical arrivals happened after it, not at it.
+// Pinning to now instead keeps the reservation continuously present - re-anchored to the
+// earliest reachable slot on every request - until either the vehicle actually connects
+// (excluded elsewhere via the connected map) or the calendar day rolls over, at which
+// point this naturally produces a fresh, still-future occurrence for the new day without
+// any special case.
 func nextOccurrence(minutesAfterMidnight int, now time.Time) time.Time {
 	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	t := day.Add(time.Duration(minutesAfterMidnight) * time.Minute)
 	if t.Before(now) {
-		t = t.AddDate(0, 0, 1)
+		return now
 	}
 	return t
 }
