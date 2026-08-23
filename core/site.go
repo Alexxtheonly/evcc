@@ -109,6 +109,8 @@ type Site struct {
 	tariffSlot          time.Time                     // last persisted tariff slot
 	forecastArchiveSlot time.Time                     // last solar forecast lead-time archive slot
 	controlSlot         time.Time                     // last persisted control_slots slot (ADR-011)
+	controlSlotBaseline api.BatteryMode               // AppliedMode sampled for the current control_slot row (ADR-011/F3)
+	controlSlotChanged  bool                          // AppliedMode has already been flagged as having diverged from controlSlotBaseline this slot
 
 	// cached measurement state, guarded by RWMutex
 	siteState
@@ -133,6 +135,14 @@ type Site struct {
 	optimizerChargePrice             float64             // price (currency/kWh) the active charge decision was based on
 	optimizerChargeVetoed            bool                // last run suggested grid charging but a gate declined it
 	optimizerVetoReason              optimizerVetoReason // why the applied mode is not (fully) in effect, for UI annotation
+
+	// optimizerSuggestedMode is what the optimizer derived this run,
+	// independent of any veto or damping (see optimizerDecision.suggestedMode
+	// / setOptimizerBatteryMode) - what persistControlSlot's SuggestedMode
+	// records (ADR-011/F4). Unlike optimizerBatteryMode, this can be
+	// api.BatteryCharge while chargeVetoed is true: that pairing is the
+	// whole point of persisting both.
+	optimizerSuggestedMode api.BatteryMode
 
 	// optimizerHealth is the last published operational status; see publishOptimizerHealth.
 	optimizerHealthOk      bool                  // whether the optimizer is currently producing results
@@ -1342,8 +1352,15 @@ func (site *Site) update(lp updater) {
 
 	// record what was decided and what was actually applied, once per
 	// completed slot (ADR-011) - after updateBatteryMode so GetBatteryMode()
-	// reflects this cycle's applied decision, not the previous one
-	site.persistControlSlot()
+	// reflects this cycle's applied decision, not the previous one. Gated on
+	// the same authorization/enablement check optimizerUpdateAsync itself
+	// gates on: control_slots exists to describe optimizer decisions, and
+	// writing 96 health_ok=false rows/day for a site with the optimizer off
+	// or unlicensed would make "optimizer unhealthy" indistinguishable from
+	// "no optimizer" to any later reader.
+	if sponsor.IsAuthorized() && optimizerEnabled() {
+		site.persistControlSlot()
+	}
 
 	// re-evaluate against the updated loadpoint state
 	site.publishSuggestions()

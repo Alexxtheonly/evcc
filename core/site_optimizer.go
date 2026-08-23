@@ -363,10 +363,23 @@ const (
 
 // optimizerDecision is the vetted outcome of one optimizer run.
 type optimizerDecision struct {
-	mode         api.BatteryMode
+	// mode is the applyable candidate that setOptimizerBatteryMode's state
+	// machine acts on - api.BatteryUnknown when vetoed (vetoReasonPayback) or
+	// batteries disagree (vetoReasonForcedIdle), so a rejected suggestion is
+	// never actually applied.
+	mode api.BatteryMode
+
+	// suggestedMode is what the optimizer derived this run, independent of
+	// any veto - equal to mode except for vetoReasonPayback/vetoReasonForcedIdle,
+	// where mode is forced to api.BatteryUnknown but suggestedMode still
+	// carries the real candidate (F4). This is what control_slots.SuggestedMode
+	// records: showing "charge" alongside veto_reason "payback" is the whole
+	// point of persisting both the suggestion and why it was rejected.
+	suggestedMode api.BatteryMode
+
 	chargeVetoed bool                // a grid charge suggestion was declined by a gate
 	vetoReason   optimizerVetoReason // reason for chargeVetoed, or for mode staying at api.BatteryUnknown
-	price        float64             // price (currency/kWh) underlying a charge decision
+	price        float64             // price (currency/kWh) underlying an accepted charge decision (mode == api.BatteryCharge with no veto)
 }
 
 // gridChargeJustified checks that grid-charging the battery now is worth it: a
@@ -455,20 +468,23 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 		}
 
 		if mode != api.BatteryUnknown && m != mode {
-			// batteries disagree: don't act
-			return optimizerDecision{vetoReason: vetoReasonForcedIdle}
+			// batteries disagree: don't act, but keep the first-encountered
+			// candidate as suggestedMode (F4) - not authoritative since they
+			// disagreed, but still a real, reachable value instead of always
+			// "unknown"
+			return optimizerDecision{suggestedMode: mode, vetoReason: vetoReasonForcedIdle}
 		}
 		mode = m
 	}
 
 	if mode != api.BatteryCharge {
-		return optimizerDecision{mode: mode}
+		return optimizerDecision{mode: mode, suggestedMode: mode}
 	}
 
 	pn := req.TimeSeries.PN
 
 	if !gridChargeJustified(pn) {
-		return optimizerDecision{chargeVetoed: true, vetoReason: vetoReasonPayback}
+		return optimizerDecision{suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPayback}
 	}
 
 	// every controllable home battery's plan must pay the charge back
@@ -477,15 +493,15 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 			continue
 		}
 		if i >= len(req.Batteries) || i >= len(res.Batteries) {
-			return optimizerDecision{chargeVetoed: true, vetoReason: vetoReasonPayback}
+			return optimizerDecision{suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPayback}
 		}
 		if !chargePaybackJustified(pn, res.Batteries[i].StateOfCharge, res.Batteries[i].DischargingPower, req.Batteries[i].SInitial) {
-			return optimizerDecision{chargeVetoed: true, vetoReason: vetoReasonPayback}
+			return optimizerDecision{suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPayback}
 		}
 	}
 
 	// pn is currency/Wh
-	return optimizerDecision{mode: mode, price: float64(pn[0]) * 1e3}
+	return optimizerDecision{mode: mode, suggestedMode: mode, price: float64(pn[0]) * 1e3}
 }
 
 // setOptimizerBatteryMode stores the damped battery-mode decision derived
@@ -523,6 +539,7 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 	site.optimizerBatteryModeUpdated = now
 	site.optimizerChargeVetoed = d.chargeVetoed
 	site.optimizerVetoReason = d.vetoReason
+	site.optimizerSuggestedMode = d.suggestedMode
 
 	switch {
 	case !site.Automatic():
@@ -530,6 +547,7 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 		// the candidate; re-check the flag inside the critical section
 		site.optimizerChargeVetoed = false
 		site.optimizerVetoReason = vetoReasonNone
+		site.optimizerSuggestedMode = api.BatteryUnknown
 		apply(api.BatteryUnknown)
 	case candidate == api.BatteryUnknown:
 		apply(api.BatteryUnknown)
@@ -609,6 +627,20 @@ func (site *Site) publishOptimizerDecision() {
 // ~30s), so the gate is what bounds the table to ~96 rows/day rather than
 // the control loop's own frequency.
 //
+// AppliedMode is a point sample taken on the first tick to observe the new
+// slot - a few seconds into it, not an end-of-slot summary - the same
+// forward-looking convention persistTariffs uses (Timestamp is the slot's
+// start). The applied mode can still change again before the slot ends
+// (confirm delay is 5min; HEMS dimming and external control can also
+// intervene), so every later tick within the same slot compares
+// GetBatteryMode() against that first sample and, the first time it has
+// diverged, flags the row via MarkControlSlotModeChanged. A per-change row
+// was considered and rejected: mode changes are rare by design (the
+// damping/confirm-delay machinery exists specifically to prevent flapping),
+// so the boolean marker costs nothing in the common case, while a
+// per-change row would break the 1-row-per-slot join the rest of the
+// ledger design assumes, for a case that barely occurs.
+//
 // Called after updateBatteryMode so GetBatteryMode() reflects this cycle's
 // applied decision. GetBatteryMode() takes site.RLock() itself, so it is
 // read before this function's own RLock section rather than inside it -
@@ -616,29 +648,45 @@ func (site *Site) publishOptimizerDecision() {
 // a writer arriving between them.
 func (site *Site) persistControlSlot() {
 	slot := time.Now().Truncate(tariff.SlotDuration)
+	applied := site.GetBatteryMode()
 
-	last := site.controlSlot
-	site.controlSlot = slot
-
-	// skip repeat ticks within the slot and the partial boot slot
-	if last.IsZero() || !slot.After(last) {
+	if !slot.After(site.controlSlot) {
+		// still the already-recorded slot: only watch for AppliedMode having
+		// diverged from the row's first sample, nothing new to insert
+		if !site.controlSlot.IsZero() && !site.controlSlotChanged && applied != site.controlSlotBaseline {
+			site.controlSlotChanged = true
+			if err := metrics.MarkControlSlotModeChanged(site.controlSlot); err != nil {
+				site.log.ERROR.Printf("mark control slot mode change: %v", err)
+			}
+		}
 		return
 	}
 
-	applied := site.GetBatteryMode()
+	// entering a new slot: skip the partial boot slot, which the process
+	// didn't observe from the start and so has no meaningful baseline
+	first := site.controlSlot.IsZero()
+	site.controlSlot = slot
+	site.controlSlotBaseline = applied
+	site.controlSlotChanged = false
+	if first {
+		return
+	}
 
 	site.RLock()
-	suggested := site.optimizerBatteryMode
+	suggested := site.optimizerSuggestedMode
 	veto := site.optimizerVetoReason
 	healthOk := site.optimizerHealthOk
 	price := site.optimizerChargePrice
 	site.RUnlock()
 
-	// price only means something alongside an actual charge decision - see
-	// optimizerChargePrice's own doc comment, which the non-charge branches
-	// of setOptimizerBatteryMode already keep at 0 for exactly this reason
+	// price only means something alongside an actually accepted charge
+	// decision - see optimizerChargePrice's own doc comment. suggested can
+	// now be api.BatteryCharge while vetoed (F4), and optimizerChargePrice
+	// is not meaningfully updated for a vetoed run, so the veto must be
+	// checked here too or a payback-vetoed slot would show a stale/zero
+	// price as if it had been the accepted decision's basis.
 	var p *float64
-	if suggested == api.BatteryCharge {
+	if suggested == api.BatteryCharge && veto == vetoReasonNone {
 		p = &price
 	}
 
@@ -797,6 +845,7 @@ func (site *Site) ResetOptimizerBatteryMode() {
 	site.optimizerChargePrice = 0
 	site.optimizerChargeVetoed = false
 	site.optimizerVetoReason = vetoReasonNone
+	site.optimizerSuggestedMode = api.BatteryUnknown
 
 	site.publishOptimizerDecisionLocked()
 }
@@ -882,6 +931,15 @@ func (site *Site) clearSuggestions() {
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
 	site.setOptimizerBatteryMode(optimizerDecision{})
+
+	// F6: the diagnostics of the last successful run must not linger with no
+	// staleness marker once a run fails - newOptimizerDiagnosticsPublish is
+	// only ever published from applyOptimizerResult (i.e. on Optimal/Feasible),
+	// so nothing else clears it. Publishing nil, the same way an absent
+	// suggestion already reads on the wire (see publishSuggestions), is
+	// unambiguous: no current diagnostics, rather than stale numbers with no
+	// indication they are stale.
+	site.publish(keys.OptimizerDiagnostics, nil)
 
 	site.publishBattery()
 	site.publishSuggestions()
@@ -1437,33 +1495,48 @@ var optimizerRunResultStatuses = map[optimizer.OptimizationResultStatus]bool{
 }
 
 // persistOptimizerRun stores the diagnostic outcome of one optimizer run for
-// ADR-011, gated to the same 15min slot boundary as persistTariffs and
-// persistControlSlot: automatic mode calls the optimizer roughly once per
-// control-loop cycle (~30s), so without the gate this would grow far faster
-// than the ~96 rows/day the ledger design accounts for. Called for every
-// completed run regardless of solver outcome - an Infeasible or timed-out run
-// is itself diagnostic information, not something to silently drop.
+// ADR-011. Automatic mode calls the optimizer roughly once per control-loop
+// cycle (~30s, ~30 runs per 15min slot), so a sampled Optimal/Feasible run is
+// gated to the same 15min slot boundary as persistTariffs and
+// persistControlSlot - that is the happy path, and one representative sample
+// per slot is enough. Every other status (Infeasible, solver error, timeout)
+// bypasses the gate entirely and is always recorded at its own real
+// timestamp: those are exactly the failures this table exists to catch, and
+// sampling them the same way as the happy path would mean a solver going
+// Infeasible for ten minutes leaves no trace whenever the slot's first run
+// happened to succeed.
 //
 // Only ever called from optimizerUpdate, itself only reachable while the
 // caller (optimizerUpdateAsync) already holds site.optimizerMu for the whole
 // run - so optimizerRunSlot, like optimizerUpdated beside it, is read and
 // written here without taking the lock again; optimizerMu is a plain
-// sync.Mutex and re-locking it on the same goroutine would deadlock.
+// sync.Mutex and re-locking it on the same goroutine would deadlock. Only the
+// sampled branch touches optimizerRunSlot, so interleaved failure rows never
+// disturb the slot gate for the next sampled success.
 func (site *Site) persistOptimizerRun(status string, res optimizer.OptimizationResult) {
-	slot := time.Now().Truncate(tariff.SlotDuration)
+	now := time.Now()
+	sampled := optimizerRunResultStatuses[optimizer.OptimizationResultStatus(status)]
 
-	last := site.optimizerRunSlot
-	site.optimizerRunSlot = slot
+	ts := now
 
-	// skip repeat ticks within the slot and the partial boot slot
-	if last.IsZero() || !slot.After(last) {
-		return
+	if sampled {
+		slot := now.Truncate(tariff.SlotDuration)
+
+		last := site.optimizerRunSlot
+		site.optimizerRunSlot = slot
+
+		// skip repeat ticks within the slot and the partial boot slot
+		if last.IsZero() || !slot.After(last) {
+			return
+		}
+
+		ts = slot
 	}
 
 	var objective, importOvershoot, exportOvershoot *float64
 	var importLimitExceeded, exportLimitHit *bool
 
-	if optimizerRunResultStatuses[optimizer.OptimizationResultStatus(status)] {
+	if sampled {
 		objective = lo.ToPtr(float64(res.ObjectiveValue))
 		importOvershoot = lo.ToPtr(float64(lo.Sum(res.GridImportOvershoot)))
 		exportOvershoot = lo.ToPtr(float64(lo.Sum(res.GridExportOvershoot)))
@@ -1471,7 +1544,7 @@ func (site *Site) persistOptimizerRun(status string, res optimizer.OptimizationR
 		exportLimitHit = lo.ToPtr(res.LimitViolations.GridExportLimitHit)
 	}
 
-	if err := metrics.PersistOptimizerRun(slot, status, objective, importOvershoot, exportOvershoot, importLimitExceeded, exportLimitHit); err != nil {
+	if err := metrics.PersistOptimizerRun(ts, status, objective, importOvershoot, exportOvershoot, importLimitExceeded, exportLimitHit, sampled); err != nil {
 		site.log.ERROR.Printf("persist optimizer run: %v", err)
 	}
 }

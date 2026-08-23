@@ -1199,6 +1199,7 @@ func TestPersistControlSlotGate(t *testing.T) {
 	site := &Site{log: util.NewLogger("foo")}
 	site.batteryMode = api.BatteryCharge
 	site.optimizerBatteryMode = api.BatteryCharge
+	site.optimizerSuggestedMode = api.BatteryCharge
 	site.optimizerChargePrice = 0.15
 	site.optimizerHealthOk = true
 
@@ -1262,8 +1263,54 @@ func TestPersistControlSlotPriceAbsentWhenNotCharging(t *testing.T) {
 	assert.Nil(t, price)
 }
 
-// TestPersistOptimizerRunGate exercises the ADR-011 optimizer_runs slot gate,
-// same rationale as TestPersistControlSlotGate.
+// TestPersistControlSlotPaybackVetoPreservesSuggestion is the end-to-end
+// counterpart to TestBatteryModeCandidate's payback-veto cases: it exercises
+// the real path (setOptimizerBatteryMode -> persistControlSlot) a payback
+// veto takes in production, confirming the tuple
+// (applied_mode="normal", suggested_mode="charge", veto_reason="payback")
+// is actually reachable (F4) - and that its price stays absent, since the
+// suggestion was never accepted (F4's price-gate correction).
+func TestPersistControlSlotPaybackVetoPreservesSuggestion(t *testing.T) {
+	// enableAutomatic must run after db.NewInstance: server/db/settings'
+	// migration reloads the in-memory settings cache from the (fresh, empty)
+	// database and would otherwise wipe out the flags it just set
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+	enableAutomatic(t)
+
+	site := &Site{log: util.NewLogger("foo")}
+	site.batteryMode = api.BatteryNormal
+
+	site.setOptimizerBatteryMode(optimizerDecision{
+		suggestedMode: api.BatteryCharge,
+		chargeVetoed:  true,
+		vetoReason:    vetoReasonPayback,
+	})
+
+	site.controlSlot = site.controlSlot.Add(-tariff.SlotDuration)
+	site.persistControlSlot()
+
+	var appliedMode, suggestedMode, vetoReason string
+	var price *float64
+	require.NoError(t, db.Instance.Raw(
+		"SELECT applied_mode, suggested_mode, veto_reason, price FROM control_slots",
+	).Row().Scan(&appliedMode, &suggestedMode, &vetoReason, &price))
+
+	assert.Equal(t, api.BatteryNormal.String(), appliedMode, "nothing was applied")
+	assert.Equal(t, api.BatteryCharge.String(), suggestedMode, "the rejected suggestion is still visible")
+	assert.Equal(t, string(vetoReasonPayback), vetoReason)
+	assert.Nil(t, price, "an unaccepted suggestion carries no price")
+}
+
+// TestPersistOptimizerRunGate exercises the ADR-011 optimizer_runs slot gate.
+// Only the sampled Optimal/Feasible path is deduped to one row per slot, the
+// same partial-boot-slot skip and repeat-tick dedup as persistTariffs -
+// that's the happy path, and one representative sample per slot is enough.
+// Every other status bypasses the gate and is always recorded (F2): a solver
+// going Infeasible after an already-sampled Optimal run in the same slot
+// must still leave a row, or the exact failure this table exists to catch
+// (a solver going bad for minutes at a time) would vanish whenever the
+// slot's first run happened to succeed.
 func TestPersistOptimizerRunGate(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, metrics.SetupSchema())
@@ -1289,21 +1336,41 @@ func TestPersistOptimizerRunGate(t *testing.T) {
 
 	site.optimizerRunSlot = site.optimizerRunSlot.Add(-tariff.SlotDuration)
 	site.persistOptimizerRun("Optimal", res)
-	assert.Equal(t, int64(1), countRows())
+	assert.Equal(t, int64(1), countRows(), "the slot's first Optimal run is sampled")
 
-	// still gated even though the outcome (and hence the row's contents)
-	// would differ - the gate is purely time-based
+	// a later Optimal run in the same slot is still deduped - the happy path
+	// stays at one row per slot
+	site.persistOptimizerRun("Optimal", res)
+	assert.Equal(t, int64(1), countRows(), "a later Optimal run in the same slot is not a fresh sample")
+
+	// an Infeasible run right after: not dropped as a "duplicate" of the
+	// slot - this is the F2 failure mode itself. A second, real-timestamped
+	// Infeasible run landing its own row (rather than colliding with the
+	// first) is covered at the mechanical layer by
+	// TestPersistOptimizerRunDistinctTimestamps, where the calls are given
+	// deliberate timestamp separation; two calls made back to back here would
+	// land in the same wall-clock second and legitimately collide (see
+	// TestPersistOptimizerRunNonSampledCollisionUpdates).
 	site.persistOptimizerRun("Infeasible", res)
-	assert.Equal(t, int64(1), countRows())
+	assert.Equal(t, int64(2), countRows(), "a non-Optimal run always gets its own row")
 
-	var status string
-	var objective *float64
+	var rows []struct {
+		Status         string
+		ObjectiveValue *float64
+	}
 	require.NoError(t, db.Instance.Raw(
-		"SELECT status, objective_value FROM optimizer_runs",
-	).Row().Scan(&status, &objective))
-	assert.Equal(t, "Optimal", status)
-	require.NotNil(t, objective)
-	assert.InDelta(t, 2.5, *objective, 0.001)
+		"SELECT status, objective_value FROM optimizer_runs ORDER BY ts",
+	).Scan(&rows).Error)
+	require.Len(t, rows, 2)
+
+	assert.Equal(t, "Optimal", rows[0].Status)
+	require.NotNil(t, rows[0].ObjectiveValue)
+	assert.InDelta(t, 2.5, *rows[0].ObjectiveValue, 0.001)
+
+	for _, r := range rows[1:] {
+		assert.Equal(t, "Infeasible", r.Status)
+		assert.Nil(t, r.ObjectiveValue)
+	}
 }
 
 // TestPersistOptimizerRunInfeasibleHasNoDiagnostics asserts that a run which

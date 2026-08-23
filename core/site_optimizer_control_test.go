@@ -96,16 +96,20 @@ func TestBatteryModeCandidate(t *testing.T) {
 		expected    optimizerDecision
 	}{
 		{"no batteries", nil, nil, optimizerDecision{}},
-		{"hold", map[string]types.Suggestion{"battery:a": {Action: "hold"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryHold}},
-		{"holdcharge", map[string]types.Suggestion{"battery:a": {Action: "holdcharge"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryHoldCharge}},
-		{"normal", map[string]types.Suggestion{"battery:a": {Action: "normal"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryNormal}},
-		{"discharge maps to normal", map[string]types.Suggestion{"battery:a": {Action: "discharge"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryNormal}},
-		{"charge with spread and payback", map[string]types.Suggestion{"battery:a": {Action: "charge"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryCharge, price: 0.2}},
-		{"conflict", map[string]types.Suggestion{"battery:a": {Action: "hold"}, "battery:b": {Action: "normal"}}, []batteryDetail{bat("a"), bat("b")}, optimizerDecision{vetoReason: vetoReasonForcedIdle}},
+		{"hold", map[string]types.Suggestion{"battery:a": {Action: "hold"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryHold, suggestedMode: api.BatteryHold}},
+		{"holdcharge", map[string]types.Suggestion{"battery:a": {Action: "holdcharge"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryHoldCharge, suggestedMode: api.BatteryHoldCharge}},
+		{"normal", map[string]types.Suggestion{"battery:a": {Action: "normal"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryNormal, suggestedMode: api.BatteryNormal}},
+		{"discharge maps to normal", map[string]types.Suggestion{"battery:a": {Action: "discharge"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryNormal, suggestedMode: api.BatteryNormal}},
+		{"charge with spread and payback", map[string]types.Suggestion{"battery:a": {Action: "charge"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryCharge, suggestedMode: api.BatteryCharge, price: 0.2}},
+		// F4: batteries disagree, so mode stays Unknown (nothing applied), but
+		// suggestedMode still carries the first-encountered candidate rather
+		// than always reading "unknown"
+		{"conflict", map[string]types.Suggestion{"battery:a": {Action: "hold"}, "battery:b": {Action: "normal"}}, []batteryDetail{bat("a"), bat("b")}, optimizerDecision{suggestedMode: api.BatteryHold, vetoReason: vetoReasonForcedIdle}},
 		{"vehicle ignored", map[string]types.Suggestion{"loadpoint:0": {Action: "charge"}}, []batteryDetail{vehicle}, optimizerDecision{}},
 	} {
 		d := batteryModeCandidate(tc.suggestions, req, res, tc.details)
 		assert.Equal(t, tc.expected.mode, d.mode, tc.name)
+		assert.Equal(t, tc.expected.suggestedMode, d.suggestedMode, tc.name)
 		assert.Equal(t, tc.expected.chargeVetoed, d.chargeVetoed, tc.name)
 		assert.Equal(t, tc.expected.vetoReason, d.vetoReason, tc.name)
 		assert.InDelta(t, tc.expected.price, d.price, 1e-6, tc.name)
@@ -114,10 +118,14 @@ func TestBatteryModeCandidate(t *testing.T) {
 	charge := map[string]types.Suggestion{"battery:a": {Action: "charge"}}
 	details := []batteryDetail{bat("a")}
 
-	// charge is vetoed when the spread cannot recover the round-trip losses
+	// charge is vetoed when the spread cannot recover the round-trip losses.
+	// F4: mode stays Unknown (nothing is applied), but suggestedMode still
+	// reads "charge" - the pairing control_slots.SuggestedMode/VetoReason
+	// needs to make the rejected suggestion auditable, not just the veto.
 	flatReq, flatRes := chargeReqRes([]float32{0.0002, 0.0002}, 5000, []float32{6375, 4990}, []float32{0, 1375})
 	d := batteryModeCandidate(charge, flatReq, flatRes, details)
 	assert.Equal(t, api.BatteryUnknown, d.mode, "charge without spread")
+	assert.Equal(t, api.BatteryCharge, d.suggestedMode, "charge without spread: suggestion preserved")
 	assert.True(t, d.chargeVetoed, "charge without spread sets veto")
 	assert.Equal(t, vetoReasonPayback, d.vetoReason)
 
@@ -126,11 +134,13 @@ func TestBatteryModeCandidate(t *testing.T) {
 	thinReq, thinRes := chargeReqRes([]float32{0.0002, 0.00025}, 5000, []float32{6375, 4990}, []float32{0, 1375})
 	d = batteryModeCandidate(charge, thinReq, thinRes, details)
 	assert.Equal(t, api.BatteryUnknown, d.mode, "thin payback")
+	assert.Equal(t, api.BatteryCharge, d.suggestedMode, "thin payback: suggestion preserved")
 	assert.True(t, d.chargeVetoed, "thin payback sets veto")
 
 	// missing battery results cannot justify a charge
 	d = batteryModeCandidate(charge, optimizer.OptimizationInput{TimeSeries: optimizer.TimeSeries{PN: pn}}, optimizer.OptimizationResult{}, details)
 	assert.Equal(t, api.BatteryUnknown, d.mode, "missing results")
+	assert.Equal(t, api.BatteryCharge, d.suggestedMode, "missing results: suggestion preserved")
 	assert.True(t, d.chargeVetoed, "missing results set veto")
 }
 

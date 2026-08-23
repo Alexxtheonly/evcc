@@ -16,14 +16,25 @@ import (
 type controlSlot struct {
 	Timestamp int64 `gorm:"column:ts;uniqueIndex"` // 15min slot boundary
 
-	// AppliedMode is site.GetBatteryMode() at the end of the slot: the mode
-	// actually in effect, after any veto or damping already took place.
+	// AppliedMode is site.GetBatteryMode() as observed shortly after the slot
+	// began (the first control-loop tick to cross the boundary) - a point
+	// sample taken seconds into the slot, not an end-of-slot summary. Same
+	// forward-looking convention as persistTariffs: Timestamp is the slot's
+	// start, not its end.
 	AppliedMode string `gorm:"column:applied_mode"`
 
-	// SuggestedMode is the optimizer's vetted decision for the slot (the
-	// confirmed candidate, not a raw per-run suggestion - see
-	// setOptimizerBatteryMode), before any downstream override such as HEMS
-	// dimming.
+	// ModeChanged is true if AppliedMode was observed to differ from this
+	// row's own sample at least once later in the slot (see
+	// site.persistControlSlot). AppliedMode itself is only ever the one
+	// point sample taken at slot start - a reader must not assume it held
+	// for the whole 15 minutes when this is true.
+	ModeChanged bool `gorm:"column:mode_changed"`
+
+	// SuggestedMode is what the optimizer derived this run, independent of
+	// any veto (see optimizerDecision.suggestedMode / setOptimizerBatteryMode),
+	// before any downstream override such as HEMS dimming. "charge" alongside
+	// VetoReason "payback" is expected and is the whole point of persisting
+	// both: the suggestion that was rejected, and why.
 	SuggestedMode string `gorm:"column:suggested_mode"`
 
 	// VetoReason explains why AppliedMode and SuggestedMode differ, empty
@@ -37,11 +48,11 @@ type controlSlot struct {
 	HealthOk bool `gorm:"column:health_ok"`
 
 	// Price is the price (currency/kWh) the suggested charge decision was
-	// based on. Nil unless SuggestedMode was an active grid-charge decision -
-	// a charge can legitimately be justified at a price of zero or below
-	// (see gridChargeJustified), so 0 cannot double as "no price recorded"
-	// without silently discarding exactly the free/negative-price slots the
-	// ledger most needs to see.
+	// based on. Nil unless SuggestedMode was an accepted (non-vetoed)
+	// grid-charge decision - a charge can legitimately be justified at a
+	// price of zero or below (see gridChargeJustified), so 0 cannot double
+	// as "no price recorded" without silently discarding exactly the
+	// free/negative-price slots the ledger most needs to see.
 	Price *float64 `gorm:"column:price"`
 }
 
@@ -55,6 +66,10 @@ func (controlSlot) TableName() string {
 // should be none, given the caller's own slot gate) are silently ignored
 // rather than overwriting it.
 func PersistControlSlot(ts time.Time, appliedMode, suggestedMode, vetoReason string, healthOk bool, price *float64) error {
+	if db.Instance == nil {
+		return nil
+	}
+
 	return db.Instance.Clauses(clause.OnConflict{DoNothing: true}).Create(&controlSlot{
 		Timestamp:     ts.Unix(),
 		AppliedMode:   appliedMode,
@@ -63,4 +78,17 @@ func PersistControlSlot(ts time.Time, appliedMode, suggestedMode, vetoReason str
 		HealthOk:      healthOk,
 		Price:         price,
 	}).Error
+}
+
+// MarkControlSlotModeChanged flags an already-persisted slot's row as having
+// seen the applied mode diverge from its initial sample later in the slot
+// (see ModeChanged and site.persistControlSlot). A no-op if the row does not
+// exist (e.g. legacy data, or called with a stale slot) - there is nothing
+// to flag on a row that was never written.
+func MarkControlSlotModeChanged(ts time.Time) error {
+	if db.Instance == nil {
+		return nil
+	}
+
+	return db.Instance.Model(new(controlSlot)).Where("ts = ?", ts.Unix()).Update("mode_changed", true).Error
 }
