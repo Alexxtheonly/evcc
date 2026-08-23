@@ -103,7 +103,7 @@ func (t *Solcast) run(interval time.Duration, done chan error) {
 
 		once.Do(func() { close(done) })
 
-		mergeRatesAfter(t.data, solcastRates(res.Forecasts), beginningOfDay())
+		mergeRatesAfter(t.data, solcastRates(res.Forecasts, t.log), beginningOfDay())
 		once.Do(func() { close(done) })
 	}
 }
@@ -111,10 +111,24 @@ func (t *Solcast) run(interval time.Duration, done chan error) {
 // solcastRates converts Solcast's forecast periods to rates, preserving their native
 // resolution (e.g. 30 minutes) instead of collapsing them to hourly buckets. SlotWrapper
 // takes care of expanding sub-hourly slots to the common 15-minute grid.
-func solcastRates(forecasts []solcast.Forecast) api.Rates {
+//
+// Period is load-bearing: Start is derived from PeriodEnd minus Period, so a zero or
+// negative Period collapses that entry to a zero-length or inverted rate. SlotWrapper
+// would then turn it into a single stray 15-minute slot at PeriodEnd, silently dropping
+// the rest of that entry's actual horizon and shifting every following entry's apparent
+// timing. An entry missing "period" in the response unmarshals to a zero Duration (Go
+// skips UnmarshalJSON for an absent key), so this cannot be assumed always-set even
+// though the field is always present in Solcast's documented response shape - entries
+// with an unusable Period are dropped rather than fed to SlotWrapper.
+func solcastRates(forecasts []solcast.Forecast, log *util.Logger) api.Rates {
 	data := make(api.Rates, 0, len(forecasts))
 
 	for _, r := range forecasts {
+		if r.Period.Duration() <= 0 {
+			log.WARN.Printf("solcast: dropping forecast entry with unusable period %v at %v", r.Period.Duration(), r.PeriodEnd)
+			continue
+		}
+
 		end := r.PeriodEnd.Local()
 		data = append(data, api.Rate{
 			Start: end.Add(-r.Period.Duration()),
