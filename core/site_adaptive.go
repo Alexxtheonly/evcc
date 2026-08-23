@@ -90,8 +90,16 @@ func (site *Site) updateExpectedArrival(v vehicle.API, sessions session.Sessions
 		next = *learned
 	}
 
-	current, _ := v.GetExpectedArrival()
-	if next == current {
+	current, updated := v.GetExpectedArrival()
+	// SetExpectedArrival is the only place that stamps Updated, and
+	// expectedArrivalDemand distrusts a prediction once it is older than
+	// vehicle.AdaptivePlansValidity - so a stable, still-correct prediction that keeps
+	// re-learning the same value would never get re-stamped and would silently go stale
+	// after that window, exactly the routine, repeating case this feature targets. Forcing
+	// a re-write once the stored copy is comfortably past half that window keeps the
+	// original goal (skip writes/publishes for no reason) while guaranteeing it never
+	// actually expires out from under a still-valid prediction.
+	if next == current && time.Since(updated) < vehicle.AdaptivePlansValidity/2 {
 		return
 	}
 
