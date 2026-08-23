@@ -150,17 +150,6 @@ func TestSitePowerBatteryBufferRelaxedByForecast(t *testing.T) {
 	})
 }
 
-// TestGetTariffNilTariffs guards a Site that has not been through Configure yet (tariffs
-// still nil, e.g. a loadpoint control cycle running before setup completes): GetTariff must
-// report "not configured" rather than panicking, since core/loadpoint.go's
-// effectiveDisableDelay calls it every PV-mode cycle.
-func TestGetTariffNilTariffs(t *testing.T) {
-	site := &Site{log: util.NewLogger("foo")}
-	assert.NotPanics(t, func() {
-		assert.Nil(t, site.GetTariff(api.TariffUsageSolar))
-	})
-}
-
 func TestGreenShare(t *testing.T) {
 	tc := []struct {
 		title                                                 string

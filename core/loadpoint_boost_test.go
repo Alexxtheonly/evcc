@@ -18,7 +18,6 @@ type mockSite struct {
 	residualPower     float64
 	optimized         int
 	automatic         bool
-	tariff            api.Tariff
 }
 
 func (m *mockSite) Optimize() {
@@ -35,10 +34,6 @@ func (m *mockSite) GetBatteryMaxDischargePower() *float64 {
 
 func (m *mockSite) GetResidualPower() float64 {
 	return m.residualPower
-}
-
-func (m *mockSite) GetTariff(api.TariffUsage) api.Tariff {
-	return m.tariff
 }
 
 func TestBoostPower(t *testing.T) {
