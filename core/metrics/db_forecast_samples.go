@@ -5,7 +5,6 @@ import (
 
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
-	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -33,11 +32,9 @@ func (forecastSample) TableName() string {
 	return "forecast_samples"
 }
 
-func init() {
-	db.Register(func(_ *gorm.DB) error {
-		return db.Instance.AutoMigrate(new(forecastSample))
-	})
-}
+// schema migration for forecastSample lives in SetupSchema (db.go), the test
+// entry point, not in its own init/db.Register - a test that only calls
+// SetupSchema must still get this table.
 
 // ArchiveForecastSample snapshots, for each of forecastLeadTimes, the forecast
 // energy of the slot that is currently that far ahead of now. energyAt is called
