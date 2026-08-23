@@ -89,6 +89,28 @@ func TestSettingsHistoryWithoutDatabase(t *testing.T) {
 	assert.Equal(t, "bar", v)
 }
 
+// TestSettingsHistoryDelete asserts F1's second half: deleting a key must
+// leave a trace, or a replay has no way to tell "still at its last value"
+// apart from "removed at time T" - both look identical from the surviving
+// write rows alone.
+func TestSettingsHistoryDelete(t *testing.T) {
+	setupHistoryTest(t)
+
+	SetString("foo", "bar")
+	require.NoError(t, Delete("foo"))
+
+	rows := history(t, "foo")
+	require.Len(t, rows, 2)
+
+	assert.True(t, rows[1].Deleted)
+	require.NotNil(t, rows[1].Old)
+	assert.Equal(t, "bar", *rows[1].Old)
+
+	// deleting a key that was never set is a no-op, not a fabricated removal
+	require.NoError(t, Delete("never-set"))
+	assert.Empty(t, history(t, "never-set"))
+}
+
 func TestSettingsHistoryIndependentKeys(t *testing.T) {
 	setupHistoryTest(t)
 

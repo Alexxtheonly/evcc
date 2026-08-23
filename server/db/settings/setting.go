@@ -39,12 +39,18 @@ type setting struct {
 // Old is nil for a key's first-ever write - "the key did not exist yet" and
 // "the key existed with an empty value" are different facts, and collapsing
 // them into "" would erase exactly the distinction this table exists for.
+//
+// Deleted marks a row that records a key's removal rather than a write - New
+// is meaningless ("") on such a row. Without this, a deleted key would read
+// as "still at its last value forever" to any later replay, since there
+// would be no row at all marking the point after which it no longer applied.
 type settingHistory struct {
 	ID        uint    `gorm:"primarykey"`
 	Timestamp int64   `json:"ts" gorm:"column:ts;index"`
 	Key       string  `json:"key" gorm:"column:key;index"`
 	Old       *string `json:"old" gorm:"column:old"`
 	New       string  `json:"new" gorm:"column:new"`
+	Deleted   bool    `json:"deleted,omitempty" gorm:"column:deleted"`
 }
 
 func (settingHistory) TableName() string {
@@ -66,25 +72,38 @@ func init() {
 	})
 }
 
-// recordHistory appends a settings_history row for a value actually written by
-// SetString. Called with mu already held, so the change to the in-memory
-// settings slice and its history entry can never be observed out of order by
-// a concurrent reader. A nil db.Instance (unit tests exercising SetString/
-// String in isolation, without a database) is a silent no-op, matching the
-// test guard used throughout this codebase for optional persistence.
-func recordHistory(key string, old *string, val string) {
+// persistHistory writes one already-built settings_history row. A nil
+// db.Instance (unit tests exercising SetString/String in isolation, without a
+// database) is a silent no-op, matching the test guard used throughout this
+// codebase for optional persistence.
+//
+// Must be called without mu held. SetString and Delete build the row while
+// mu is locked (so it reflects exactly the mutation that just happened, with
+// no window for another writer to interleave), then unlock before calling
+// this - settings.String() is read on the control-loop path (see
+// core/vehicle/adapter.go), and a contended sqlite insert can hold a mutex
+// for the length of its busy_timeout, which would otherwise stall every
+// other settings reader/writer in the process for as long as this write is
+// blocked, not just for the fraction of that time the insert itself needs.
+func persistHistory(h settingHistory) {
 	if db.Instance == nil {
 		return
 	}
 
-	if err := db.Instance.Create(&settingHistory{
-		Timestamp: time.Now().Unix(),
-		Key:       key,
-		Old:       old,
-		New:       val,
-	}).Error; err != nil {
+	if err := db.Instance.Create(&h).Error; err != nil {
 		log.ERROR.Printf("persist settings history: %v", err)
 	}
+}
+
+// RecordHistory appends a settings_history row for a value written by a
+// Settings implementation other than this package's own SetString -
+// currently core/settings.ConfigSettings, which persists database-configured
+// loadpoints through the configs table (conf.Update) rather than through
+// SetString, and would otherwise be entirely invisible to the audit trail
+// this table exists for (ADR-011). Callers own their own dedup check; unlike
+// SetString, every call here writes a row unconditionally.
+func RecordHistory(key string, old *string, val string) {
+	persistHistory(settingHistory{Timestamp: time.Now().Unix(), Key: key, Old: old, New: val})
 }
 
 func Persist() error {
@@ -125,33 +144,52 @@ func equal(key string) func(setting) bool {
 
 func Delete(key string) error {
 	mu.Lock()
-	defer mu.Unlock()
 
-	if idx := slices.IndexFunc(settings, equal(key)); idx >= 0 {
-		if err := db.Instance.Delete(setting{
-			Key: settings[idx].Key,
-		}).Error; err != nil {
-			return err
-		}
-
-		settings = slices.Delete(settings, idx, idx+1)
+	idx := slices.IndexFunc(settings, equal(key))
+	if idx < 0 {
+		mu.Unlock()
+		return nil
 	}
+
+	old := settings[idx].Key
+	oldVal := settings[idx].Value
+
+	if err := db.Instance.Delete(setting{Key: old}).Error; err != nil {
+		mu.Unlock()
+		return err
+	}
+
+	settings = slices.Delete(settings, idx, idx+1)
+
+	mu.Unlock()
+
+	// record the removal itself - without this a deleted key reads as "still
+	// at its last value forever" to any later replay, since nothing marks
+	// the point after which it stopped applying
+	persistHistory(settingHistory{Timestamp: time.Now().Unix(), Key: key, Old: &oldVal, Deleted: true})
 
 	return nil
 }
 
 func SetString(key string, val string) {
 	mu.Lock()
-	defer mu.Unlock()
+
+	var h *settingHistory
 
 	if idx := slices.IndexFunc(settings, equal(key)); idx < 0 {
 		settings = append(settings, setting{true, key, val})
-		recordHistory(key, nil, val)
+		h = &settingHistory{Timestamp: time.Now().Unix(), Key: key, New: val}
 	} else if settings[idx].Value != val {
 		old := settings[idx].Value
 		settings[idx].dirty = true
 		settings[idx].Value = val
-		recordHistory(key, &old, val)
+		h = &settingHistory{Timestamp: time.Now().Unix(), Key: key, Old: &old, New: val}
+	}
+
+	mu.Unlock()
+
+	if h != nil {
+		persistHistory(*h)
 	}
 }
 
