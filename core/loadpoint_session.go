@@ -101,7 +101,15 @@ func (lp *Loadpoint) stopSession() {
 		return
 	}
 
-	// abort the session if charging has never started
+	// abort the session if charging has never started - Connected (F7,
+	// ADR-011) is set on the in-memory session as soon as the vehicle plugs
+	// in, but is never persisted for a session that aborts here: a plug-in
+	// that never led to a charge (declined by a schedule, cost limit, or the
+	// user) leaves no trace at all, upstream behaviour this fork
+	// deliberately does not change (wide blast radius - it would also affect
+	// every other consumer of session history, not just the ledger). This is
+	// a known gap in what the savings ledger can answer: "it could have
+	// charged and didn't" is exactly the case with no record.
 	if s.Created.IsZero() {
 		return
 	}
