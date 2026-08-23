@@ -54,12 +54,27 @@ func NewMergedFromConfig(ctx context.Context, other map[string]any) (api.Tariff,
 	return t, nil
 }
 
+// markForecast returns a clone of rates with Forecast set, so the caller's own cached
+// slice (e.g. the secondary tariff's) is never mutated in place.
+func markForecast(rates api.Rates) api.Rates {
+	marked := slices.Clone(rates)
+	for i := range marked {
+		marked[i].Forecast = true
+	}
+	return marked
+}
+
 // Rates implements the api.Tariff interface
 func (t *Merged) Rates() (api.Rates, error) {
 	result, err := t.primary.Rates()
 	if err != nil {
+		// primary failed entirely, so every returned rate is a secondary prediction
 		t.log.DEBUG.Printf("primary tariff failed, falling back to secondary: %v", err)
-		return t.secondary.Rates()
+		secondaryRates, err := t.secondary.Rates()
+		if err != nil {
+			return nil, err
+		}
+		return markForecast(secondaryRates), nil
 	}
 
 	secondaryRates, err := t.secondary.Rates()
@@ -68,9 +83,9 @@ func (t *Merged) Rates() (api.Rates, error) {
 		return result, nil
 	}
 
-	// If primary is empty, use all secondary rates
+	// If primary is empty, every returned rate is again a secondary prediction
 	if len(result) == 0 {
-		return secondaryRates, nil
+		return markForecast(secondaryRates), nil
 	}
 
 	// Find where primary data ends and append secondary rates starting there
@@ -80,11 +95,7 @@ func (t *Merged) Rates() (api.Rates, error) {
 	}); found {
 		// mark the gap-filled tail as forecast so consumers can tell a settled price
 		// from a prediction beyond the primary tariff's known horizon
-		gap := slices.Clone(secondaryRates[idx:])
-		for i := range gap {
-			gap[i].Forecast = true
-		}
-		return append(result, gap...), nil
+		return append(result, markForecast(secondaryRates[idx:])...), nil
 	}
 
 	t.log.WARN.Printf("secondary tariff does not align gapless with primary, ignoring secondary")

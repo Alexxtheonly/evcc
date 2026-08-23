@@ -80,7 +80,16 @@ func TestMergedPrimaryFailure(t *testing.T) {
 
 	rates, err := ext.Rates()
 	require.NoError(t, err)
-	assert.Equal(t, secondaryRates, rates)
+
+	// primary is entirely unavailable, so every rate served is a secondary prediction
+	expected := api.Rates{
+		{Start: now, End: now.Add(time.Hour), Value: 0.20, Forecast: true},
+		{Start: now.Add(time.Hour), End: now.Add(2 * time.Hour), Value: 0.22, Forecast: true},
+	}
+	assert.Equal(t, expected, rates)
+
+	// the secondary tariff's own cached rates must not be mutated by marking the copy
+	assert.False(t, secondaryRates[0].Forecast, "secondary source rates must stay untouched")
 }
 
 func TestMergedSecondaryFailure(t *testing.T) {
@@ -119,8 +128,16 @@ func TestMergedEmptyPrimary(t *testing.T) {
 	rates, err := ext.Rates()
 	require.NoError(t, err)
 
-	// With empty primary, all secondary rates should be included
-	assert.Equal(t, secondaryRates, rates)
+	// With empty primary, all secondary rates should be included, marked as forecast since
+	// none of them are backed by the primary's settled data
+	expected := api.Rates{
+		{Start: now, End: now.Add(time.Hour), Value: 0.20, Forecast: true},
+		{Start: now.Add(time.Hour), End: now.Add(2 * time.Hour), Value: 0.22, Forecast: true},
+	}
+	assert.Equal(t, expected, rates)
+
+	// the secondary tariff's own cached rates must not be mutated by marking the copy
+	assert.False(t, secondaryRates[0].Forecast, "secondary source rates must stay untouched")
 }
 
 func TestMergedType(t *testing.T) {
