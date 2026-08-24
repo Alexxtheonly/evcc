@@ -227,7 +227,7 @@ func TestDecisionDeltasFoldsUnknownAgainstNormal(t *testing.T) {
 	}
 
 	from, to := base, base.Add(45*time.Minute)
-	set, err := buildLedgerSlots(context.Background(), from, to, true, true)
+	set, err := buildLedgerSlots(context.Background(), from, to, true, true, nil)
 	require.NoError(t, err)
 	phys, err := deriveBatteryPhysics(context.Background())
 	require.NoError(t, err)
