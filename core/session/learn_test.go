@@ -1,6 +1,7 @@
 package session
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -173,4 +174,113 @@ func TestLearnSocCap(t *testing.T) {
 	for _, p := range LearnRepeatingPlans(sessions, learnNow) {
 		assert.LessOrEqual(t, p.Soc, 80, "target capped")
 	}
+}
+
+// departuresAtMinutes builds one validated departure per day, at the given minute of day,
+// newest first. Times are exact minutes with zero seconds: departures() screens clusters of
+// five or more identical wall-clock seconds as automation artifacts, and every entry here
+// has a distinct minute, so nothing is screened.
+func departuresAtMinutes(mins []int) Sessions {
+	var res Sessions
+	for i, m := range mins {
+		d := learnNow.AddDate(0, 0, -i-1)
+		dep := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC).Add(time.Duration(m) * time.Minute)
+		socEnd, socStart := 80.0, 60.0
+		res = append(res,
+			Session{Created: dep.Add(-6 * time.Hour), Disconnected: &dep, Vehicle: "car", SocEnd: &socEnd},
+			Session{Created: dep.Add(8 * time.Hour), Vehicle: "car", SocStart: &socStart},
+		)
+	}
+	return res
+}
+
+func TestUnwrapMinutesOfDay(t *testing.T) {
+	// cluster spanning midnight: 00:15 unwraps to 24:15 (1455) so it sorts after 23:30
+	// instead of before it
+	wrapped := []float64{15, 1410, 1410, 1425}
+	got := unwrapMinutesOfDay(wrapped)
+	assert.Equal(t, []float64{1410, 1410, 1425, 1455}, got)
+
+	// no midnight crossing: the largest gap is the wrap itself, values pass through
+	notWrapped := []float64{600, 610, 620}
+	assert.Equal(t, notWrapped, unwrapMinutesOfDay(notWrapped))
+
+	// fewer than 2 values: nothing to unwrap
+	assert.Equal(t, []float64{700}, unwrapMinutesOfDay([]float64{700}))
+	assert.Equal(t, []float64{}, unwrapMinutesOfDay([]float64{}))
+}
+
+// TestLearnRepeatingPlansMidnightWrap pins the fix for a vehicle whose departures straddle
+// midnight. quantile interpolates linearly, so a weekday bucket holding values from both
+// sides of the 0/1440 seam is bimodal and the interpolated 0.1 quantile lands in the empty
+// middle of the day - a ready-by time the vehicle has never once departed at. Without the
+// unwrap this fixture produces plans at 00:00, 09:15 and 11:45 for a driver who always
+// leaves within half an hour of midnight.
+//
+// 40 consecutive days is deliberate: it puts five or six samples in every weekday bucket,
+// clearing learnMinWeekdaySamples so the per-weekday path is used rather than the pooled
+// fallback. That per-weekday path is where the fabrication happens.
+func TestLearnRepeatingPlansMidnightWrap(t *testing.T) {
+	var mins []int
+	for m := 1410; m <= 1439; m++ { // 23:30 .. 23:59
+		mins = append(mins, m)
+	}
+	for m := range 10 { // 00:00 .. 00:09
+		mins = append(mins, m)
+	}
+
+	plans := LearnRepeatingPlans(departuresAtMinutes(mins), learnNow)
+	require.Len(t, plans, 1, "one habit must produce one plan, not one per side of midnight")
+
+	// unwrapped, the 40 values are the contiguous run 1410..1449. quantile(0.1) takes
+	// pos = 0.1*39 = 3.9, i.e. 0.1*res[3] + 0.9*res[4] = 0.1*1413 + 0.9*1414 = 1413.9,
+	// truncated to 1413, %1440 unchanged, floored to the quarter hour = 1410 = 23:30
+	assert.Equal(t, "23:30", plans[0].Time)
+
+	for _, p := range plans {
+		require.NotEmpty(t, p.Weekdays)
+
+		hhmm, err := time.Parse("15:04", p.Time)
+		require.NoError(t, err, "learned time must be a valid time of day")
+
+		// the fabrication guard: every observed departure is within 30min of midnight,
+		// so a ready-by anywhere in the daytime is interpolation across the seam, not
+		// an observation
+		mod := hhmm.Hour()*60 + hhmm.Minute()
+		assert.True(t, mod >= 1380 || mod <= 60,
+			"ready-by %s is in the empty middle of the day - no departure was ever observed there", p.Time)
+	}
+}
+
+// TestLearnRepeatingPlansMidnightBoundary covers the %1440 fold. Ten departures just after
+// midnight plus one just before means the unwrap re-bases the ten, putting the 0.1 quantile
+// exactly on 1440. Without the fold, ready formats as "24:00", which time.Parse("15:04")
+// rejects with "hour out of range" - so validateRepeatingPlans (core/vehicle/adaptive.go)
+// would refuse to store the plan and the learner would silently never persist anything.
+func TestLearnRepeatingPlansMidnightBoundary(t *testing.T) {
+	plans := LearnRepeatingPlans(departuresAtMinutes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1439}), learnNow)
+	require.Len(t, plans, 1)
+
+	// unwrapped: {1439} plus 1440..1449. quantile(0.1) takes pos = 0.1*10 = 1.0 exactly,
+	// i.e. res[1] = 1440 - which %1440 folds back to 0
+	assert.Equal(t, "00:00", plans[0].Time)
+
+	_, err := time.Parse("15:04", plans[0].Time)
+	assert.NoError(t, err)
+}
+
+// TestUnwrapIsNoopForMorningCommuter is the claim that makes the unwrap safe to apply
+// unconditionally: for any history that does not straddle midnight the largest gap on the
+// 24h circle IS the wrap, so gapIdx stays -1 and the input is returned unchanged. Everyone
+// who is not a night-shift driver sees byte-for-byte identical times, and
+// TestLearnRepeatingPlansCommuter's expectations above are unaffected for that reason.
+func TestUnwrapIsNoopForMorningCommuter(t *testing.T) {
+	var times []float64
+	for _, d := range departures(commuterSessions(8), learnNow) {
+		times = append(times, minutesOfDay(d.at))
+	}
+	slices.Sort(times)
+	require.NotEmpty(t, times)
+
+	assert.Equal(t, times, unwrapMinutesOfDay(times), "a morning cluster must pass through untouched")
 }
