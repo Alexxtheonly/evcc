@@ -66,11 +66,13 @@ export type DecisionOutcome =
   | "vetoed-unknown";
 
 export function decisionOutcome(row: LedgerDecisionRow): DecisionOutcome {
-  // absent, not "unknown": the backend now records nil when no optimizer run produced a
+  // absent, not "unknown": the backend records nil when no optimizer run produced a
   // suggestion for the slot (core/metrics/control_slots.go). Folding that into "steady"
   // via normalizeMode would claim the optimizer agreed with what was applied - on this
   // site's own database that was 62 % of the rows. Rows written before the column was
-  // nullable still carry the literal "unknown" and are still folded, below.
+  // nullable spell the same absence as the literal "unknown"; those are decoded to null
+  // on the read path (core/metrics/ledger_decisions.go's decodeSuggestedMode) so they
+  // arrive here already absent - one rule, on the Go side, rather than a second one here.
   if (row.suggestedMode == null) return "no-suggestion";
   if (normalizeMode(row.appliedMode) === normalizeMode(row.suggestedMode)) return "steady";
   if (row.slotFlowDeltaEur == null) return "vetoed-unknown";

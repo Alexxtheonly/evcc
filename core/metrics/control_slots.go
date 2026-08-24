@@ -53,8 +53,9 @@ type controlSlot struct {
 	// health_ok = 1. ADR-011 rule 3: absence is never a sentinel.
 	//
 	// Rows written before this was nullable still carry the literal "unknown"
-	// string; that legacy value is folded by effectiveMode rather than migrated,
-	// so a historical row is never rewritten to say something it did not say.
+	// string; that legacy value is decoded back to nil on read (see
+	// decodeSuggestedMode) rather than migrated, so a historical row is never
+	// rewritten to say something it did not say.
 	SuggestedMode *string `gorm:"column:suggested_mode"`
 
 	// VetoReason explains why AppliedMode and SuggestedMode differ, empty

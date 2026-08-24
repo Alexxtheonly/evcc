@@ -248,12 +248,16 @@ func TestDecisionDeltasFoldsUnknownAgainstNormal(t *testing.T) {
 	require.NotNil(t, rows[2].SlotFlowDeltaEUR)
 }
 
-// TestDecisionDeltasDistinguishesNoSuggestionFromUnknown is the N4 fix: the sibling Price
-// field carries a careful doc comment about why absence must never be a sentinel, and
-// SuggestedMode then stored api.BatteryUnknown's "unknown" spelling - the same token
-// clearSuggestions() writes after a failed run and the same one a battery-less site
-// produces. A caller could not tell a deliberate decision from silence.
-func TestDecisionDeltasDistinguishesNoSuggestionFromUnknown(t *testing.T) {
+// TestDecisionDeltasDecodesLegacyUnknownSuggestion is the N4 fix carried through to the
+// rows already on disk: the sibling Price field carries a careful doc comment about why
+// absence must never be a sentinel, and SuggestedMode stored api.BatteryUnknown's
+// "unknown" spelling - the same token clearSuggestions() writes after a failed run and
+// the same one a battery-less site produces. Making the column nullable fixed that for
+// rows written afterwards; every earlier row was still served verbatim, and a caller
+// still could not tell a deliberate decision from silence. Decoded on read, both spellings
+// of absence must now read as absence, and neither may price a rejected alternative that
+// was never suggested.
+func TestDecisionDeltasDecodesLegacyUnknownSuggestion(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
 
@@ -293,9 +297,9 @@ func TestDecisionDeltasDistinguishesNoSuggestionFromUnknown(t *testing.T) {
 	require.Nil(t, rows[0].SuggestedMode, "no run produced one - absence, not a mode string")
 	require.Nil(t, rows[0].SlotFlowDeltaEUR, "there is no rejected alternative to price")
 
-	// the legacy row is still a recorded value, still folded against the applied mode -
-	// so it still prices as a veto of "normal" by "hold", exactly as before
-	require.NotNil(t, rows[1].SuggestedMode)
-	require.Equal(t, batteryModeUnknown, *rows[1].SuggestedMode)
-	require.NotNil(t, rows[1].SlotFlowDeltaEUR)
+	// the legacy row records the same absence with an older spelling, so it must read
+	// the same way - not as a suggestion of "normal" that "hold" then vetoed, which is
+	// a rejected alternative no run ever proposed and a delta priced out of nothing
+	require.Nil(t, rows[1].SuggestedMode, `a stored "unknown" is the legacy spelling of absence, not a mode`)
+	require.Nil(t, rows[1].SlotFlowDeltaEUR, "there is no rejected alternative to price here either")
 }

@@ -2,7 +2,7 @@ import { shallowMount, config } from "@vue/test-utils";
 import { describe, it, expect } from "vite-plus/test";
 import en from "../../../../i18n/en.json";
 import SavingsLedgerWaterfall, { PLOT_HEIGHT } from "./SavingsLedgerWaterfall.vue";
-import { batteryColor } from "@/colors";
+import colors, { batteryColor } from "@/colors";
 import {
   waterfallLayout,
   waterfallAxis,
@@ -558,6 +558,51 @@ describe("SavingsLedgerWaterfall chart option", () => {
     // EUR 1.00 clears the height threshold, so this one keeps its dashed outline -
     // the gate is the bar's rendered height, not "control is never dashed"
     expect(savedStyle.borderType).toBe("dashed");
+  });
+
+  // The overspend branch above only calls a loss a loss once the figure clears the
+  // period's own measurement noise (contributionBand). That reasoning is symmetric and
+  // the colouring was not: on the live payload the Control step rendered in the same
+  // saturated green as the solar and battery steps while the caption directly under it
+  // read "too small to call either way". Colour has to agree with the words, in both
+  // directions.
+  it("drops the semantic colour from a contribution inside the noise band, either way", () => {
+    // colors.* read back as "" under happy-dom, which cannot tell muted from danger -
+    // set both to distinguishable values for this assertion and restore afterwards.
+    const [mutedBefore, dangerBefore] = [colors.muted, colors.danger];
+    colors.muted = "#muted";
+    colors.danger = "#danger";
+    try {
+      // live's Control is -EUR 0.326 against an eurBand of EUR 0.625: a loss too small
+      // to call, which must not be drawn as one - and was not
+      const lossInside = option("perSlot", live).series[1].data[3].itemStyle;
+      expect(lossInside.color).toBe("#muted");
+
+      // the same magnitude the other way: a SAVING too small to call, which must not be
+      // drawn as one either. Same band, sign flipped.
+      const gainInside: LedgerChain = {
+        ...live,
+        contributions: live.contributions.map((c) =>
+          c.label === "Control" ? { label: "Control" as const, settled: settled(0.326) } : c
+        ),
+      };
+      expect(option("perSlot", gainInside).series[1].data[3].itemStyle.color).toBe("#muted");
+
+      // and a step that genuinely clears the band keeps its verdict: the synthesised
+      // overspend fixture still goes red, a saving that size still goes green
+      expect(option("perSlot", liveOverspend).series[1].data[3].itemStyle.color).toBe("#danger");
+      const gainOutside: LedgerChain = {
+        ...liveOverspend,
+        contributions: live.contributions.map((c) =>
+          c.label === "Control" ? { label: "Control" as const, settled: settled(1) } : c
+        ),
+      };
+      expect(option("perSlot", gainOutside).series[1].data[3].itemStyle.color).toBe(
+        batteryColor(1)
+      );
+    } finally {
+      [colors.muted, colors.danger] = [mutedBefore, dangerBefore];
+    }
   });
 
   it("shows the routing/timing split only under the per-slot headline", () => {
