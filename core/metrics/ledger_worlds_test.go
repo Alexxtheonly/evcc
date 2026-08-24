@@ -279,38 +279,38 @@ func TestDeriveBatteryCapacityFromHistoryRefusesOnDisagreement(t *testing.T) {
 func TestSimulateSlotStepModes(t *testing.T) {
 	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0, MaxChargeKWh: 100, MaxDischargeKWh: 100}
 
+	// each subtest pins the new SoC and the grid flow, which is everything the ledger
+	// prices. The AC-side charge/discharge energy is not returned by design - it is
+	// the SoC delta over EtaC / EtaD, so asserting it separately restated the SoC
+	// assertion already in the same subtest.
 	t.Run("hold never moves energy", func(t *testing.T) {
-		soc, flow, charge, discharge, ok := simulateSlotStep(batteryModeHold, 2, 5, 5, phys)
+		soc, flow, ok := simulateSlotStep(batteryModeHold, 2, 5, 5, phys)
 		require.True(t, ok)
-		require.InDelta(t, 5, soc, 1e-9)
+		require.InDelta(t, 5, soc, 1e-9) // unchanged: neither charged nor discharged
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
 		require.InDelta(t, 3, flow.ExportKWh, 1e-9) // 5-2 surplus goes straight to export
-		require.Zero(t, charge)
-		require.Zero(t, discharge)
 	})
 
 	t.Run("normal charges from surplus only", func(t *testing.T) {
-		soc, flow, charge, discharge, ok := simulateSlotStep(batteryModeNormal, 1, 3, 5, phys)
+		soc, flow, ok := simulateSlotStep(batteryModeNormal, 1, 3, 5, phys)
 		require.True(t, ok)
 		require.InDelta(t, 5+2*0.9, soc, 1e-9) // 2kWh surplus, all absorbed (headroom is 5kWh)
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
 		require.InDelta(t, 0, flow.ExportKWh, 1e-9)
-		require.InDelta(t, 2, charge, 1e-9)
-		require.Zero(t, discharge)
 	})
 
 	t.Run("normal discharges to cover a deficit only", func(t *testing.T) {
-		soc, flow, charge, discharge, ok := simulateSlotStep(batteryModeNormal, 4, 1, 5, phys)
+		soc, flow, ok := simulateSlotStep(batteryModeNormal, 4, 1, 5, phys)
 		require.True(t, ok)
-		// deficit 3kWh, available 5kWh*0.9=4.5kWh AC deliverable, so fully covered
+		// deficit 3kWh, available 5kWh*0.9=4.5kWh AC deliverable, so fully covered:
+		// the pack gives up 3/0.9kWh DC to deliver it
 		require.InDelta(t, 5-3/0.9, soc, 1e-9)
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
-		require.Zero(t, charge)
-		require.InDelta(t, 3, discharge, 1e-9)
+		require.InDelta(t, 0, flow.ExportKWh, 1e-9)
 	})
 
 	t.Run("charge forces grid import beyond surplus", func(t *testing.T) {
-		soc, flow, charge, discharge, ok := simulateSlotStep(batteryModeCharge, 1, 0, 0, phys)
+		soc, flow, ok := simulateSlotStep(batteryModeCharge, 1, 0, 0, phys)
 		require.True(t, ok)
 		// no surplus at all, but charge mode still fills headroom (10kWh) from grid -
 		// the AC-side charge is headroom/eta so that, after eta, the DC store lands
@@ -319,16 +319,13 @@ func TestSimulateSlotStepModes(t *testing.T) {
 		require.InDelta(t, 10.0, soc, 1e-9)
 		require.InDelta(t, 1+wantChargeAC, flow.ImportKWh, 1e-6)
 		require.InDelta(t, 0, flow.ExportKWh, 1e-9)
-		require.InDelta(t, wantChargeAC, charge, 1e-6)
-		require.Zero(t, discharge)
 	})
 
 	t.Run("holdcharge never draws from the grid", func(t *testing.T) {
-		_, flow, charge, discharge, ok := simulateSlotStep(batteryModeHoldCharge, 1, 0, 0, phys)
+		soc, flow, ok := simulateSlotStep(batteryModeHoldCharge, 1, 0, 0, phys)
 		require.True(t, ok)
 		require.InDelta(t, 1, flow.ImportKWh, 1e-9) // the deficit is bought, nothing more
-		require.Zero(t, charge)
-		require.Zero(t, discharge)
+		require.InDelta(t, 0, soc, 1e-9)            // no surplus to absorb, and it never discharges
 	})
 
 	// an unrecognised mode used to land in the same branch as normal and be priced as
@@ -336,22 +333,20 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	// flows and a delta of exactly zero - "we do not understand this decision" rendered
 	// as "this decision cost nothing". Refusing is the only honest answer.
 	t.Run("an unmodelled mode is refused, not replayed as normal", func(t *testing.T) {
-		soc, flow, charge, discharge, ok := simulateSlotStep("supercharge", 1, 3, 5, phys)
+		soc, flow, ok := simulateSlotStep("supercharge", 1, 3, 5, phys)
 		require.False(t, ok)
 		require.Zero(t, soc)
 		require.Equal(t, worldFlow{}, flow)
-		require.Zero(t, charge)
-		require.Zero(t, discharge)
 
 		// and it must NOT coincide with what normal would have produced, which is
 		// exactly how the old default branch hid itself. An empty pack with a 4kWh
 		// deficit is the clearest separator: normal buys the deficit, the refusal
 		// returns a zero flow that must never reach settleFlows.
-		_, normalFlow, _, _, normalOk := simulateSlotStep(batteryModeNormal, 4, 0, 0, phys)
+		_, normalFlow, normalOk := simulateSlotStep(batteryModeNormal, 4, 0, 0, phys)
 		require.True(t, normalOk)
 		require.InDelta(t, 4, normalFlow.ImportKWh, 1e-9)
 
-		_, refusedFlow, _, _, refusedOk := simulateSlotStep("supercharge", 4, 0, 0, phys)
+		_, refusedFlow, refusedOk := simulateSlotStep("supercharge", 4, 0, 0, phys)
 		require.False(t, refusedOk)
 		require.NotEqual(t, normalFlow, refusedFlow)
 	})
@@ -360,7 +355,7 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	// function itself models the four real modes and nothing else
 	t.Run("the absence spellings are the callers' job to fold, not this function's", func(t *testing.T) {
 		for _, mode := range []string{"", batteryModeUnknown} {
-			_, _, _, _, ok := simulateSlotStep(mode, 1, 3, 5, phys)
+			_, _, ok := simulateSlotStep(mode, 1, 3, 5, phys)
 			require.False(t, ok, mode)
 		}
 		require.Equal(t, batteryModeNormal, effectiveMode(""))

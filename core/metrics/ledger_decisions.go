@@ -145,8 +145,8 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 				socKWh := *s.BatterySocFrac * phys.CapacityKWh
 				load := s.modelledLoadKWh()
 
-				_, appliedFlow, _, _, appliedOk := simulateSlotStep(applied, load, s.PVKWh, socKWh, *phys)
-				_, rejectedFlow, _, _, rejectedOk := simulateSlotStep(rejected, load, s.PVKWh, socKWh, *phys)
+				_, appliedFlow, appliedOk := simulateSlotStep(applied, load, s.PVKWh, socKWh, *phys)
+				_, rejectedFlow, rejectedOk := simulateSlotStep(rejected, load, s.PVKWh, socKWh, *phys)
 
 				// a mode neither this replay nor anything else in the package
 				// models leaves SlotFlowDeltaEUR nil: "not understood" is an

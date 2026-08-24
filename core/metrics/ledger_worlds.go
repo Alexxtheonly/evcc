@@ -394,19 +394,19 @@ func persistedBatteryFloorFrac(ctx context.Context, ids []int) (frac float64, ok
 // preferring the installation's own configured minimum SoC over the lowest SoC ever
 // observed.
 //
-// The observed minimum is what this used to use unconditionally, and it is unsound in
-// two ways. It is RETROACTIVE: it is taken over the whole retained history, so one new
-// low reading silently restates every figure the ledger has ever reported, and today's
-// low rows ageing past MaxLedgerRangeDays restates them again. And it is CIRCULAR: "how
-// deep has this pack ever been run" is a behaviour of the very controller the ledger
-// audits, so a controller that never discharges deeply gives its own counterfactual a
-// high floor, which makes the counterfactual expensive, which flatters the controller.
-// On this site's own database the difference was not academic - the observed 4.1% floor
-// against the configured 5% moved the Control contribution by EUR 0.17 on a window whose
-// entire realised grid cost was EUR 3.97, and a 10% floor flipped its sign.
+// The observed minimum is only ever a fallback, because on its own it is unsound in two
+// ways. It is RETROACTIVE: it is taken over the whole retained history, so one new low
+// reading silently restates every figure the ledger has ever reported, and today's low
+// rows ageing past MaxLedgerRangeDays restates them again. And it is CIRCULAR: "how deep
+// has this pack ever been run" is a behaviour of the very controller the ledger audits,
+// so a controller that never discharges deeply gives its own counterfactual a high floor,
+// which makes the counterfactual expensive, which flatters the controller. The magnitude
+// is not academic: on this site's database an observed 4.1% floor against the configured
+// 5% moves the Control contribution by EUR 0.17 on a window whose entire realised grid
+// cost is EUR 3.97, and a 10% floor flips its sign.
 //
-// The observed minimum stays as the fallback for a battery that reports no limit, but it
-// is labelled as one: FloorSource is the provenance string floorNote renders, and it must
+// So the observed minimum stands in only for a battery that reports no limit, and it is
+// labelled as one: FloorSource is the provenance string floorNote renders, and it must
 // always say which of the two produced the number.
 func resolveBatteryFloor(ctx context.Context, ids []int, observedMin float64, haveSoc bool) (float64, string) {
 	if frac, ok, err := persistedBatteryFloorFrac(ctx, ids); err == nil && ok {
@@ -555,11 +555,17 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 	return out, nil
 }
 
-// simulateSlotStep applies one battery mode's rule to a single slot's home/PV
-// balance, returning the resulting grid flow and the battery's new state of charge
-// (in kWh). It is the one physics model shared by the W2 counterfactual (always
-// batteryModeNormal) and the per-slot decision replay in ledger_decisions.go (applied
-// vs. suggested mode), so both rest on the same capacity/efficiency/rate assumptions.
+// simulateSlotStep dispatches a caller-supplied battery mode STRING to its rule and
+// applies it to a single slot's home/PV balance, returning the resulting grid flow and
+// the battery's new state of charge (in kWh). Those two are everything the ledger
+// prices; the AC-side charge/discharge energy each mode moved is not returned, because
+// it has no consumer that the new SoC does not already give (it is the SoC delta over
+// EtaC / EtaD). Its caller is the per-slot decision
+// replay in ledger_decisions.go, which reads both modes out of the control_slots table
+// and so cannot know they are valid. Code that already holds a mode as a compile-time
+// fact calls that mode's function directly - computeW2 calls simulateNormalStep - so
+// the runtime dispatch, and the ok it has to return, exist only where a mode is really
+// unvalidated input.
 //
 // Mode semantics modeled here (inferred from the mode names and how
 // core/site_battery.go uses them, not re-derived from inverter docs - stated
@@ -582,42 +588,52 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 // price this" as "this cost nothing" (ADR-011 rule 3, see DecisionRow's doc comment).
 // Callers that fold "" / "unknown" into normal must do so before calling (see
 // effectiveMode); this function only understands the four real modes.
-func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow, chargeKWh, dischargeKWh float64, ok bool) {
+func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow, ok bool) {
 	surplus := max(0, pvKWh-homeKWh)
 	deficit := max(0, homeKWh-pvKWh)
-	floorKWh := phys.FloorFrac * phys.CapacityKWh
 	headroomKWh := max(0, phys.CapacityKWh-socKWh)
-	availableKWh := max(0, socKWh-floorKWh)
 
 	switch mode {
 	case batteryModeHold:
-		return socKWh, worldFlow{ImportKWh: deficit, ExportKWh: surplus}, 0, 0, true
+		return socKWh, worldFlow{ImportKWh: deficit, ExportKWh: surplus}, true
 
 	case batteryModeCharge:
 		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC)
 		fromSurplus := min(chargeAC, surplus)
 		fromGrid := chargeAC - fromSurplus
 		newSoc := socKWh + chargeAC*phys.EtaC
-		return newSoc, worldFlow{ImportKWh: deficit + fromGrid, ExportKWh: max(0, surplus-fromSurplus)}, chargeAC, 0, true
+		return newSoc, worldFlow{ImportKWh: deficit + fromGrid, ExportKWh: max(0, surplus-fromSurplus)}, true
 
 	case batteryModeHoldCharge:
 		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
 		newSoc := socKWh + chargeAC*phys.EtaC
-		return newSoc, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, chargeAC, 0, true
+		return newSoc, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, true
 
 	case batteryModeNormal:
-		if surplus > 0 {
-			chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
-			newSoc := socKWh + chargeAC*phys.EtaC
-			return newSoc, worldFlow{ExportKWh: surplus - chargeAC}, chargeAC, 0, true
-		}
-		dischargeAC := min(phys.MaxDischargeKWh, availableKWh*phys.EtaD, deficit)
-		newSoc := socKWh - dischargeAC/phys.EtaD
-		return newSoc, worldFlow{ImportKWh: deficit - dischargeAC}, 0, dischargeAC, true
+		newSoc, flow := simulateNormalStep(homeKWh, pvKWh, socKWh, phys)
+		return newSoc, flow, true
 
 	default:
-		return 0, worldFlow{}, 0, 0, false
+		return 0, worldFlow{}, false
 	}
+}
+
+// simulateNormalStep applies the "dumb rule" - charge from surplus only, discharge to
+// cover a deficit only - to one slot. This is what W2 is defined as, and it is the one
+// mode with no failure case: there is no mode string to recognise, so there is no ok to
+// return and nothing for a caller to discard. simulateSlotStep's batteryModeNormal case
+// is a thin wrapper over it, so the replay and the counterfactual stay the same physics.
+func simulateNormalStep(homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow) {
+	if surplus := max(0, pvKWh-homeKWh); surplus > 0 {
+		headroomKWh := max(0, phys.CapacityKWh-socKWh)
+		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
+		return socKWh + chargeAC*phys.EtaC, worldFlow{ExportKWh: surplus - chargeAC}
+	}
+
+	deficit := max(0, homeKWh-pvKWh)
+	availableKWh := max(0, socKWh-phys.FloorFrac*phys.CapacityKWh)
+	dischargeAC := min(phys.MaxDischargeKWh, availableKWh*phys.EtaD, deficit)
+	return socKWh - dischargeAC/phys.EtaD, worldFlow{ImportKWh: deficit - dischargeAC}
 }
 
 // ErrSocGap means a slot in the requested period has no measured SoC, so the
@@ -744,8 +760,7 @@ func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, W2Drift, err
 			socKWh = carried
 		}
 
-		// mode is a package constant, so ok is always true here
-		newSoc, flow, _, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
+		newSoc, flow := simulateNormalStep(s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
 		socKWh = newSoc
 		out[i] = flow
 		prevStart = s.Start
