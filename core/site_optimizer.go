@@ -53,16 +53,21 @@ const (
 	// charged or discharged yet, stays on the fallback until it has a real track record.
 	batteryPowerMinSamples = 20
 
-	// batteryPowerPercentile is the rank batteryPowerLimits takes from the observed slot
-	// powers instead of the plain maximum. Nothing between the meters table and here bounds
-	// a sample's magnitude - BatteryPowerSamples filters recovered and incomplete rows, not
-	// implausible ones - so a single corrupt row (a counter rollover, a briefly
-	// double-reporting meter, a downtime backfill the recovered flag missed) would otherwise
-	// set CMax/DMax for the whole batteryPowerLookback window, at whatever magnitude the
-	// corruption happened to have. A battery that really can sustain a given power reaches it
-	// in many slots, so the percentile tracks the true maximum closely; one implausible slot
-	// in isolation no longer speaks for the hardware.
-	batteryPowerPercentile = 0.95
+	// batteryMaxCRate is the C-rate a sample must stay under to be believed: a slot
+	// implying the battery moved more than this many times its own capacity in an hour did
+	// not happen. Nothing between the meters table and here bounds a sample's magnitude -
+	// BatteryPowerSamples filters recovered and incomplete rows, not implausible ones - so
+	// without this a counter rollover, a briefly double-reporting meter or a downtime
+	// backfill the recovered flag missed sets CMax/DMax for the whole batteryPowerLookback
+	// window, at whatever magnitude the corruption happened to have.
+	//
+	// Deliberately generous: home batteries run 0.5-1C continuous and peak around 1-2C, and
+	// a 15min slot average understates the peak further (see batteryPowerLimits), so this
+	// bound never excludes a sample real hardware could have produced. It is a plausibility
+	// filter, not a tuning knob - the only alternative discriminator would be the sample's
+	// rank among its peers, and rank cannot tell a battery that hit 12kW once from a meter
+	// that reported 120kW once, because those two histories have identical order statistics.
+	batteryMaxCRate = 2
 )
 
 // optimizerChargingStrategies are the valid grid charging strategies; the first
@@ -1838,12 +1843,21 @@ func clearDemandWhenFull(demand []float32, headroom float32) []float32 {
 // than the default gets credit for it; one that has only ever trickled keeps the default
 // instead of being pinned below it.
 //
-// The percentile rather than the maximum is what keeps a single implausible sample from
-// setting the limit for a month - see batteryPowerPercentile. There is deliberately no
-// absolute ceiling here: evcc has no notion of a battery's C-rate, so any such bound would be
-// an invented constant, and a battery that does know its own limits reports them through
-// api.BatteryPowerLimiter, which overrides this derivation entirely (see batteryRequest).
-func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit float64) {
+// Samples are screened for physical plausibility against the battery's own capacity before
+// the maximum is taken (batteryMaxCRate), so one corrupt meters row cannot set the limit for
+// a month. What that does NOT cover is a corruption that lands inside the plausible range: a
+// meter double-reporting at 2x a 0.5C battery's real power reads as 1C and is believed, for
+// as long as it lasts. Screening by rank instead - a high percentile, or dropping the top
+// few samples - does not fix that case either and costs real capability, since a battery
+// that genuinely reaches its peak in only a few slots per month has those slots discarded.
+//
+// The failure this bounds is a wrong plan, not wrong hardware behaviour: CMax/DMax shape
+// what the solver schedules and what the savings ledger counterfactual assumes, but the
+// control path to a home battery is api.BatteryController, i.e. SetBatteryMode with a mode
+// enum. There is no power setpoint here to over-drive an inverter with. A battery that does
+// know its own limits reports them through api.BatteryPowerLimiter, which overrides this
+// derivation entirely (see batteryRequest).
+func (site *Site) batteryPowerLimits(name string, capacity float64) (chargeLimit, dischargeLimit float64) {
 	chargeLimit, dischargeLimit = batteryPower, batteryPower
 
 	c, ok := site.collectors[name]
@@ -1858,18 +1872,35 @@ func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit f
 	}
 
 	// kWh observed in one 15min slot -> average W sustained over that slot
-	if v, ok := percentileOf(charge, batteryPowerPercentile, batteryPowerMinSamples); ok {
-		chargeLimit = max(chargeLimit, v*1e3*slotsPerHour)
+	if len(charge) >= batteryPowerMinSamples {
+		chargeLimit = max(chargeLimit, plausibleMax(charge, capacity)*1e3*slotsPerHour)
 	}
-	if v, ok := percentileOf(discharge, batteryPowerPercentile, batteryPowerMinSamples); ok {
-		dischargeLimit = max(dischargeLimit, v*1e3*slotsPerHour)
+	if len(discharge) >= batteryPowerMinSamples {
+		dischargeLimit = max(dischargeLimit, plausibleMax(discharge, capacity)*1e3*slotsPerHour)
 	}
 
 	return chargeLimit, dischargeLimit
 }
 
+// plausibleMax returns the largest per-slot energy (kWh) in samples that a battery of
+// capacity (kWh) could actually have moved, or 0 when none of them could. An unknown
+// capacity (<= 0) leaves nothing to judge against, so the plain maximum is returned.
+func plausibleMax(samples []float64, capacity float64) float64 {
+	ceiling := capacity * batteryMaxCRate / slotsPerHour // kWh movable in one slot at the C-rate bound
+
+	var res float64
+	for _, v := range samples {
+		if capacity > 0 && v > ceiling {
+			continue
+		}
+		res = max(res, v)
+	}
+
+	return res
+}
+
 func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measurement, grid api.Rates, minLen int, firstSlotDuration time.Duration) (optimizer.BatteryConfig, batteryDetail) {
-	chargeLimit, dischargeLimit := site.batteryPowerLimits(dev.Config().Name)
+	chargeLimit, dischargeLimit := site.batteryPowerLimits(dev.Config().Name, *b.Capacity)
 
 	bat := optimizer.BatteryConfig{
 		CMax:      float32(chargeLimit),

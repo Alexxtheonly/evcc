@@ -419,6 +419,11 @@ func persistBatteryQuarterHours(t *testing.T, c *metrics.Collector, clk *clock.M
 	}
 }
 
+// testBatteryCapacity is the capacity (kWh) every subtest below models, so batteryMaxCRate
+// puts the plausibility ceiling at 2 * 10kWh = 20kW - comfortably above every genuine
+// fixture power and far below every corrupt one.
+const testBatteryCapacity = 10.0
+
 // TestBatteryPowerLimits verifies the fallback and observed-maximum paths of
 // batteryPowerLimits end to end (Site -> metrics.Collector -> sqlite -> W). History must only
 // ever raise the batteryPower fallback, never lower it - see the function's doc comment.
@@ -429,7 +434,7 @@ func TestBatteryPowerLimits(t *testing.T) {
 	site := &Site{log: util.NewLogger("foo"), collectors: map[string]*metrics.Collector{}}
 
 	t.Run("no collector for this device: falls back", func(t *testing.T) {
-		charge, discharge := site.batteryPowerLimits("unknown")
+		charge, discharge := site.batteryPowerLimits("unknown", testBatteryCapacity)
 		assert.Equal(t, float64(batteryPower), charge)
 		assert.Equal(t, float64(batteryPower), discharge)
 	})
@@ -446,7 +451,7 @@ func TestBatteryPowerLimits(t *testing.T) {
 		persistBatteryQuarterHours(t, c, clk, []float64{4000, 4000, 4000, -8000, -8000})
 
 		site.collectors["sparse"] = c
-		charge, discharge := site.batteryPowerLimits("sparse")
+		charge, discharge := site.batteryPowerLimits("sparse", testBatteryCapacity)
 		assert.Equal(t, float64(batteryPower), charge)
 		assert.Equal(t, float64(batteryPower), discharge)
 	})
@@ -461,19 +466,19 @@ func TestBatteryPowerLimits(t *testing.T) {
 
 		// exactly batteryPowerMinSamples (20) slots per direction: mostly modest slot averages
 		// (as a real battery running well under its cap for most 15min windows would produce)
-		// plus a handful of slots that ran at full power for most of the window - repeatedly
-		// demonstrated capability, not an average of the whole history, becomes the limit.
-		// batteryPowerPercentile of 20 samples is the second-highest, so the high group has to
-		// be more than one slot for the battery to get credit for it - which is the point:
-		// one slot on its own is indistinguishable from a bad meter reading.
-		dischargePowers := append(slices.Repeat([]float64{4000}, 16), slices.Repeat([]float64{12000}, 4)...) // 12000: demonstrated sustained capability
-		chargePowers := append(slices.Repeat([]float64{-5000}, 16), slices.Repeat([]float64{-15000}, 4)...)
+		// plus one slot that came closest to running at full power for the whole window - the
+		// demonstrated maximum, not an average of the whole history, becomes the limit. A
+		// single such slot has to be enough: a battery that reaches its peak rarely must not
+		// be modelled at half its real power for it (which is what screening by rank, rather
+		// than by physical plausibility, would do here).
+		dischargePowers := append(slices.Repeat([]float64{4000}, 19), 12000) // demonstrated sustained capability
+		chargePowers := append(slices.Repeat([]float64{-5000}, 19), -15000)
 
 		persistBatteryQuarterHours(t, c, clk, dischargePowers)
 		persistBatteryQuarterHours(t, c, clk, chargePowers)
 
 		site.collectors["seasoned"] = c
-		charge, discharge := site.batteryPowerLimits("seasoned")
+		charge, discharge := site.batteryPowerLimits("seasoned", testBatteryCapacity)
 
 		assert.Equal(t, 12000.0, discharge, "discharge limit must reflect the demonstrated maximum, not an average")
 		assert.Equal(t, 15000.0, charge, "charge limit must reflect the demonstrated maximum, not an average")
@@ -481,9 +486,12 @@ func TestBatteryPowerLimits(t *testing.T) {
 
 	// a single corrupt meters row must not set CMax/DMax for the whole lookback window.
 	// Nothing between the meters table and batteryPowerLimits bounds a sample's magnitude,
-	// so this is the failure mode batteryPowerPercentile exists for: taking slices.Max here
-	// would hand the solver 120kW/150kW for a battery that has never exceeded 8kW/9kW.
-	t.Run("one implausible sample: percentile ignores it, plain max would not", func(t *testing.T) {
+	// so this is the failure mode batteryMaxCRate exists for: an unscreened maximum would
+	// hand the solver 120kW/150kW for a 10kWh battery that has never exceeded 8kW/9kW.
+	// Note this fixture has the same shape as the "seasoned" case above - 19 equal slots
+	// plus one higher - and only the magnitude of the odd slot differs, which is exactly
+	// why the screen has to be physical rather than rank-based.
+	t.Run("one implausible sample: the C-rate screen rejects it, plain max would not", func(t *testing.T) {
 		clk := clock.NewMock()
 		clk.Set(time.Now().Truncate(tariff.SlotDuration))
 
@@ -499,12 +507,21 @@ func TestBatteryPowerLimits(t *testing.T) {
 		persistBatteryQuarterHours(t, c, clk, chargePowers)
 
 		site.collectors["glitched"] = c
-		charge, discharge := site.batteryPowerLimits("glitched")
+		charge, discharge := site.batteryPowerLimits("glitched", testBatteryCapacity)
 
-		// 20 samples, batteryPowerPercentile 0.95 -> index int(0.95*19) = 18 of the sorted
-		// series, i.e. the second-highest: the 8kW/9kW the battery actually demonstrated
+		// 30kWh/37.5kWh in one slot is 12C/15C for a 10kWh battery, so both are dropped and
+		// the highest surviving slot - the 8kW/9kW the battery actually demonstrated - stands
 		assert.Equal(t, 8000.0, discharge, "one implausible slot must not become the discharge limit")
 		assert.Equal(t, 9000.0, charge, "one implausible slot must not become the charge limit")
+	})
+
+	// the screen needs a capacity to judge against; without one there is nothing to
+	// compare a sample to, so the unscreened maximum is all that is left
+	t.Run("unknown capacity: no screen, falls back to the plain maximum", func(t *testing.T) {
+		charge, discharge := site.batteryPowerLimits("glitched", 0)
+
+		assert.Equal(t, 120000.0, discharge)
+		assert.Equal(t, 150000.0, charge)
 	})
 
 	t.Run("enough history but all below the fallback: keeps the default as a floor", func(t *testing.T) {
@@ -522,7 +539,7 @@ func TestBatteryPowerLimits(t *testing.T) {
 		persistBatteryQuarterHours(t, c, clk, slices.Repeat([]float64{-2000}, 20))
 
 		site.collectors["trickler"] = c
-		charge, discharge := site.batteryPowerLimits("trickler")
+		charge, discharge := site.batteryPowerLimits("trickler", testBatteryCapacity)
 
 		assert.Equal(t, float64(batteryPower), discharge, "must not be pinned below the default fallback")
 		assert.Equal(t, float64(batteryPower), charge, "must not be pinned below the default fallback")
