@@ -23,7 +23,6 @@ const (
 	learnMinSocDrop         = 3.0                  // soc points that prove the vehicle drove
 	learnMinOdometerKm      = 1.0                  // odometer km that prove the vehicle drove
 	learnArtifactClusterLen = 5                    // identical wall-clock seconds marking an automation
-	learnMinSocSamples      = learnMinDepartures   // arrival soc estimate needs its own sample floor, not just len != 0
 )
 
 // departure is a validated vehicle departure
@@ -170,7 +169,11 @@ func LearnRepeatingPlans(sessions Sessions, now time.Time) []api.RepeatingPlan {
 		target = max(target, learnSocFloor)
 		target = min(target, learnSocCap)
 
-		ready := int(quantile(times, 0.1))
+		// unwrap before quantiling: times is a set of minutes-of-day, and quantile
+		// interpolates linearly, so a cluster straddling midnight is bimodal at the raw
+		// 0/1440 seam and the interpolated result lands in the empty middle of the day -
+		// a ready-by time the vehicle has never once departed at. See unwrapMinutesOfDay.
+		ready := int(quantile(unwrapMinutesOfDay(times), 0.1)) % 1440
 		ready -= ready % 15
 
 		perDay[day] = slot{time: ready, soc: 5 * int(math.Round(target/5))}
@@ -209,93 +212,26 @@ func LearnRepeatingPlans(sessions Sessions, now time.Time) []api.RepeatingPlan {
 	return plans
 }
 
-// ExpectedArrival is a learned prediction that an absent vehicle will return needing
-// roughly this much energy, derived from the same validated departure/arrival pairs
-// LearnRepeatingPlans uses.
-type ExpectedArrival struct {
-	TimeOfDay int     `json:"timeOfDay"` // minutes after midnight, an early quantile of observed arrival times
-	SocUsed   float64 `json:"socUsed"`   // percentage points, a high quantile of observed soc consumed while away
-}
-
-// LearnExpectedArrival derives when a vehicle that is currently away is likely to return
-// and roughly how depleted it is likely to be, from the same validated departures
-// LearnRepeatingPlans learns from. Returns nil when the history does not support a
-// confident prediction.
-//
-// Unlike LearnRepeatingPlans, this is a single pooled estimate rather than a per-weekday
-// one: it exists to give the optimizer something to plan against for a vehicle that isn't
-// plugged in yet, not to reproduce a weekly schedule, so a coarser fallback is enough.
-// TimeOfDay uses the same early quantile LearnRepeatingPlans uses for ready-by (0.1) and
-// SocUsed the same high quantile it uses for the charge target (0.9): the two ways this
-// estimate can be wrong aren't equally costly. Assuming the vehicle returns later than it
-// actually does - or needing less energy than it actually does - leaves it charging
-// through a period the site should have reserved for it, so the estimate leans early and
-// well-fed rather than to the middle.
-func LearnExpectedArrival(sessions Sessions, now time.Time) *ExpectedArrival {
-	deps := departures(sessions, now)
-	if len(deps) < learnMinDepartures {
-		return nil
-	}
-
-	// exact-second clusters in the arrival time mark an automation (e.g. a charger or
-	// gateway reboot reconnecting on its own) rather than a real return - the same
-	// signature departures() already screens out on the departure side, applied here to
-	// the arrival side since that filter only ever looked at Disconnected.
-	clusters := make(map[string]int)
-	for _, d := range deps {
-		if !d.arrivedAt.IsZero() {
-			clusters[d.arrivedAt.Format("15:04:05")]++
-		}
-	}
-
-	var times, soc []float64
-	for _, d := range deps {
-		if d.arrivedAt.IsZero() || clusters[d.arrivedAt.Format("15:04:05")] >= learnArtifactClusterLen {
-			continue
-		}
-		times = append(times, minutesOfDay(d.arrivedAt))
-		if d.socUsed >= 0 {
-			soc = append(soc, d.socUsed)
-		}
-	}
-
-	// the energy estimate needs its own sample floor: departures() only requires exact
-	// SocEnd/SocStart pairs to contribute a socUsed value at all, so a history with plenty
-	// of arrival times but very few of them carrying usable soc data could otherwise let a
-	// single long trip set the reservation to a near-full pack.
-	if len(times) < learnMinDepartures || len(soc) < learnMinSocSamples {
-		return nil
-	}
-
-	slices.Sort(times)
-	slices.Sort(soc)
-
-	timeOfDay := int(quantile(unwrapMinutesOfDay(times), 0.1)) % 1440
-	timeOfDay -= timeOfDay % 15
-
-	return &ExpectedArrival{
-		TimeOfDay: timeOfDay,
-		SocUsed:   quantile(soc, 0.9),
-	}
-}
-
 func minutesOfDay(t time.Time) float64 {
 	return float64(t.Hour()*60+t.Minute()) + float64(t.Second())/60
 }
 
 // unwrapMinutesOfDay re-bases a sorted set of time-of-day values (each in [0, 1440)) so a
 // cluster spanning midnight sorts and quantiles correctly. Splitting at 00:00 is wrong for
-// a vehicle that usually arrives late and sometimes rolls past midnight: 00:15 sorts as the
+// a vehicle that usually departs late and sometimes rolls past midnight: 00:15 sorts as the
 // smallest value in the set instead of "15 minutes after the usual ~23:30", so an early
-// quantile taken directly over raw minutes-of-day reports 00:15 - roughly a day earlier
-// than the cluster it is actually part of.
+// quantile taken directly over raw minutes-of-day reports a time from the wrong end of the
+// day - and because quantile interpolates linearly between the two modes, it can report a
+// time in the empty middle of the day that no departure ever occurred at.
 //
 // Finds the largest gap between consecutive values on the 24h circle (the point least
 // likely to fall inside the real cluster) and cuts there instead of at midnight: every
 // value before the cut gets +1440 so the whole cluster becomes one contiguous, correctly
 // ordered run. Callers must fold the final quantile result back with % 1440. With the
-// largest gap being the wrap itself, the values already fit within a day and are returned
-// unchanged.
+// largest gap being the wrap itself - the normal case, e.g. a morning commuter whose
+// departures all sit between 06:00 and 08:00 - the values already fit within a day and the
+// input is returned unchanged, so this is a no-op for any history that does not straddle
+// midnight.
 func unwrapMinutesOfDay(sorted []float64) []float64 {
 	n := len(sorted)
 	if n < 2 {

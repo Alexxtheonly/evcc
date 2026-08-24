@@ -1,6 +1,7 @@
 package core
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -8,9 +9,7 @@ import (
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/core/metrics"
-	"github.com/evcc-io/evcc/core/session"
 	"github.com/evcc-io/evcc/core/types"
-	"github.com/evcc-io/evcc/core/vehicle"
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
 	"github.com/evcc-io/evcc/util"
@@ -366,7 +365,7 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		dev := newBatteryDevice(t, 20, 100)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
-		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
+		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute)
 
 		assert.Equal(t, float32(1500), req.SMin)
 		assert.Equal(t, float32(10000), req.SMax)
@@ -378,7 +377,7 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		dev := newBatteryDevice(t, 0, 80)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
-		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
+		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute)
 
 		assert.Equal(t, float32(0), req.SMin)
 		assert.Equal(t, float32(9500), req.SMax)
@@ -390,7 +389,7 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		dev := newBatteryDevice(t, 20, 80)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
-		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
+		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute)
 
 		assert.Equal(t, float32(2000), req.SMin)
 		assert.Equal(t, float32(8000), req.SMax)
@@ -401,7 +400,7 @@ func TestBatteryRequestSocLimitsClamp(t *testing.T) {
 		dev := newBatteryDevice(t, 20, 0)
 		m := types.Measurement{Capacity: &capacity, Soc: &soc}
 
-		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute, 0)
+		req, _ := site.batteryRequest(dev, m, nil, 8, 15*time.Minute)
 
 		assert.Equal(t, float32(2000), req.SMin)
 		assert.Equal(t, float32(10000), req.SMax)
@@ -420,6 +419,11 @@ func persistBatteryQuarterHours(t *testing.T, c *metrics.Collector, clk *clock.M
 	}
 }
 
+// testBatteryCapacity is the capacity (kWh) every subtest below models, so batteryMaxCRate
+// puts the plausibility ceiling at 2 * 10kWh = 20kW - comfortably above every genuine
+// fixture power and far below every corrupt one.
+const testBatteryCapacity = 10.0
+
 // TestBatteryPowerLimits verifies the fallback and observed-maximum paths of
 // batteryPowerLimits end to end (Site -> metrics.Collector -> sqlite -> W). History must only
 // ever raise the batteryPower fallback, never lower it - see the function's doc comment.
@@ -430,7 +434,7 @@ func TestBatteryPowerLimits(t *testing.T) {
 	site := &Site{log: util.NewLogger("foo"), collectors: map[string]*metrics.Collector{}}
 
 	t.Run("no collector for this device: falls back", func(t *testing.T) {
-		charge, discharge := site.batteryPowerLimits("unknown")
+		charge, discharge := site.batteryPowerLimits("unknown", testBatteryCapacity)
 		assert.Equal(t, float64(batteryPower), charge)
 		assert.Equal(t, float64(batteryPower), discharge)
 	})
@@ -447,7 +451,7 @@ func TestBatteryPowerLimits(t *testing.T) {
 		persistBatteryQuarterHours(t, c, clk, []float64{4000, 4000, 4000, -8000, -8000})
 
 		site.collectors["sparse"] = c
-		charge, discharge := site.batteryPowerLimits("sparse")
+		charge, discharge := site.batteryPowerLimits("sparse", testBatteryCapacity)
 		assert.Equal(t, float64(batteryPower), charge)
 		assert.Equal(t, float64(batteryPower), discharge)
 	})
@@ -463,20 +467,61 @@ func TestBatteryPowerLimits(t *testing.T) {
 		// exactly batteryPowerMinSamples (20) slots per direction: mostly modest slot averages
 		// (as a real battery running well under its cap for most 15min windows would produce)
 		// plus one slot that came closest to running at full power for the whole window - the
-		// demonstrated maximum, not an average of the whole history, becomes the limit
-		dischargePowers := append([]float64{}, repeat(19, 4000.0)...)
-		dischargePowers = append(dischargePowers, 12000) // demonstrated sustained capability
-		chargePowers := append([]float64{}, repeat(19, -5000.0)...)
-		chargePowers = append(chargePowers, -15000)
+		// demonstrated maximum, not an average of the whole history, becomes the limit. A
+		// single such slot has to be enough: a battery that reaches its peak rarely must not
+		// be modelled at half its real power for it (which is what screening by rank, rather
+		// than by physical plausibility, would do here).
+		dischargePowers := append(slices.Repeat([]float64{4000}, 19), 12000) // demonstrated sustained capability
+		chargePowers := append(slices.Repeat([]float64{-5000}, 19), -15000)
 
 		persistBatteryQuarterHours(t, c, clk, dischargePowers)
 		persistBatteryQuarterHours(t, c, clk, chargePowers)
 
 		site.collectors["seasoned"] = c
-		charge, discharge := site.batteryPowerLimits("seasoned")
+		charge, discharge := site.batteryPowerLimits("seasoned", testBatteryCapacity)
 
 		assert.Equal(t, 12000.0, discharge, "discharge limit must reflect the demonstrated maximum, not an average")
 		assert.Equal(t, 15000.0, charge, "charge limit must reflect the demonstrated maximum, not an average")
+	})
+
+	// a single corrupt meters row must not set CMax/DMax for the whole lookback window.
+	// Nothing between the meters table and batteryPowerLimits bounds a sample's magnitude,
+	// so this is the failure mode batteryMaxCRate exists for: an unscreened maximum would
+	// hand the solver 120kW/150kW for a 10kWh battery that has never exceeded 8kW/9kW.
+	// Note this fixture has the same shape as the "seasoned" case above - 19 equal slots
+	// plus one higher - and only the magnitude of the odd slot differs, which is exactly
+	// why the screen has to be physical rather than rank-based.
+	t.Run("one implausible sample: the C-rate screen rejects it, plain max would not", func(t *testing.T) {
+		clk := clock.NewMock()
+		clk.Set(time.Now().Truncate(tariff.SlotDuration))
+
+		c, err := metrics.NewCollector(metrics.Battery, "glitched", "", metrics.WithClock(clk))
+		require.NoError(t, err)
+		require.NoError(t, c.AddEnergy(nil, nil, 0, false)) // baseline, no persist yet
+
+		// 19 consistent slots per direction plus one rollover-sized reading
+		dischargePowers := append(slices.Repeat([]float64{8000}, 19), 120000) // counter rollover / double-reporting meter
+		chargePowers := append(slices.Repeat([]float64{-9000}, 19), -150000)
+
+		persistBatteryQuarterHours(t, c, clk, dischargePowers)
+		persistBatteryQuarterHours(t, c, clk, chargePowers)
+
+		site.collectors["glitched"] = c
+		charge, discharge := site.batteryPowerLimits("glitched", testBatteryCapacity)
+
+		// 30kWh/37.5kWh in one slot is 12C/15C for a 10kWh battery, so both are dropped and
+		// the highest surviving slot - the 8kW/9kW the battery actually demonstrated - stands
+		assert.Equal(t, 8000.0, discharge, "one implausible slot must not become the discharge limit")
+		assert.Equal(t, 9000.0, charge, "one implausible slot must not become the charge limit")
+	})
+
+	// the screen needs a capacity to judge against; without one there is nothing to
+	// compare a sample to, so the unscreened maximum is all that is left
+	t.Run("unknown capacity: no screen, falls back to the plain maximum", func(t *testing.T) {
+		charge, discharge := site.batteryPowerLimits("glitched", 0)
+
+		assert.Equal(t, 120000.0, discharge)
+		assert.Equal(t, 150000.0, charge)
 	})
 
 	t.Run("enough history but all below the fallback: keeps the default as a floor", func(t *testing.T) {
@@ -490,23 +535,15 @@ func TestBatteryPowerLimits(t *testing.T) {
 		// batteryPowerMinSamples slots per direction, every one well below the batteryPower
 		// fallback - a battery that has only ever trickled must not get pinned below the
 		// default just because that is all it has demonstrated so far
-		persistBatteryQuarterHours(t, c, clk, repeat(20, 1500.0))
-		persistBatteryQuarterHours(t, c, clk, repeat(20, -2000.0))
+		persistBatteryQuarterHours(t, c, clk, slices.Repeat([]float64{1500}, 20))
+		persistBatteryQuarterHours(t, c, clk, slices.Repeat([]float64{-2000}, 20))
 
 		site.collectors["trickler"] = c
-		charge, discharge := site.batteryPowerLimits("trickler")
+		charge, discharge := site.batteryPowerLimits("trickler", testBatteryCapacity)
 
 		assert.Equal(t, float64(batteryPower), discharge, "must not be pinned below the default fallback")
 		assert.Equal(t, float64(batteryPower), charge, "must not be pinned below the default fallback")
 	})
-}
-
-func repeat(n int, v float64) []float64 {
-	res := make([]float64, n)
-	for i := range res {
-		res[i] = v
-	}
-	return res
 }
 
 // charge goal for vehicles with and without known capacity/soc, see #32890
@@ -656,12 +693,6 @@ func TestEffectivePriorityToCPriority(t *testing.T) {
 	for _, p := range []int{8, 9, 10, 20} {
 		assert.Equal(t, 2, effectivePriorityToCPriority(p), "priority %d", p)
 	}
-
-	// the home battery's own CPriority is 0 (see homeBatteryCPriority) - any explicitly
-	// raised loadpoint priority outranks it, a default-priority one ties rather than losing
-	assert.Equal(t, 0, homeBatteryCPriority)
-	assert.GreaterOrEqual(t, effectivePriorityToCPriority(0), homeBatteryCPriority)
-	assert.Greater(t, effectivePriorityToCPriority(10), homeBatteryCPriority)
 }
 
 // TestSafeCPriority asserts the negative-price guard described on safeCPriority: the solver's
@@ -729,204 +760,6 @@ func TestTerminalStorageValue(t *testing.T) {
 	assert.Equal(t, float32(0), terminalStorageValue(-0.0002), "negative minimum: floored at zero, not a liability")
 }
 
-func TestNextOccurrence(t *testing.T) {
-	now := time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
-
-	// later today
-	assert.Equal(t, time.Date(2026, 8, 23, 18, 30, 0, 0, time.UTC), nextOccurrence(18*60+30, now))
-
-	// already passed today without showing up: pinned to now, not deferred a full day -
-	// this is the case right after the predicted (early-quantile) time, when arrival is
-	// most likely, so the reservation must stay live rather than vanish until tomorrow
-	assert.Equal(t, now, nextOccurrence(6*60, now))
-
-	// exactly now: today, not pushed out a day
-	assert.Equal(t, now, nextOccurrence(14*60, now))
-
-	// a new calendar day naturally produces a fresh, still-future occurrence again
-	tomorrow := time.Date(2026, 8, 24, 0, 5, 0, 0, time.UTC)
-	assert.Equal(t, time.Date(2026, 8, 24, 6, 0, 0, 0, time.UTC), nextOccurrence(6*60, tomorrow))
-}
-
-func TestArrivalSlot(t *testing.T) {
-	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	timestamps := []time.Time{now, now.Add(15 * time.Minute), now.Add(30 * time.Minute), now.Add(45 * time.Minute)}
-	horizonEnd := now.Add(time.Hour)
-
-	assert.Equal(t, 0, arrivalSlot(timestamps, horizonEnd, now.Add(5*time.Minute)))
-	assert.Equal(t, 2, arrivalSlot(timestamps, horizonEnd, now.Add(35*time.Minute)))
-	assert.Equal(t, 3, arrivalSlot(timestamps, horizonEnd, now.Add(59*time.Minute)), "last slot covers up to horizon end")
-	assert.Equal(t, -1, arrivalSlot(timestamps, horizonEnd, now.Add(2*time.Hour)), "beyond horizon: not modelled")
-}
-
-// TestExpectedArrivalDemand exercises the gates expectedArrivalDemand must enforce: opted
-// out, connected elsewhere, stale or absent prediction, and no capacity to convert soc
-// into Wh must all leave Gt untouched, while a vehicle that clears every gate contributes
-// its predicted energy at its predicted slot and nowhere else.
-func TestExpectedArrivalDemand(t *testing.T) {
-	site := &Site{log: util.NewLogger("foo")}
-	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	timestamps := []time.Time{now, now.Add(15 * time.Minute), now.Add(30 * time.Minute), now.Add(45 * time.Minute)}
-	horizonEnd := now.Add(time.Hour)
-	arrival := session.ExpectedArrival{TimeOfDay: 12*60 + 20, SocUsed: 30} // 12:20 today -> slot 1
-
-	newVehicleMock := func(t *testing.T, capacity float64) *api.MockVehicle {
-		ctrl := gomock.NewController(t)
-		mv := api.NewMockVehicle(ctrl)
-		mv.EXPECT().Capacity().Return(capacity).AnyTimes()
-		return mv
-	}
-
-	t.Run("opted out", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().GetExpectedArrivalLearning().Return(false)
-
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
-		assert.Nil(t, got)
-	})
-
-	t.Run("connected elsewhere", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mv := newVehicleMock(t, 50)
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().GetExpectedArrivalLearning().Return(true)
-		v.EXPECT().Instance().Return(mv).AnyTimes()
-
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, map[api.Vehicle]bool{mv: true}, false, 0)
-		assert.Nil(t, got, "already connected: never modelled twice")
-	})
-
-	t.Run("an unidentified connected vehicle suppresses every prediction", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		v := vehicle.NewMockAPI(ctrl) // no expectations: must not be called at all
-
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, true, 0)
-		assert.Nil(t, got, "unidentified vehicle physically connected: could be any configured vehicle, so none are predicted")
-	})
-
-	t.Run("no confident prediction", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mv := newVehicleMock(t, 50)
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().GetExpectedArrivalLearning().Return(true)
-		v.EXPECT().Instance().Return(mv).AnyTimes()
-		v.EXPECT().GetExpectedArrival().Return(session.ExpectedArrival{}, time.Time{})
-
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
-		assert.Nil(t, got, "absent vehicle with no usable history changes nothing")
-	})
-
-	t.Run("stale prediction", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mv := newVehicleMock(t, 50)
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().GetExpectedArrivalLearning().Return(true)
-		v.EXPECT().Instance().Return(mv).AnyTimes()
-		v.EXPECT().GetExpectedArrival().Return(arrival, now.Add(-vehicle.AdaptivePlansValidity-time.Hour))
-
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
-		assert.Nil(t, got, "stale prediction is not trusted")
-	})
-
-	t.Run("no capacity to convert soc into energy", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mv := newVehicleMock(t, 0)
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().GetExpectedArrivalLearning().Return(true)
-		v.EXPECT().Instance().Return(mv).AnyTimes()
-		v.EXPECT().GetExpectedArrival().Return(arrival, now)
-
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
-		assert.Nil(t, got)
-	})
-
-	t.Run("confident prediction lands in a single slot when it fits under the clamp", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mv := newVehicleMock(t, 50) // 50 kWh
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().Name().Return("car").AnyTimes()
-		v.EXPECT().GetExpectedArrivalLearning().Return(true)
-		v.EXPECT().Instance().Return(mv).AnyTimes()
-		v.EXPECT().GetExpectedArrival().Return(arrival, now)
-
-		// 30% of 50kWh = 15kWh = 15000Wh; a 100kW clamp covers that in one 15min slot (25000Wh)
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 100000)
-		require.Len(t, got, 4)
-		assert.Equal(t, []float32{0, 15000, 0, 0}, got, "at slot 1 (12:20 falls in [12:15,12:30))")
-	})
-
-	t.Run("prediction exceeding the per-slot clamp spreads into later slots", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mv := newVehicleMock(t, 50) // 50 kWh
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().Name().Return("car").AnyTimes()
-		v.EXPECT().GetExpectedArrivalLearning().Return(true)
-		v.EXPECT().Instance().Return(mv).AnyTimes()
-		v.EXPECT().GetExpectedArrival().Return(arrival, now)
-
-		// 30% of 50kWh = 15000Wh; a 20kW clamp caps each 15min slot at 5000Wh, so a single
-		// slot (180kW-equivalent, the real regression: 45kWh in one 15min slot implies
-		// 180kW) can never happen - the energy must spread across three slots instead.
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 20000)
-		require.Len(t, got, 4)
-		assert.Equal(t, []float32{0, 5000, 5000, 5000}, got)
-	})
-
-	t.Run("energy left over once the horizon ends is dropped, not wrapped or errored", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mv := newVehicleMock(t, 50) // 50 kWh
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().Name().Return("car").AnyTimes()
-		v.EXPECT().GetExpectedArrivalLearning().Return(true)
-		v.EXPECT().Instance().Return(mv).AnyTimes()
-		v.EXPECT().GetExpectedArrival().Return(session.ExpectedArrival{TimeOfDay: 12*60 + 20, SocUsed: 90}, now)
-
-		// 90% of 50kWh = 45000Wh; a 20kW clamp only fits 5000Wh/slot across the 3 slots
-		// from the arrival slot to the horizon end (15000Wh total) - the remaining 30000Wh
-		// has nowhere in this request to go and is silently dropped.
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 20000)
-		require.Len(t, got, 4)
-		assert.Equal(t, []float32{0, 5000, 5000, 5000}, got)
-	})
-
-	t.Run("prediction beyond the horizon is not modelled", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mv := newVehicleMock(t, 50)
-		v := vehicle.NewMockAPI(ctrl)
-		v.EXPECT().GetExpectedArrivalLearning().Return(true)
-		v.EXPECT().Instance().Return(mv).AnyTimes()
-		v.EXPECT().GetExpectedArrival().Return(session.ExpectedArrival{TimeOfDay: 23 * 60, SocUsed: 30}, now)
-
-		got := site.expectedArrivalDemand([]vehicle.API{v}, 4, now, timestamps, horizonEnd, nil, false, 0)
-		assert.Nil(t, got, "arrival predicted well past this request's short horizon")
-	})
-}
-
-func TestSpreadDemand(t *testing.T) {
-	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	timestamps := []time.Time{now, now.Add(15 * time.Minute), now.Add(30 * time.Minute), now.Add(45 * time.Minute)}
-	horizonEnd := now.Add(time.Hour)
-
-	// 20kW clamp over 15min slots (0.25h) caps each slot at 5000Wh
-	demand := make([]float32, 4)
-	placed := spreadDemand(demand, 1, 12000, timestamps, horizonEnd, 20000)
-	assert.Equal(t, float32(12000), placed, "5000 in slot 1, 5000 in slot 2, remaining 2000 in slot 3")
-	assert.Equal(t, []float32{0, 5000, 5000, 2000}, demand)
-
-	// starting at the last slot, only that slot's capacity is available before horizonEnd
-	demand2 := make([]float32, 4)
-	placed2 := spreadDemand(demand2, 3, 12000, timestamps, horizonEnd, 20000)
-	assert.Equal(t, float32(5000), placed2)
-	assert.Equal(t, []float32{0, 0, 0, 5000}, demand2)
-
-	// energy under the clamp lands entirely in the starting slot
-	demand3 := make([]float32, 4)
-	placed3 := spreadDemand(demand3, 0, 3000, timestamps, horizonEnd, 20000)
-	assert.Equal(t, float32(3000), placed3)
-	assert.Equal(t, []float32{3000, 0, 0, 0}, demand3)
-}
-
 func TestBlendMeasured(t *testing.T) {
 	slots := []float64{100, 100, 100, 100, 100, 100}
 	blendMeasured(slots, 200, 4)
@@ -936,17 +769,6 @@ func TestBlendMeasured(t *testing.T) {
 	short := []float32{100, 100}
 	blendMeasured(short, 200, 4)
 	assert.Equal(t, []float32{200, 175}, short)
-}
-
-func TestBlendScale(t *testing.T) {
-	slots := []float32{100, 100, 100, 100, 100, 100}
-	blendScale(slots, 2, 4)
-	assert.Equal(t, []float32{200, 175, 150, 125, 100, 100}, slots)
-
-	// fewer slots than decay length
-	short := []float64{100, 100}
-	blendScale(short, 0.5, 4)
-	assert.Equal(t, []float64{50, 62.5}, short)
 }
 
 // TestBlendScaleByLead covers B31: a flat ratio applied to every slot in the decay
@@ -980,15 +802,14 @@ func TestBlendScaleByLead(t *testing.T) {
 
 	pv, fcstRaw := 400.0, 1000.0
 
-	// OLD behaviour: a single flat ratio, computed with the nowcast scale only,
-	// applied uniformly via blendScale.
-	oldSlots := newFtSlots()
-	oldRatio := pv / (fcstRaw * 0.8)
-	blendScale(oldSlots, oldRatio, 4)
-	require.InDelta(t, 800, oldSlots[0], 1e-9)
-	require.InDelta(t, 750, oldSlots[1], 1e-9)
-	require.InDelta(t, 900, oldSlots[2], 1e-9)
-	require.InDelta(t, 1050, oldSlots[3], 1e-9)
+	// OLD behaviour: a single flat ratio pv/(fcstRaw*0.8) = 0.5, computed with the
+	// nowcast scale only, applied uniformly with the decay weight w = (4-i)/4 over
+	// ftSlots [1600, 1200, 1200, 1200]:
+	//   i=0: 1600*(1.00*0.5 + 0.00) =  800
+	//   i=1: 1200*(0.75*0.5 + 0.25) =  750
+	//   i=2: 1200*(0.50*0.5 + 0.50) =  900
+	//   i=3: 1200*(0.25*0.5 + 0.75) = 1050
+	oldSlots := []float64{800, 750, 900, 1050}
 
 	// NEW behaviour: each slot's own lead selects the ratio's denominator scale.
 	newSlots := newFtSlots()

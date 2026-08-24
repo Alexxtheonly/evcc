@@ -104,10 +104,6 @@ const (
 	AdaptivePlans        = "adaptivePlans"        // key to access the adaptive (learned) repeating plans in db
 	AdaptivePlanLearning = "adaptivePlanLearning" // whether evcc learns adaptive plans from session history
 
-	// expected arrival
-	ExpectedArrival         = "expectedArrival"         // key to access the learned expected-arrival prediction in db
-	ExpectedArrivalLearning = "expectedArrivalLearning" // whether evcc predicts an absent vehicle's return from session history
-
 	// learned vehicle state
 	SocGradient = "socGradient" // learned energy per soc step (Wh), see core/soc.Estimator
 

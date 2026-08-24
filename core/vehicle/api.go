@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/api"
-	"github.com/evcc-io/evcc/core/session"
 )
 
 //go:generate go tool mockgen -package vehicle -destination mock.go -mock_names API=MockAPI github.com/evcc-io/evcc/core/vehicle API
@@ -51,16 +50,6 @@ type API interface {
 	GetAdaptivePlanLearning() bool
 	// SetAdaptivePlanLearning enables or disables learning adaptive plans from session history
 	SetAdaptivePlanLearning(bool) error
-
-	// GetExpectedArrival returns the learned expected-arrival prediction and its update time
-	GetExpectedArrival() (session.ExpectedArrival, time.Time)
-	// SetExpectedArrival stores the learned expected-arrival prediction; the zero value clears it
-	SetExpectedArrival(session.ExpectedArrival) error
-
-	// GetExpectedArrivalLearning returns whether an absent vehicle's return is predicted from session history
-	GetExpectedArrivalLearning() bool
-	// SetExpectedArrivalLearning enables or disables predicting an absent vehicle's return from session history
-	SetExpectedArrivalLearning(bool) error
 
 	// GetPlanStrategy returns the plan strategy
 	GetPlanStrategy() api.PlanStrategy

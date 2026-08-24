@@ -17,9 +17,7 @@ import (
 	"github.com/evcc-io/evcc/core/keys"
 	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/core/metrics"
-	"github.com/evcc-io/evcc/core/session"
 	"github.com/evcc-io/evcc/core/types"
-	"github.com/evcc-io/evcc/core/vehicle"
 	"github.com/evcc-io/evcc/hems/hems"
 	"github.com/evcc-io/evcc/messenger"
 	"github.com/evcc-io/evcc/tariff"
@@ -51,9 +49,25 @@ const (
 
 	// batteryPowerMinSamples is the minimum number of qualifying (non-zero, non-recovered,
 	// non-incomplete) 15min slots required before batteryPowerLimits trusts the observed
-	// maximum over the batteryPower fallback. A newly added battery, or one that has barely
+	// history over the batteryPower fallback. A newly added battery, or one that has barely
 	// charged or discharged yet, stays on the fallback until it has a real track record.
 	batteryPowerMinSamples = 20
+
+	// batteryMaxCRate is the C-rate a sample must stay under to be believed: a slot
+	// implying the battery moved more than this many times its own capacity in an hour did
+	// not happen. Nothing between the meters table and here bounds a sample's magnitude -
+	// BatteryPowerSamples filters recovered and incomplete rows, not implausible ones - so
+	// without this a counter rollover, a briefly double-reporting meter or a downtime
+	// backfill the recovered flag missed sets CMax/DMax for the whole batteryPowerLookback
+	// window, at whatever magnitude the corruption happened to have.
+	//
+	// Deliberately generous: home batteries run 0.5-1C continuous and peak around 1-2C, and
+	// a 15min slot average understates the peak further (see batteryPowerLimits), so this
+	// bound never excludes a sample real hardware could have produced. It is a plausibility
+	// filter, not a tuning knob - the only alternative discriminator would be the sample's
+	// rank among its peers, and rank cannot tell a battery that hit 12kW once from a meter
+	// that reported 120kW once, because those two histories have identical order statistics.
+	batteryMaxCRate = 2
 )
 
 // optimizerChargingStrategies are the valid grid charging strategies; the first
@@ -201,18 +215,6 @@ func suggestionEvent(detail batteryDetail, s types.Suggestion) messenger.Event {
 func socBoundEpsilon(cfg optimizer.BatteryConfig) float32 {
 	return max(cfg.SCapacity*0.01, 10)
 }
-
-// homeBatteryCPriority is the CPriority (see BatteryConfig.CPriority) given to the home
-// battery: 0, i.e. no preference beyond what the priced objective already decides. CPriority
-// does not mean "fill this one first" - the solver's preference term
-// (optimizer.py:472-475) rewards both charging and discharging a battery, weighted by how
-// early in the horizon it happens, so a positive CPriority actually means "cycle this battery
-// more, and sooner". For an EV (DMax = 0) the discharge half of that term is inert, so a
-// positive CPriority does express "fill this one first" as intended. For the home battery,
-// which both charges and discharges, the same value would instead buy cost-neutral extra
-// cycling - wear with no benefit - which is why it stays at 0 rather than mirroring the
-// vehicle mapping.
-const homeBatteryCPriority = 0
 
 // effectivePriorityToCPriority maps a loadpoint's EffectivePriority - 0..10 in the UI
 // (config.loadpoint.priorityLabel), unbounded if set directly in config - onto the optimizer's
@@ -637,14 +639,6 @@ func (site *Site) publishOptimizerDecisionLocked() {
 	})
 }
 
-// publishOptimizerDecision publishes the current optimizer decision. Caller
-// must not hold any site lock.
-func (site *Site) publishOptimizerDecision() {
-	site.RLock()
-	defer site.RUnlock()
-	site.publishOptimizerDecisionLocked()
-}
-
 // appliedBatteryMode is site.GetBatteryMode() translated into the mode the
 // battery was actually running in, for the ledger only. The two differ for
 // api.BatteryUnknown, which at site level does not mean "we don't know": it
@@ -787,22 +781,9 @@ type optimizerHealthPublish struct {
 	Updated time.Time             `json:"updated,omitzero"`
 }
 
-// optimizerHealthSteadyReasons are run outcomes that describe a persistent
-// configuration state rather than a genuine result of that particular run -
-// the same category publishOptimizerHealthGate already dedupes for
-// notSponsored/disabled. errOptimizerNotConfigured belongs here too: in
-// automatic mode optimizerUpdateAsync runs on every loadpoint cycle, so
-// without dedup a site with no battery/vehicle/loadpoint configured yet
-// republishes "not configured" - and re-clears suggestions - forever.
-// Genuine run results (success, solver errors, missing tariff) are
-// intentionally excluded so Updated keeps advancing on every real attempt.
-var optimizerHealthSteadyReasons = map[optimizerHealthReason]bool{
-	optimizerHealthReasonNotConfigured: true,
-}
-
 // publishOptimizerHealth publishes the outcome of a completed run attempt and
-// reports whether it actually changed the published state. For steady-state
-// reasons (see optimizerHealthSteadyReasons) a repeat of the same {ok, reason}
+// reports whether it actually changed the published state. For the one
+// steady-state reason a repeat of the same {ok, reason}
 // is a no-op - Updated does not advance and nothing is published, mirroring
 // publishOptimizerHealthGate. For every other reason the call always publishes
 // and Updated always advances to now. Called from optimizerUpdateAsync's
@@ -812,7 +793,15 @@ func (site *Site) publishOptimizerHealth(ok bool, reason optimizerHealthReason) 
 	site.Lock()
 	changed := site.optimizerHealthOk != ok || site.optimizerHealthReason != reason
 
-	if optimizerHealthSteadyReasons[reason] && !changed {
+	// notConfigured describes a persistent configuration state rather than a genuine
+	// result of this particular run - the same category publishOptimizerHealthGate
+	// already dedupes for notSponsored/disabled. In automatic mode optimizerUpdateAsync
+	// runs on every loadpoint cycle, so without dedup a site with no
+	// battery/vehicle/loadpoint configured yet republishes "not configured" - and
+	// re-clears suggestions - forever. Genuine run results (success, solver errors,
+	// missing tariff) are deliberately not deduped, so Updated keeps advancing on every
+	// real attempt.
+	if reason == optimizerHealthReasonNotConfigured && !changed {
 		site.Unlock()
 		return false
 	}
@@ -1318,18 +1307,6 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 	// uncontrollable power of loadpoints that cannot be modelled as storage
 	var unmodelled float64
 
-	// vehicles currently connected to a loadpoint, real or session-limited - checked
-	// below so an expected-arrival prediction is never modelled for one that is already
-	// physically present and modelled as a battery (or as unmodelled load).
-	connected := make(map[api.Vehicle]bool)
-
-	// true when a physically connected loadpoint's vehicle could not be identified. Its
-	// identity being unknown means it could be any of the vehicles considered for an
-	// expected-arrival prediction below, so that prediction has to be suppressed entirely
-	// rather than risk crediting an already-connected vehicle's demand twice - see
-	// expectedArrivalDemand.
-	var unidentifiedConnected bool
-
 	for id, lp := range site.ActiveLoadpoints() {
 		// ignore disconnected loadpoints, including StatusNone
 		if s := lp.GetStatus(); s != api.StatusB && s != api.StatusC {
@@ -1337,11 +1314,6 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		}
 
 		v := lp.GetVehicle()
-		if v != nil {
-			connected[v] = true
-		} else {
-			unidentifiedConnected = true
-		}
 
 		// no vehicle capacity and no session energy limit to model against:
 		// account for the consumption as uncontrollable load
@@ -1372,16 +1344,6 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		}
 	}
 
-	// vehicles predicted to return later in the horizon, but not connected anywhere right
-	// now, get modelled as anticipated demand on the same footing as unmodelled loadpoint
-	// load - see expectedArrivalDemand for why this can't be a battery entry. Spread at the
-	// site's own grid import limit when one is configured, since that is a real ceiling on
-	// what can actually be drawn; expectedArrivalDemand falls back to a conservative
-	// default otherwise.
-	for i, v := range site.expectedArrivalDemand(site.Vehicles().Settings(), minLen, now, details.Timestamps, grid[minLen-1].End, connected, unidentifiedConnected, req.Grid.PMaxImp) {
-		req.TimeSeries.Gt[i] += v
-	}
-
 	for i, dev := range site.batteryMeters {
 		// measurements may lag the configured meters on an off-cycle trigger
 		if i >= len(battery) {
@@ -1393,7 +1355,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 			continue
 		}
 
-		cfg, detail := site.batteryRequest(dev, b, grid, minLen, firstSlotDuration, minImportPrice)
+		cfg, detail := site.batteryRequest(dev, b, grid, minLen, firstSlotDuration)
 		batteries = append(batteries, optimizerBattery{cfg, detail})
 	}
 
@@ -1572,18 +1534,6 @@ func newOptimizerDiagnosticsPublish(res optimizer.OptimizationResult) optimizerD
 	}
 }
 
-// optimizerRunResultStatuses are the solver statuses that produced an actual
-// schedule. The optimizer client's wire format zero-values ObjectiveValue and
-// the overshoot slices for any other status - see
-// optimizer.OptimizationResult.ObjectiveValue's doc comment ("present for
-// Optimal and Feasible, null otherwise") - so for any other status those
-// fields would read as a false "no overshoot" instead of "no schedule to
-// measure" if persisted as-is.
-var optimizerRunResultStatuses = map[optimizer.OptimizationResultStatus]bool{
-	optimizer.Optimal:  true,
-	optimizer.Feasible: true,
-}
-
 // persistOptimizerRun stores the diagnostic outcome of one optimizer run for
 // ADR-011. Automatic mode calls the optimizer roughly once per control-loop
 // cycle (~30s, ~30 runs per 15min slot), so a sampled Optimal/Feasible run is
@@ -1605,7 +1555,14 @@ var optimizerRunResultStatuses = map[optimizer.OptimizationResultStatus]bool{
 // disturb the slot gate for the next sampled success.
 func (site *Site) persistOptimizerRun(status string, res optimizer.OptimizationResult) {
 	now := time.Now()
-	sampled := optimizerRunResultStatuses[optimizer.OptimizationResultStatus(status)]
+	// Optimal and Feasible are the statuses that produced an actual schedule. The
+	// optimizer client's wire format zero-values ObjectiveValue and the overshoot slices
+	// for any other status - see optimizer.OptimizationResult.ObjectiveValue's doc
+	// comment ("present for Optimal and Feasible, null otherwise") - so for any other
+	// status those fields would read as a false "no overshoot" instead of "no schedule
+	// to measure" if persisted as-is.
+	st := optimizer.OptimizationResultStatus(status)
+	sampled := st == optimizer.Optimal || st == optimizer.Feasible
 
 	ts := now
 
@@ -1879,13 +1836,28 @@ func clearDemandWhenFull(demand []float32, headroom float32) []float32 {
 // limit below the fallback from this data is worse than not deriving one at all - a
 // too-low limit makes the optimizer schedule fewer, shorter hard charges/discharges, which
 // then keeps producing exactly the low-power samples that justify the low limit next time
-// (self-reinforcing). So history here can only ever raise the fallback, never lower it: take
-// the maximum observed sustained slot power per direction, once there is enough of it
-// (batteryPowerMinSamples), and use batteryPower as a floor under that, not a starting point
-// to average around. A battery that has demonstrably sustained more than the default gets
-// credit for it; one that has only ever trickled keeps the default instead of being pinned
-// below it.
-func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit float64) {
+// (self-reinforcing). So history here can only ever raise the fallback, never lower it: take a
+// high percentile (batteryPowerPercentile) of the observed sustained slot power per direction,
+// once there is enough of it (batteryPowerMinSamples), and use batteryPower as a floor under
+// that, not a starting point to average around. A battery that has demonstrably sustained more
+// than the default gets credit for it; one that has only ever trickled keeps the default
+// instead of being pinned below it.
+//
+// Samples are screened for physical plausibility against the battery's own capacity before
+// the maximum is taken (batteryMaxCRate), so one corrupt meters row cannot set the limit for
+// a month. What that does NOT cover is a corruption that lands inside the plausible range: a
+// meter double-reporting at 2x a 0.5C battery's real power reads as 1C and is believed, for
+// as long as it lasts. Screening by rank instead - a high percentile, or dropping the top
+// few samples - does not fix that case either and costs real capability, since a battery
+// that genuinely reaches its peak in only a few slots per month has those slots discarded.
+//
+// The failure this bounds is a wrong plan, not wrong hardware behaviour: CMax/DMax shape
+// what the solver schedules and what the savings ledger counterfactual assumes, but the
+// control path to a home battery is api.BatteryController, i.e. SetBatteryMode with a mode
+// enum. There is no power setpoint here to over-drive an inverter with. A battery that does
+// know its own limits reports them through api.BatteryPowerLimiter, which overrides this
+// derivation entirely (see batteryRequest).
+func (site *Site) batteryPowerLimits(name string, capacity float64) (chargeLimit, dischargeLimit float64) {
 	chargeLimit, dischargeLimit = batteryPower, batteryPower
 
 	c, ok := site.collectors[name]
@@ -1901,24 +1873,46 @@ func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit f
 
 	// kWh observed in one 15min slot -> average W sustained over that slot
 	if len(charge) >= batteryPowerMinSamples {
-		chargeLimit = max(chargeLimit, slices.Max(charge)*1e3*slotsPerHour)
+		chargeLimit = max(chargeLimit, plausibleMax(charge, capacity)*1e3*slotsPerHour)
 	}
 	if len(discharge) >= batteryPowerMinSamples {
-		dischargeLimit = max(dischargeLimit, slices.Max(discharge)*1e3*slotsPerHour)
+		dischargeLimit = max(dischargeLimit, plausibleMax(discharge, capacity)*1e3*slotsPerHour)
 	}
 
 	return chargeLimit, dischargeLimit
 }
 
-func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measurement, grid api.Rates, minLen int, firstSlotDuration time.Duration, minImportPrice float32) (optimizer.BatteryConfig, batteryDetail) {
-	chargeLimit, dischargeLimit := site.batteryPowerLimits(dev.Config().Name)
+// plausibleMax returns the largest per-slot energy (kWh) in samples that a battery of
+// capacity (kWh) could actually have moved, or 0 when none of them could. An unknown
+// capacity (<= 0) leaves nothing to judge against, so the plain maximum is returned.
+func plausibleMax(samples []float64, capacity float64) float64 {
+	ceiling := capacity * batteryMaxCRate / slotsPerHour // kWh movable in one slot at the C-rate bound
+
+	var res float64
+	for _, v := range samples {
+		if capacity > 0 && v > ceiling {
+			continue
+		}
+		res = max(res, v)
+	}
+
+	return res
+}
+
+func (site *Site) batteryRequest(dev config.Device[api.Meter], b types.Measurement, grid api.Rates, minLen int, firstSlotDuration time.Duration) (optimizer.BatteryConfig, batteryDetail) {
+	chargeLimit, dischargeLimit := site.batteryPowerLimits(dev.Config().Name, *b.Capacity)
 
 	bat := optimizer.BatteryConfig{
 		CMax:      float32(chargeLimit),
 		DMax:      float32(dischargeLimit),
 		SCapacity: float32(*b.Capacity * 1e3),         // Wh
 		SInitial:  float32(*b.Capacity * *b.Soc * 10), // Wh
-		CPriority: safeCPriority(homeBatteryCPriority, minImportPrice),
+		// CPriority stays at its zero value. The solver's preference term
+		// (optimizer.py:472-475) rewards both charging and discharging a battery, so a
+		// positive CPriority means "cycle this battery more, and sooner" - for an EV
+		// (DMax = 0) the discharge half is inert and it does read as "fill this one
+		// first", but for a home battery it would buy cost-neutral extra cycling, i.e.
+		// wear with no benefit.
 		// PA:       pa,
 	}
 
@@ -2037,176 +2031,6 @@ func unmodelledPower(lp loadpoint.API) float64 {
 	return max(0, power)
 }
 
-// expectedArrivalFallbackMaxPower bounds how fast a predicted-but-not-yet-connected
-// vehicle's reserved energy is assumed to be able to arrive when the site has no
-// configured circuit limit to derive a tighter bound from - conservative three-phase 16A
-// AC home charging, well below what a single vehicle's onboard charger typically exceeds.
-// expectedArrivalDemand's caller prefers the site's own grid import limit (Grid.PMaxImp)
-// when one is configured, since that is a real, site-specific ceiling on what can actually
-// be drawn; this only covers the unconfigured case.
-const expectedArrivalFallbackMaxPower = 11000 // W
-
-// expectedArrivalDemand returns anticipated home demand (Wh, one entry per slot, nil if
-// there is none to add) for vehicles that are opted into expected-arrival learning, are
-// not currently connected anywhere on the site, and have a confident, still-valid learned
-// prediction of when they return and how depleted they are likely to be.
-//
-// This cannot be modelled as a virtual battery: BatteryConfig.CMax is one scalar for the
-// whole horizon (see the optimizer client, e.g. client/types.go), so there is no way to
-// keep a battery entry at zero charge rate before the vehicle actually arrives and open it
-// up only from that slot on - the solver would happily "pre-charge" a vehicle that in
-// reality has nowhere to receive that energy yet, the same failure mode this feature
-// exists to prevent, just shifted earlier. BatteryConfig.SGoal does not fix this either:
-// it only adds a floor on the state of charge at a given future time step
-// (optimizer.py:634-639), it does not zero out the charge rate in the slots before that
-// step, so the same pre-charging failure mode survives unchanged. A virtual entry also has
-// nowhere safe to live downstream: every consumer of req.Batteries (the current-slot
-// suggestion, applyOptimizerResult, mode mapping) assumes each entry is a real, connected
-// device, and a phantom entry with no loadpoint behind it would need every one of those
-// taught to recognize and skip it.
-//
-// So the anticipated energy still goes straight into Gt, the fixed demand series (the same
-// mechanism unmodelled loadpoint load already uses a few lines up): it never enters
-// req.Batteries, so nothing downstream can mistake it for a connected vehicle's battery,
-// and it cannot make the request infeasible since Gt is already an uncapped,
-// always-feasible input (a real load spike has the same effect). What changed is *how* it
-// enters Gt: spread from the predicted arrival slot forward at maxPower per slot rather
-// than dropped into one slot whole. A single slot cannot absorb a real car's worth of
-// energy - 45 kWh in one 15-minute slot implies 180 kW - and Gt is uncapped, so nothing
-// stopped the solver from reporting a plan that assumes it anyway; measured against a
-// p_max_imp of 11 kW that showed up as grid_import_limit_exceeded with 41.25 kWh of
-// overshoot, and pinned the horizon's reported peak for the whole request since the
-// spike outweighs anything attenuate_*_peaks could smooth against.
-func (site *Site) expectedArrivalDemand(vehicles []vehicle.API, minLen int, now time.Time, timestamps []time.Time, horizonEnd time.Time, connected map[api.Vehicle]bool, unidentifiedConnected bool, maxPower float32) []float32 {
-	if unidentifiedConnected {
-		// a physically connected vehicle whose identity the site could not resolve is
-		// already counted as unmodelled load by the caller. Because its identity is
-		// unknown by definition, it could be any one of the vehicles below - crediting one
-		// of them with a predicted arrival on top of that unmodelled load risks double
-		// counting it. There is no signal today that disambiguates "this specific
-		// configured vehicle" from "an unidentified vehicle is plugged in somewhere", so
-		// the safe answer is to model no predicted arrivals at all while this is true,
-		// rather than guess which vehicle it isn't.
-		return nil
-	}
-
-	if maxPower <= 0 {
-		maxPower = expectedArrivalFallbackMaxPower
-	}
-
-	var demand []float32
-
-	for _, v := range vehicles {
-		if !v.GetExpectedArrivalLearning() {
-			continue
-		}
-
-		instance := v.Instance()
-		if instance == nil || connected[instance] {
-			continue
-		}
-
-		arrival, updated := v.GetExpectedArrival()
-		if arrival == (session.ExpectedArrival{}) || now.Sub(updated) > vehicle.AdaptivePlansValidity {
-			continue
-		}
-
-		capacity := instance.Capacity() // kWh
-		if capacity <= 0 {
-			continue
-		}
-
-		energy := float32(arrival.SocUsed / 100 * capacity * 1e3) // Wh
-		if energy <= 0 {
-			continue
-		}
-
-		slot := arrivalSlot(timestamps, horizonEnd, nextOccurrence(arrival.TimeOfDay, now))
-		if slot < 0 {
-			continue
-		}
-
-		if demand == nil {
-			demand = make([]float32, minLen)
-		}
-		placed := spreadDemand(demand, slot, energy, timestamps, horizonEnd, maxPower)
-
-		site.log.DEBUG.Printf("optimizer: expected arrival %s: %.0fWh from slot %d (%v), capped at %.0fW", v.Name(), placed, slot, timestamps[slot], maxPower)
-	}
-
-	return demand
-}
-
-// spreadDemand adds energy (Wh) into demand starting at slot, advancing through later
-// slots as needed and capping what lands in any one slot at maxPower (W) so a single
-// prediction never implies a charging rate nothing could physically deliver - see
-// expectedArrivalDemand's doc comment. Returns how much was actually placed; any remainder
-// that would fall beyond the last slot is dropped, the same horizon cutoff arrivalSlot
-// already applies to where the demand starts.
-func spreadDemand(demand []float32, slot int, energy float32, timestamps []time.Time, horizonEnd time.Time, maxPower float32) float32 {
-	var placed float32
-
-	for i := slot; i < len(demand) && energy > 0; i++ {
-		end := horizonEnd
-		if i+1 < len(timestamps) {
-			end = timestamps[i+1]
-		}
-
-		hours := float32(end.Sub(timestamps[i]).Hours())
-		if hours <= 0 {
-			continue
-		}
-
-		take := min(maxPower*hours, energy)
-		demand[i] += take
-		placed += take
-		energy -= take
-	}
-
-	return placed
-}
-
-// nextOccurrence returns the next time minutesAfterMidnight occurs at or after now: today
-// if it hasn't happened yet, or now itself if today's occurrence has already passed
-// without whatever it marks (here, a predicted vehicle arrival) actually happening.
-//
-// Deferring a full day whenever the predicted time has passed - the original behaviour -
-// makes the reservation vanish for the rest of the day at precisely the moment arrival is
-// most likely: TimeOfDay is deliberately the early (0.1) quantile of observed arrivals
-// (see LearnExpectedArrival), so most historical arrivals happened after it, not at it.
-// Pinning to now instead keeps the reservation continuously present - re-anchored to the
-// earliest reachable slot on every request - until either the vehicle actually connects
-// (excluded elsewhere via the connected map) or the calendar day rolls over, at which
-// point this naturally produces a fresh, still-future occurrence for the new day without
-// any special case.
-func nextOccurrence(minutesAfterMidnight int, now time.Time) time.Time {
-	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	t := day.Add(time.Duration(minutesAfterMidnight) * time.Minute)
-	if t.Before(now) {
-		return now
-	}
-	return t
-}
-
-// arrivalSlot returns the index of the last slot starting at or before target, or -1 when
-// target falls outside the horizon (before the first slot, which should not happen since
-// nextOccurrence never returns a past time, or after the last one, which happens whenever
-// the predicted arrival is further out than this request's horizon).
-func arrivalSlot(timestamps []time.Time, horizonEnd, target time.Time) int {
-	if target.After(horizonEnd) {
-		return -1
-	}
-
-	slot := -1
-	for i, t := range timestamps {
-		if t.After(target) {
-			break
-		}
-		slot = i
-	}
-	return slot
-}
-
 // homeProfile returns the home base load in Wh
 func (site *Site) homeProfile(minLen int) ([]float64, error) {
 	// kWh over last 30 days
@@ -2274,16 +2098,8 @@ func blendMeasured[T constraints.Float](slots []T, measured T, decaySlots int) {
 	}
 }
 
-// blendScale decays a scale factor towards 1 over the first slots.
-// Slot 0 is scaled by the full factor, from slot decaySlots on it is 1.
-func blendScale[T constraints.Float](slots []T, scale float64, decaySlots int) {
-	for i := range min(decaySlots, len(slots)) {
-		w := float64(decaySlots-i) / float64(decaySlots)
-		slots[i] = T(float64(slots[i]) * (w*scale + (1 - w)))
-	}
-}
-
-// blendScaleByLead is blendScale's per-lead counterpart (B31): a single flat scale
+// blendScaleByLead applies a per-lead scale that decays towards 1 over the first slots
+// (B31). It replaced a flat variant that took one scale for the whole window: a single flat scale
 // applied to every slot in the decay window silently mixes two different scales for
 // every slot but the first. slots[i] was built by scaleAndPruneByLead using
 // scaleAt(lead of leadSlots[i]) - a flat ratio computed with, say, the nowcast scale
