@@ -1227,38 +1227,52 @@
       "coverageShort": "{pct} of slots ({valid} of {total})",
       "decisions": {
         "applied": "Applied",
+        "chartAria": "Timeline of 15-minute slots: what the optimizer suggested, and what was applied to the battery.",
+        "chartAriaTable": "Switch to the table view for the per-slot figures.",
         "delta": "Slot-local delta",
         "deltaNote": "Prices only this one slot against its own starting charge, not what happened afterwards - not hindsight. A decision whose payoff shows up in a later slot can read the wrong sign here.",
-        "deltaUnknown": "Not computable for this slot.",
+        "deltaUnknown": "not computable",
         "empty": "No control decisions recorded in this period.",
-        "health": "Recorded while the optimizer was unhealthy",
-        "legend": {
-          "deltaCost": "Δ > 0",
-          "deltaSaved": "Δ ≤ 0"
+        "healthShort": "recorded while the optimizer was unhealthy",
+        "lane": {
+          "applied": "applied",
+          "suggested": "suggested"
         },
-        "modeChanged": "The applied mode changed again later in this slot - the point above is only a sample taken at its start.",
-        "noVeto": "Nothing was vetoed in this slot.",
-        "outcome": {
-          "noSuggestion": "no suggestion recorded",
-          "steady": "steady, nothing vetoed",
-          "vetoedCost": "vetoed, cost {delta}",
-          "vetoedSaved": "vetoed, saved {delta}",
-          "vetoedUnknown": "vetoed, delta not computable"
+        "legendDiverged": {
+          "cost": "Override cost money",
+          "neutral": "Override made no difference",
+          "saved": "Override saved money",
+          "unknown": "Override, not priced"
         },
+        "modeChangedShort": "the applied mode changed later in this slot",
+        "noSuggestion": "No suggestion",
         "reason": "Why it differs",
         "recordedSpan": "Recorded slots: {from} – {to}",
-        "suggested": "Suggested instead",
+        "suggested": "Suggested",
+        "summaryDiverged": "{count} overrode the suggestion",
+        "summaryFollowed": "{count} followed the suggestion",
+        "summaryNetCost": "the {count} priced overrides cost {amount} in their own slots",
+        "summaryNetCostOne": "the priced override cost {amount} in its own slot",
+        "summaryNetNeutral": "the {count} priced overrides changed the bill by nothing",
+        "summaryNetNeutralOne": "the priced override changed the bill by nothing",
+        "summaryNetSaved": "the {count} priced overrides saved {amount} in their own slots",
+        "summaryNetSavedOne": "the priced override saved {amount} in its own slot",
+        "summaryNetUnknown": "no slot-local figure is computable for them",
+        "summaryNoSuggestion": "{count} slots without a suggestion",
+        "summaryNoSuggestionOne": "1 slot without a suggestion",
+        "summarySlots": "{count} slots recorded",
+        "summarySlotsOne": "1 slot recorded",
+        "summaryUnhealthy": "{count} while the optimizer was unhealthy",
         "table": {
           "applied": "Applied",
-          "basis": "Basis",
-          "delta": "Δ",
-          "suggested": "Rejected",
+          "basis": "Health",
+          "delta": "Slot-local Δ",
+          "suggested": "Suggested",
           "time": "Slot"
         },
-        "tableToggle": "Table view",
-        "timelineToggle": "Timeline view",
-        "title": "Per-slot decisions",
-        "unhealthyCount": "{count} of these vetoes were recorded while the optimizer was unhealthy."
+        "tableToggle": "Table",
+        "timelineToggle": "Timeline",
+        "title": "Per-slot decisions"
       },
       "details": {
         "cost": "cost you",

@@ -30,9 +30,17 @@ echarts.use([
 
 export const FONT_FAMILY = "Montserrat, sans-serif";
 
+export interface MarkPointLabelItem {
+  coord: [number, number];
+  value: string;
+  /** backgroundColor overrides the series-level badge colour for this one point - used
+   * where the points in a single series carry opposite meanings (saved vs. cost). */
+  label?: { offset?: [number, number]; backgroundColor?: string };
+}
+
 export function markPointLabel(
   color: string,
-  data: { coord: [number, number]; value: string; label?: { offset?: [number, number] } }[],
+  data: MarkPointLabelItem[],
   startDate?: Date,
   endDate?: Date
 ) {

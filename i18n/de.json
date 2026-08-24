@@ -1227,38 +1227,52 @@
       "coverageShort": "{pct} der Zeitfenster ({valid} von {total})",
       "decisions": {
         "applied": "Angewendet",
+        "chartAria": "Zeitleiste der 15-Minuten-Zeitfenster: was der Optimizer vorgeschlagen hat und was am Speicher angewendet wurde.",
+        "chartAriaTable": "Für die Werte je Zeitfenster zur Tabellenansicht wechseln.",
         "delta": "Delta im Zeitfenster",
         "deltaNote": "Bewertet nur dieses eine Zeitfenster gegen seinen eigenen Anfangsladestand, nicht das, was danach passiert ist - keine Rückschau. Eine Entscheidung, die sich erst später auszahlt, kann hier das falsche Vorzeichen haben.",
-        "deltaUnknown": "Für dieses Zeitfenster nicht berechenbar.",
+        "deltaUnknown": "nicht berechenbar",
         "empty": "In diesem Zeitraum wurden keine Steuerungsentscheidungen aufgezeichnet.",
-        "health": "Aufgezeichnet, während der Optimizer nicht gesund war",
-        "legend": {
-          "deltaCost": "Δ > 0",
-          "deltaSaved": "Δ ≤ 0"
+        "healthShort": "aufgezeichnet, während der Optimizer nicht gesund war",
+        "lane": {
+          "applied": "angewendet",
+          "suggested": "vorgeschlagen"
         },
-        "modeChanged": "Der angewendete Modus hat sich später in diesem Zeitfenster nochmals geändert - der Punkt darüber ist nur eine Stichprobe zu seinem Beginn.",
-        "noVeto": "In diesem Zeitfenster wurde nichts verworfen.",
-        "outcome": {
-          "noSuggestion": "kein Vorschlag aufgezeichnet",
-          "steady": "unverändert, nichts verworfen",
-          "vetoedCost": "verworfen, kostete {delta}",
-          "vetoedSaved": "verworfen, sparte {delta}",
-          "vetoedUnknown": "verworfen, Delta nicht berechenbar"
+        "legendDiverged": {
+          "cost": "Abweichung kostete Geld",
+          "neutral": "Abweichung ohne Wirkung",
+          "saved": "Abweichung sparte Geld",
+          "unknown": "Abweichung, nicht bewertet"
         },
+        "modeChangedShort": "der angewendete Modus hat sich später in diesem Zeitfenster geändert",
+        "noSuggestion": "Kein Vorschlag",
         "reason": "Warum es abweicht",
         "recordedSpan": "Aufgezeichnete Zeitfenster: {from} – {to}",
-        "suggested": "Stattdessen vorgeschlagen",
+        "suggested": "Vorgeschlagen",
+        "summaryDiverged": "{count} sind vom Vorschlag abgewichen",
+        "summaryFollowed": "{count} sind dem Vorschlag gefolgt",
+        "summaryNetCost": "die {count} bewerteten Abweichungen kosteten {amount} in ihren eigenen Zeitfenstern",
+        "summaryNetCostOne": "die bewertete Abweichung kostete {amount} in ihrem eigenen Zeitfenster",
+        "summaryNetNeutral": "die {count} bewerteten Abweichungen haben die Rechnung nicht verändert",
+        "summaryNetNeutralOne": "die bewertete Abweichung hat die Rechnung nicht verändert",
+        "summaryNetSaved": "die {count} bewerteten Abweichungen sparten {amount} in ihren eigenen Zeitfenstern",
+        "summaryNetSavedOne": "die bewertete Abweichung sparte {amount} in ihrem eigenen Zeitfenster",
+        "summaryNetUnknown": "für sie ist kein Wert im Zeitfenster berechenbar",
+        "summaryNoSuggestion": "{count} Zeitfenster ohne Vorschlag",
+        "summaryNoSuggestionOne": "1 Zeitfenster ohne Vorschlag",
+        "summarySlots": "{count} Zeitfenster aufgezeichnet",
+        "summarySlotsOne": "1 Zeitfenster aufgezeichnet",
+        "summaryUnhealthy": "{count} davon, während der Optimizer nicht gesund war",
         "table": {
           "applied": "Angewendet",
-          "basis": "Basis",
-          "delta": "Δ",
-          "suggested": "Verworfen",
+          "basis": "Zustand",
+          "delta": "Δ im Zeitfenster",
+          "suggested": "Vorgeschlagen",
           "time": "Zeitfenster"
         },
-        "tableToggle": "Tabellenansicht",
-        "timelineToggle": "Zeitleistenansicht",
-        "title": "Entscheidungen je Zeitfenster",
-        "unhealthyCount": "{count} dieser verworfenen Vorschläge wurden aufgezeichnet, während der Optimizer nicht gesund war."
+        "tableToggle": "Tabelle",
+        "timelineToggle": "Zeitleiste",
+        "title": "Entscheidungen je Zeitfenster"
       },
       "details": {
         "cost": "kostete dich",
