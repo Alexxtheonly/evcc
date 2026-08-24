@@ -22,12 +22,16 @@
 			{{ $t("forecast.savingsLedger.coverageChainDiverges", { pct: chainCoveragePct }) }}
 		</p>
 
-		<template v-if="notes.length">
-			<p class="notes-title">{{ $t("forecast.savingsLedger.notesTitle") }}</p>
+		<!-- Every note the API sent is still here in full (ADR-011 rule 7: none may be
+		     dropped), but collapsed: they are the backend's own wording, down to field
+		     names like meterResidual and decisions[].slotFlowDeltaEur, and opening the
+		     modal on them buried the plain-language explanation above. -->
+		<details v-if="notes.length" class="notes" data-testid="savings-ledger-info-notes-details">
+			<summary class="notes-title">{{ $t("forecast.savingsLedger.notesTitle") }}</summary>
 			<ul class="notes-list small" data-testid="savings-ledger-info-notes">
 				<li v-for="(note, i) in notes" :key="i">{{ note }}</li>
 			</ul>
-		</template>
+		</details>
 	</GenericModal>
 </template>
 
@@ -82,16 +86,19 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.notes {
+	margin-top: 1rem;
+}
 .notes-title {
 	font-size: 0.6875rem;
 	letter-spacing: 0.06em;
 	text-transform: uppercase;
 	font-weight: 700;
 	color: var(--evcc-gray);
-	margin: 1rem 0 0.375rem;
+	cursor: pointer;
 }
 .notes-list {
-	margin: 0;
+	margin: 0.375rem 0 0;
 	padding-left: 1.1rem;
 	color: var(--evcc-gray);
 	line-height: 1.5;
