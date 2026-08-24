@@ -10,11 +10,16 @@ import { pickSettled, ZERO_EPSILON_EUR, type SettlementHeadline } from "./saving
 /** The five columns, left to right. Always all five, even when a contribution is absent
  * (a site without a battery draws battery/control as zero-magnitude columns rather than
  * silently dropping them - the reader must be able to see that the measure existed and
- * moved nothing). Control is NEVER split into routing/timing here, unlike
- * chainSegments(): routing+timing == control.full, and splitting the column costs more
- * readability than the extra detail buys. The split is surfaced in the Control column's
- * tooltip instead, and only at the perSlot headline - see chainSegments' doc comment for
- * why routing/timing must not appear under a periodAverage headline. */
+ * moved nothing). Control is NEVER split into routing/timing here: routing+timing ==
+ * control.full, and splitting the column costs more readability than the extra detail
+ * buys. The split is surfaced in the Control column's tooltip instead, and ONLY at the
+ * perSlot headline, because control.routing/control.timing are not a per-lens pair like
+ * every other figure here - Routing is always the period-average-lens diff and Timing is
+ * always Full (the perSlot-lens diff) minus Routing (ledger_worlds.go's ControlSplit doc
+ * comment). They sum to Full, i.e. to the perSlot Control contribution; showing them
+ * beside a periodAverage Control figure would render two numbers that don't sum to the
+ * figure above them, breaking the "parts sum to the whole" guarantee this chart exists to
+ * demonstrate. */
 export type WaterfallKey = "baseline" | "pv" | "battery" | "control" | "paid";
 
 export const WATERFALL_KEYS: WaterfallKey[] = ["baseline", "pv", "battery", "control", "paid"];
@@ -34,9 +39,12 @@ export interface WaterfallColumn {
   /** One of the two end columns (full-height bar from zero), not a contribution. */
   total: boolean;
   /** ADR-011 rule 7: this column's figure rests on the W2 counterfactual battery and
-   * must carry that in its axis label, not in a footnote. Decided exactly as
-   * chainSegments() decides it: PV is measured arithmetic over measured energy, Battery
-   * and Control are estimated whenever the site has a battery (chain.batteryPhysics). */
+   * must carry that in its axis label, not in a footnote. PV is measured arithmetic over
+   * directly measured PV/grid energy and realised prices, no derived battery assumption
+   * involved; Battery and Control are estimated whenever the site has a battery
+   * (chain.batteryPhysics is set) because W2 depends on it. deriveBatteryPhysics's Source
+   * strings say whether that's a device-reported fact or a fallback derived from history;
+   * this module never fabricates a numeric error bar the API doesn't provide. */
   estimated: boolean;
   /** The measure cost money rather than saving it - drawn rising, in the danger colour.
    * Never clamped to zero (ADR-011 rule 1). */
@@ -162,4 +170,84 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
  * Always >= 0 by construction. */
 export function plotBase(column: WaterfallColumn, layout: WaterfallLayout): number {
   return column.base - layout.origin;
+}
+
+/** The running level after each column, in plotting coordinates - the y of the thin
+ * connector that links one bar to the next. Same origin shift as plotBase, so a caller
+ * can feed both to the same axis. */
+export function plotLevels(layout: WaterfallLayout): number[] {
+  return layout.columns.map((c) => c.level - layout.origin);
+}
+
+// --- axis scale ---------------------------------------------------------------------
+
+/** Headroom above the tallest bar so its value label has somewhere to sit. Small on
+ * purpose: rounding up to the next whole-euro tick below usually adds a good deal more. */
+const AXIS_HEADROOM = 1.05;
+/** At most this many ticks, so a tall axis doesn't turn into a ladder. */
+const AXIS_MAX_SPLITS = 5;
+/** Tick sizes, WHOLE units only (1, 2, 5, 10, 20, 50, ...). The axis labels are rendered
+ * without decimals, so a 2.50 tick would print two ticks both reading "3". */
+const AXIS_STEP_MANTISSAS = [1, 2, 5];
+
+export interface WaterfallAxis {
+  /** Top of the axis, in plotting coordinates (add layout.origin for real euros). */
+  max: number;
+  /** Distance between ticks, in the same coordinates. Passed to ECharts as an explicit
+   * `interval` rather than a splitNumber hint, so the ticks land exactly here. */
+  interval: number;
+}
+
+/**
+ * A whole-euro tick scale that covers every bar with a little headroom.
+ *
+ * Picks the smallest whole-unit step that gets the whole chart inside AXIS_MAX_SPLITS
+ * ticks, then pins the axis at an exact multiple of it - so the labels read "0, 2, 4, 6,
+ * 8" rather than ECharts' auto choice of "14.81". In the (rare) shifted case where
+ * layout.origin is negative the ticks are still evenly spaced whole units apart, but the
+ * labels are offset by origin and so are not themselves round - the honest figure wins
+ * over the round one.
+ */
+export function waterfallAxis(layout: WaterfallLayout): WaterfallAxis {
+  const top = Math.max(0, ...layout.columns.map((c) => c.base + c.span - layout.origin));
+  const needed = top * AXIS_HEADROOM;
+  if (!(needed > 0)) return { max: 1, interval: 1 };
+  for (let exp = 0; exp <= 12; exp++) {
+    for (const mantissa of AXIS_STEP_MANTISSAS) {
+      const interval = mantissa * Math.pow(10, exp);
+      const splits = Math.ceil(needed / interval);
+      if (splits <= AXIS_MAX_SPLITS) return { max: interval * splits, interval };
+    }
+  }
+  // unreachable for any real euro figure (1e12 ticks cover everything) - never fabricate
+  // a scale that hides a bar.
+  return { max: needed, interval: needed / AXIS_MAX_SPLITS };
+}
+
+// --- minimum rendered bar height ------------------------------------------------------
+
+/** A bar smaller than this reads as a rule, not a bar - and once the "estimated" dashed
+ * outline is drawn on it, as a dotted hairline with no fill at all. */
+export const BAR_MIN_PX = 4;
+
+/** BAR_MIN_PX expressed in the chart's own value units, given the axis top and the
+ * plotting area's height in pixels. */
+export function minSpan(axisMax: number, plotHeightPx: number): number {
+  if (!(axisMax > 0) || !(plotHeightPx > 0)) return 0;
+  return (BAR_MIN_PX / plotHeightPx) * axisMax;
+}
+
+/**
+ * Bar height in plotting coordinates, floored at `floor` so a small-but-nonzero
+ * contribution still reads as a bar.
+ *
+ * A `zero: true` column is returned untouched: a measure that moved nothing must never be
+ * drawn as though it had. The floor is deliberately applied to the height only, leaving
+ * the bar's base where the geometry put it - the bar's top can therefore overshoot its
+ * true level by up to BAR_MIN_PX. That is a rendering minimum, not a restatement of the
+ * figure: the connectors and every printed number still come from the true levels.
+ */
+export function plotSpan(column: WaterfallColumn, floor: number): number {
+  if (column.zero) return column.span;
+  return Math.max(column.span, floor);
 }

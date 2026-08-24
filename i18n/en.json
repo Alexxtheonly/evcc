@@ -1200,7 +1200,7 @@
         },
         "control": {
           "label": "Control",
-          "sub": "the real controller against the dumb-rule default, at the period-average price"
+          "sub": "the real controller against the dumb-rule default"
         },
         "paid": {
           "label": "You paid",
@@ -1211,15 +1211,15 @@
           "sub": "self-consumption priced at each slot's own rate, export at the realised feed-in price"
         },
         "routing": {
-          "label": "Routing",
-          "sub": "which sink the surplus went to, against the dumb-rule default"
+          "label": "Routing"
         },
         "timing": {
-          "label": "Price timing",
-          "sub": "when energy was bought, sold or shifted, priced per slot"
+          "label": "Price timing"
         }
       },
       "chainUnavailable": "The battery-vs-baseline comparison isn't available for this period: {reason}",
+      "chartAria": "Waterfall diagram: {start} without solar, battery or control, stepping down through what each measure did, to {end} actually paid.",
+      "controlOverspendShort": "control cost {amount} against its baseline",
       "coverageChainDiverges": "The diagram is computed over {pct} of slots - fewer than the headline figures, because it also needs battery and vehicle data the grid-only figure doesn't.",
       "coverageChainDivergesShort": "diagram over {pct}",
       "coverageExcluded": "Excluded slots are dropped, never scaled up to cover the gap.",
@@ -1261,6 +1261,7 @@
       },
       "estimated": "estimated",
       "estimatedCaption": "battery and control are estimated",
+      "evTimingShort": "Moving a car charge to a cheaper hour shows as nothing here - every measure prices energy at the moment it was drawn.",
       "headline": {
         "label": "Settlement",
         "periodAverage": "period average",
@@ -1273,14 +1274,13 @@
         "physicsEta": "One-way efficiency {charge} charging, {discharge} discharging - {source}.",
         "physicsFloor": "Discharge floor {value} - {source}.",
         "start": "The first bar is what this period's electricity would have cost with no solar, no battery and no control: every kWh the home used, priced at the grid tariff for the slot it was used in.",
-        "steps": "Each step after it removes what one measure saved, so the bar descends. A step that raised the bill is drawn upward and coloured red - shown, never clamped to zero.",
+        "steps": "Each step after it removes what one measure saved, so the bar descends. A step that raised the bill is drawn upward and coloured red - shown, never clamped to zero. On the three middle bars, ↓ is what the measure took off the bill and ↑ is what it added; the first and last bars are totals, printed plain.",
         "title": "How this is worked out"
       },
       "loading": "Loading the savings ledger…",
       "measured": "measured",
-      "notesTitle": "Notes",
+      "notesTitle": "Technical notes",
       "periodJumpToPresent": "Jump to now",
-      "physicsShort": "estimated: capacity - {capacity}; round-trip efficiency - {eta}; discharge floor - {floor}.",
       "refuseTitle": "No figure for this period",
       "title": "What the system did with your money"
     },
