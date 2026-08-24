@@ -1169,9 +1169,9 @@
       "modeNormal": "Normaler Betrieb",
       "modeUnknown": "Kein Plan",
       "planReadyBy": "{vehicle} geladen auf {soc}",
-      "reasonDamping": "wartet auf Bestätigung",
+      "reasonDamping": "Bestätigung offen",
       "reasonForcedIdle": "Batterien uneinig",
-      "reasonLiveRate": "Preis geändert",
+      "reasonLiveRate": "Preis verändert",
       "reasonPayback": "rechnet sich nicht"
     },
     "price": {
@@ -1256,7 +1256,7 @@
           "time": "Zeitfenster"
         },
         "tableToggle": "Tabellenansicht",
-        "timelineToggle": "Zeitleiste",
+        "timelineToggle": "Zeitleistenansicht",
         "title": "Entscheidungen je Zeitfenster",
         "unhealthyCount": "{count} dieser verworfenen Vorschläge wurden aufgezeichnet, während der Optimizer nicht gesund war."
       },
@@ -1288,7 +1288,7 @@
       "loading": "Sparbilanz wird geladen…",
       "measured": "gemessen",
       "notesTitle": "Technische Hinweise",
-      "periodJumpToPresent": "Zu jetzt springen",
+      "periodJumpToPresent": "Zur Gegenwart springen",
       "refuseTitle": "Kein Wert für diesen Zeitraum",
       "title": "Was das System mit deinem Geld gemacht hat"
     },
