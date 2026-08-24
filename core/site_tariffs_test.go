@@ -342,3 +342,28 @@ func TestPersistTariffsRetriesOnlyTheImmediatelyPreviousSlot(t *testing.T) {
 	require.Equal(t, slot.Unix(), rows[1].Ts)
 	require.NotNil(t, rows[1].FeedIn, "the current slot is still persisted normally")
 }
+
+// TestPercentileOfMatchesTheReplacedDefinition fences the one thing that made it safe to
+// point percentileOf at metrics.Percentile: the two use DIFFERENT nearest-rank formulas.
+// The old one was s[int(p*(n-1))] (truncated linear index), metrics.Percentile is the
+// textbook s[ceil(p*n)-1]. They disagree at 360 of 398 sample counts for p=0.95 - but at
+// solarScalePercentile they are identical for every n, which is why the solar scale did
+// not move. If either the percentile or the formula changes, this fails rather than
+// silently re-tuning the solar scale.
+func TestPercentileOfMatchesTheReplacedDefinition(t *testing.T) {
+	require.Equal(t, 0.5, solarScalePercentile, "this test only fences p=0.5; re-derive before changing it")
+
+	for n := 1; n <= 400; n++ {
+		values := make([]float64, n)
+		for i := range values {
+			values[i] = float64(i)
+		}
+
+		got, ok := percentileOf(values, solarScalePercentile, 1)
+		require.True(t, ok)
+
+		// the exact expression deleted from percentileOf
+		want := values[int(solarScalePercentile*float64(n-1))]
+		require.Equal(t, want, got, "n=%d: the swap must not move the solar scale", n)
+	}
+}

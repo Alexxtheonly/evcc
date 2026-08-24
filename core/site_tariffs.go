@@ -3,7 +3,6 @@ package core
 import (
 	"encoding/json"
 	"math"
-	"slices"
 	"time"
 
 	"github.com/evcc-io/evcc/api"
@@ -484,15 +483,14 @@ func (site *Site) solarScaleAt(nowcast float64) func(lead time.Duration) float64
 	}
 }
 
-// percentileOf returns the p-th percentile (0..1) of values by nearest-rank on the
-// sorted series, or false when fewer than minSamples are present.
+// percentileOf returns the p-th percentile (0..1) of values, or false when fewer than
+// minSamples are present. The percentile itself is metrics.Percentile - this only adds
+// the sample-count gate, which is per-caller.
 func percentileOf(values []float64, p float64, minSamples int) (float64, bool) {
 	if len(values) < minSamples {
 		return 0, false
 	}
-	s := slices.Clone(values)
-	slices.Sort(s)
-	return s[int(p*float64(len(s)-1))], true
+	return metrics.Percentile(values, p), true
 }
 
 func (site *Site) isDynamicTariff(usage api.TariffUsage) bool {
