@@ -109,8 +109,6 @@
 					/>
 				</Card>
 
-				<SavingsLedgerCard :currency="currency" />
-
 				<Card
 					v-for="t in valueForecastTypes"
 					:key="t"
@@ -147,7 +145,6 @@ import SolarChart from "../components/Forecast/SolarChart.vue";
 import SolarDetails from "../components/Forecast/SolarDetails.vue";
 import PriceChart from "../components/Forecast/PriceChart.vue";
 import GridDetails from "../components/Forecast/GridDetails.vue";
-import SavingsLedgerCard from "../components/Forecast/SavingsLedgerCard.vue";
 import ValueChart, { type ValueChartType } from "../components/Forecast/ValueChart.vue";
 import ValueDetails from "../components/Forecast/ValueDetails.vue";
 import formatter from "@/mixins/formatter";
@@ -171,7 +168,6 @@ export default defineComponent({
 		SolarDetails,
 		PriceChart,
 		GridDetails,
-		SavingsLedgerCard,
 		ValueChart,
 		ValueDetails,
 	},
