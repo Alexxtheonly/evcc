@@ -1045,3 +1045,27 @@ func TestBatteryFloorFallsBackWhenOnlyOneBatteryReportsALimit(t *testing.T) {
 	require.Equal(t, floorSourceConfigured, phys.FloorSource)
 	require.InDelta(t, 0.10, phys.FloorFrac, 1e-9)
 }
+
+// TestDeriveBatteryPhysicsDoesNotCacheACallersCancellation pins the one thing the
+// cache must not do: a client that disconnects mid-query produces a context error
+// that describes the CALLER, not the database. Caching it would serve that error to
+// every other caller for the whole back-off window.
+func TestDeriveBatteryPhysicsDoesNotCacheACallersCancellation(t *testing.T) {
+	loc := time.Now().Location()
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	seedBatteryCalibration(t, mustCreateEntity(t, Battery, "bat1"), start)
+
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := deriveBatteryPhysics(gone)
+	require.Error(t, err, "a cancelled caller must not be served a battery")
+
+	// a healthy caller, immediately afterwards and well inside the TTL
+	phys, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err, "the previous caller's cancellation must not have been cached")
+	require.InDelta(t, 10.0, phys.CapacityKWh, 1e-6)
+}

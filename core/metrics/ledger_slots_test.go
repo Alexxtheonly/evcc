@@ -263,7 +263,6 @@ func TestQueryTariffSlotsBindsFeedIn(t *testing.T) {
 	require.InDelta(t, 0.08, *got.FeedIn, 1e-9, "FeedIn must bind from the \"feedin\" column, not stay at its zero value")
 }
 
-// ptr is a local helper for the *float64 prices these tests deal in.
 // seedFeedInWitnesses records n feed-in-only tariff rows at price, placed after the
 // windows these tests query. feedInFallback corroborates against the whole tariffs
 // table (see minFeedInWitnessSlots), so a test that wants the fallback to engage has

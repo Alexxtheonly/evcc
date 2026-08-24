@@ -263,7 +263,15 @@ func deriveBatteryPhysics(ctx context.Context) (batteryPhysics, error) {
 	// did, since a cache HIT never used the caller's ctx either.
 	batteryPhysicsCtx = ctx
 
-	return batteryPhysicsCache.Get()
+	phys, err := batteryPhysicsCache.Get()
+	if err != nil && ctx.Err() != nil {
+		// this caller went away mid-query, so the error describes the caller, not the
+		// database. Caching it would serve "context canceled" to healthy callers for
+		// the whole back-off window - drop it instead.
+		batteryPhysicsCache.Reset()
+	}
+
+	return phys, err
 }
 
 func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
