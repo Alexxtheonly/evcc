@@ -74,13 +74,35 @@ func DeleteTariffs(from, to time.Time, usage string) (int64, error) {
 	return res.RowsAffected, err
 }
 
-// PersistTariffs stores the tariff values at the given 15min boundary, nil values omitted
+// PersistTariffs stores the tariff values at the given 15min boundary, nil values omitted.
+//
+// A slot already on record is not skipped: each column is filled only where it is
+// still NULL, and a value already recorded is never overwritten. Skipping the row
+// entirely (the previous clause.OnConflict{DoNothing}) made a gap permanent - a usage
+// whose tariff happened to be unavailable when the slot was first written stayed NULL
+// forever, even once the tariff came back. That is how this site accumulated 86
+// feed-in-less slots across a single UI config edit, and every one of them dropped out
+// of the savings ledger's coverage (see core/metrics/ledger_slots.go).
 func PersistTariffs(ts time.Time, grid, feedin, co2, temperature *float64) error {
 	if grid == nil && feedin == nil && co2 == nil && temperature == nil {
 		return nil
 	}
 
-	return db.Instance.Clauses(clause.OnConflict{DoNothing: true}).Create(&tariffValue{
+	// COALESCE(<table>.col, excluded.col) is what makes this fill-only rather than
+	// overwrite. `excluded` is the sqlite/postgres name for the row that failed to
+	// insert; mysql spells it differently, so this upsert is dialect-specific - fine
+	// while server/db/db.go only opens sqlite, and the reason the table name is read
+	// off the model instead of being spelled out a second time here.
+	table := tariffValue{}.TableName()
+	fillNulls := make(map[string]any, len(tariffUsages))
+	for _, u := range tariffUsages {
+		fillNulls[u] = gorm.Expr(fmt.Sprintf("COALESCE(%s.%s, excluded.%s)", table, u, u))
+	}
+
+	return db.Instance.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "ts"}},
+		DoUpdates: clause.Assignments(fillNulls),
+	}).Create(&tariffValue{
 		Timestamp:   ts.Unix(),
 		Grid:        grid,
 		FeedIn:      feedin,

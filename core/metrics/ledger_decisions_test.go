@@ -52,7 +52,7 @@ func TestDecisionDeltasHindsight(t *testing.T) {
 	from := base
 	to := second.Add(15 * time.Minute)
 
-	set, err := buildLedgerSlots(context.Background(), from, to, true, true)
+	set, err := buildLedgerSlots(context.Background(), from, to, true, true, nil)
 	require.NoError(t, err)
 
 	phys, err := deriveBatteryPhysics(context.Background())
@@ -173,7 +173,7 @@ func TestSlotFlowDeltaIsSlotLocalNotForwardHindsight(t *testing.T) {
 
 	from, to := slot1, slot2.Add(15*time.Minute)
 
-	ledger, err := ComputeLedger(context.Background(), from, to)
+	ledger, err := ComputeLedger(context.Background(), from, to, nil)
 	require.NoError(t, err)
 	require.NotNil(t, ledger.Chain, "chain must be available: %s", ledger.ChainUnavailable)
 	require.Len(t, ledger.Decisions, 2)

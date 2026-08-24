@@ -163,6 +163,26 @@ func (site *Site) publishTariffs(greenShareHome float64, greenShareLoadpoints fl
 
 // persistTariffs stores tariff values once per 15min boundary. Like the meter
 // collectors it is driven by the update loop, skipping the partial boot slot.
+//
+// It also re-attempts the immediately preceding slot. A usage whose tariff was
+// unavailable at the moment that slot was written (a tariff device being recreated by
+// a UI config edit, a provider request that failed) left a NULL behind that nothing
+// ever came back for - metrics.PersistTariffs only ever fills NULLs and never
+// overwrites a recorded value, so the retry cannot damage an observed reading, and it
+// closes the hole while the rate is still readable for that slot. tariff.At returns an
+// error for a slot outside the tariff's rate window, which leaves that usage nil
+// rather than substituting a later price.
+//
+// It is not, however, free of risk. A static tariff's rates are regenerated from the
+// CURRENT configuration, so tariff.At answers for a past instant with today's number:
+// if the device was mid-recreation at the previous tick AND the edit that landed
+// between the two ticks changed the rate, this writes the new rate into a slot that
+// was billed at the old one, permanently and indistinguishably from an observed
+// reading. A static tariff's past rates are unverifiable by construction; this writes
+// exactly one slot's worth of that assumption, and only when the update loop is
+// running on schedule - the retry is bounded to slot-1 and skipped entirely when the
+// last persisted slot is older than that, so a stalled loop cannot widen the window
+// it asserts over.
 func (site *Site) persistTariffs() {
 	slot := time.Now().Truncate(tariff.SlotDuration)
 
@@ -174,21 +194,28 @@ func (site *Site) persistTariffs() {
 		return
 	}
 
-	value := func(u api.TariffUsage) *float64 {
-		if r, err := tariff.At(site.GetTariff(u), slot); err == nil {
-			return &r.Value
+	persist := func(ts time.Time) {
+		value := func(u api.TariffUsage) *float64 {
+			if r, err := tariff.At(site.GetTariff(u), ts); err == nil {
+				return &r.Value
+			}
+			return nil
 		}
-		return nil
+
+		if err := metrics.PersistTariffs(ts,
+			value(api.TariffUsageGrid),
+			value(api.TariffUsageFeedIn),
+			value(api.TariffUsageCo2),
+			value(api.TariffUsageTemperature),
+		); err != nil {
+			site.log.ERROR.Printf("persist tariffs: %v", err)
+		}
 	}
 
-	if err := metrics.PersistTariffs(slot,
-		value(api.TariffUsageGrid),
-		value(api.TariffUsageFeedIn),
-		value(api.TariffUsageCo2),
-		value(api.TariffUsageTemperature),
-	); err != nil {
-		site.log.ERROR.Printf("persist tariffs: %v", err)
+	if prev := slot.Add(-tariff.SlotDuration); last.Equal(prev) {
+		persist(prev)
 	}
+	persist(slot)
 }
 
 // forecastSlotEnergy is the energy expected in the slot covering now, integrated

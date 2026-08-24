@@ -37,7 +37,7 @@ func TestRefusedBeforeTariffStart(t *testing.T) {
 	from := tariffStart.Add(-24 * time.Hour)
 	to := tariffStart
 
-	_, err := ComputeRealisedCost(context.Background(), from, to)
+	_, err := ComputeRealisedCost(context.Background(), from, to, nil)
 	require.Error(t, err)
 
 	var refused *ErrBeforeTariffStart
@@ -74,7 +74,7 @@ func TestCoverageExcludesRecoveredIncompleteSlots(t *testing.T) {
 	from := base
 	to := base.Add(5 * 15 * time.Minute)
 
-	res, err := ComputeRealisedCost(context.Background(), from, to)
+	res, err := ComputeRealisedCost(context.Background(), from, to, nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 5, res.Coverage.TotalSlots)
@@ -99,7 +99,7 @@ func TestBuildLedgerSlotsRefusesOversizedRange(t *testing.T) {
 	from := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	_, err := buildLedgerSlots(context.Background(), from, to, false, false)
+	_, err := buildLedgerSlots(context.Background(), from, to, false, false, nil)
 	require.ErrorIs(t, err, ErrLedgerRangeTooLarge)
 }
 
@@ -123,15 +123,15 @@ func TestBuildLedgerSlotsRefusesUnalignedRange(t *testing.T) {
 	require.NoError(t, persist(home, base, 1, 0, nil, false, false))
 
 	unalignedFrom := base.Add(7 * time.Minute)
-	_, err := buildLedgerSlots(context.Background(), unalignedFrom, unalignedFrom.Add(15*time.Minute), false, false)
+	_, err := buildLedgerSlots(context.Background(), unalignedFrom, unalignedFrom.Add(15*time.Minute), false, false, nil)
 	require.ErrorIs(t, err, ErrLedgerRangeUnaligned)
 
 	unalignedTo := base.Add(15*time.Minute + 3*time.Second)
-	_, err = buildLedgerSlots(context.Background(), base, unalignedTo, false, false)
+	_, err = buildLedgerSlots(context.Background(), base, unalignedTo, false, false, nil)
 	require.ErrorIs(t, err, ErrLedgerRangeUnaligned)
 
 	// the aligned equivalent must still work
-	_, err = buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), false, false)
+	_, err = buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), false, false, nil)
 	require.NoError(t, err)
 }
 
@@ -149,11 +149,11 @@ func TestBuildLedgerSlotsRefusesInvertedRange(t *testing.T) {
 	base := time.Date(2026, 8, 22, 0, 0, 0, 0, loc)
 
 	// reversed: to before from
-	_, err := buildLedgerSlots(context.Background(), base.Add(24*time.Hour), base, false, false)
+	_, err := buildLedgerSlots(context.Background(), base.Add(24*time.Hour), base, false, false, nil)
 	require.ErrorIs(t, err, ErrLedgerRangeInverted)
 
 	// identical: to == from
-	_, err = buildLedgerSlots(context.Background(), base, base, false, false)
+	_, err = buildLedgerSlots(context.Background(), base, base, false, false, nil)
 	require.ErrorIs(t, err, ErrLedgerRangeInverted)
 }
 
@@ -181,14 +181,14 @@ func TestComputeRealisedCostIgnoresBatterySocFailures(t *testing.T) {
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 	// no battery meter row at all for this slot - a read failure, not a config choice
 
-	res, err := ComputeRealisedCost(context.Background(), base, base.Add(15*time.Minute))
+	res, err := ComputeRealisedCost(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Coverage.ValidSlots, "a battery SoC failure must not exclude a slot from the realised-cost figure")
 	require.InDelta(t, 0.30, res.Settled.PerSlot, 1e-9)
 
 	// the same failure DOES still exclude the slot from a battery-dependent
 	// computation - ComputeChain needs BatterySocFrac for W2.
-	set, err := buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), false, true)
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), false, true, nil)
 	require.NoError(t, err)
 	require.Empty(t, set.Slots, "a battery-dependent computation must still drop a slot with no SoC reading")
 }
@@ -225,7 +225,7 @@ func TestBuildLedgerSlotsEnergyBalance(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	set, err := buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), true, true)
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(15*time.Minute), true, true, nil)
 	require.NoError(t, err)
 	require.Len(t, set.Slots, 1)
 
@@ -258,5 +258,262 @@ func TestQueryTariffSlotsBindsFeedIn(t *testing.T) {
 
 	got := slots[ts.Unix()]
 	require.InDelta(t, 0.30, got.Grid, 1e-9)
-	require.InDelta(t, 0.08, got.FeedIn, 1e-9, "FeedIn must bind from the \"feedin\" column, not stay at its zero value")
+	require.NotNil(t, got.FeedIn, "FeedIn must bind from the \"feedin\" column, not stay nil")
+	require.InDelta(t, 0.08, *got.FeedIn, 1e-9, "FeedIn must bind from the \"feedin\" column, not stay at its zero value")
+}
+
+// ptr is a local helper for the *float64 prices these tests deal in.
+func ptr(v float64) *float64 { return &v }
+
+// seedFeedInWitnesses records n feed-in-only tariff rows at price, placed after the
+// windows these tests query. feedInFallback corroborates against the whole tariffs
+// table (see minFeedInWitnessSlots), so a test that wants the fallback to engage has
+// to give it a record to corroborate against. These rows carry no grid price, so they
+// neither move EarliestTariffSlot nor become slots in any period under test.
+func seedFeedInWitnesses(t *testing.T, after time.Time, price float64, n int) {
+	t.Helper()
+	for i := range n {
+		require.NoError(t, PersistTariffs(after.Add(time.Duration(i+1)*15*time.Minute), nil, &price, nil, nil))
+	}
+}
+
+// TestFeedInFallbackGuard is the safety net on P1. Substituting the site's currently
+// configured static feed-in price for a slot that has none on record is only honest
+// while that configured price is also what the site actually recorded - the configs
+// table keeps no history, so nothing else can tell us the rate hasn't changed since.
+// The case that matters most is "recorded differs from configured": that is what
+// happens the day the owner replaces the EUR 0.00 placeholder with the real EEG rate,
+// and it must refuse rather than silently reprice history.
+func TestFeedInFallbackGuard(t *testing.T) {
+	base := time.Date(2026, 8, 21, 12, 30, 0, 0, time.Now().Location())
+
+	for _, tc := range []struct {
+		desc   string
+		seed   func(t *testing.T)
+		static *float64
+		want   *float64
+	}{
+		{
+			desc:   "no static tariff configured: never substitute",
+			seed:   func(t *testing.T) { seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots) },
+			static: nil,
+			want:   nil,
+		},
+		{
+			desc:   "every recorded price equals the configured one: substitute",
+			seed:   func(t *testing.T) { seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots) },
+			static: ptr(0),
+			want:   ptr(0),
+		},
+		{
+			desc:   "recorded price differs from the configured one: refuse",
+			seed:   func(t *testing.T) { seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots) },
+			static: ptr(0.0786),
+			want:   nil,
+		},
+		{
+			desc: "recorded prices disagree with each other: refuse",
+			seed: func(t *testing.T) {
+				seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots)
+				seedFeedInWitnesses(t, base.Add(48*time.Hour), 0.0786, 1)
+			},
+			static: ptr(0),
+			want:   nil,
+		},
+		{
+			desc:   "nothing recorded at all: nothing corroborates the value, refuse",
+			seed:   func(t *testing.T) {},
+			static: ptr(0),
+			want:   nil,
+		},
+		{
+			desc:   "a record too thin to be a history of the rate: refuse",
+			seed:   func(t *testing.T) { seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots-1) },
+			static: ptr(0),
+			want:   nil,
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+			require.NoError(t, SetupSchema())
+			tc.seed(t)
+
+			got, err := feedInFallback(context.Background(), tc.static)
+			require.NoError(t, err)
+			if tc.want == nil {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.InDelta(t, *tc.want, *got, 1e-9)
+		})
+	}
+}
+
+// TestFeedInFallbackCorroboratesWholeHistory is the regression test on the guard's
+// scope. The corroboration used to run over the requested [from,to) window only, and
+// from/to come straight off the endpoint's query string - so a window that starts
+// after a rate change sees only post-change values, agrees with the current config,
+// and imputes today's rate into slots billed at yesterday's. That is precisely the
+// failure the guard's own doc comment claims to prevent, reachable by picking a
+// window. A rate change anywhere in the recorded history must refuse everywhere.
+func TestFeedInFallbackCorroboratesWholeHistory(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+
+	base := time.Date(2026, 8, 21, 12, 30, 0, 0, time.Now().Location())
+	g, f := 0.25, 0.0
+
+	// the requested window: slot 0 recorded the post-change rate, slot 1 recorded no
+	// feed-in price at all. Everything the window can see agrees with the current
+	// config, so a window-scoped guard substitutes into slot 1 without hesitation.
+	for i := range 2 {
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+		require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+		if i == 0 {
+			require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+		} else {
+			require.NoError(t, PersistTariffs(ts, &g, nil, nil, nil))
+		}
+	}
+	seedFeedInWitnesses(t, base.Add(24*time.Hour), f, minFeedInWitnessSlots)
+
+	// outside the window, before it: the rate the site actually recorded back then
+	seedFeedInWitnesses(t, base.Add(-96*time.Hour), 0.0786, 1)
+
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(30*time.Minute), false, false, ptr(f))
+	require.NoError(t, err)
+	require.Len(t, set.Slots, 1,
+		"a feed-in rate change anywhere in the record must refuse the substitution, not only one inside the requested window")
+	require.Zero(t, set.FeedInFallbackSlots)
+}
+
+// TestBuildLedgerSlotsStaticFeedInFallback is P1 end to end: a slot with a grid price,
+// a grid and a home reading, but no recorded feed-in price used to be dropped outright.
+// On this site that was 86 of 238 slots in the current period - and the dropped half
+// was the PV-rich daytime half, so the headline figures were computed on a biased
+// sample. It is now included when (and only when) feedInFallback's guard holds.
+func TestBuildLedgerSlotsStaticFeedInFallback(t *testing.T) {
+	seed := func(t *testing.T) time.Time {
+		t.Helper()
+		require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+		require.NoError(t, SetupSchema())
+
+		grid := mustCreateEntity(t, Grid, Grid)
+		home := mustCreateEntity(t, Home, Home)
+
+		base := time.Date(2026, 8, 21, 12, 30, 0, 0, time.Now().Location())
+		g, f := 0.25, 0.0
+		for i := range 4 {
+			ts := base.Add(time.Duration(i) * 15 * time.Minute)
+			require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+			require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+			// only the first two slots got a feed-in price on record
+			if i < 2 {
+				require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+			} else {
+				require.NoError(t, PersistTariffs(ts, &g, nil, nil, nil))
+			}
+		}
+		seedFeedInWitnesses(t, base.Add(24*time.Hour), f, minFeedInWitnessSlots)
+		return base
+	}
+
+	t.Run("no static tariff: the unpriced slots stay excluded", func(t *testing.T) {
+		base := seed(t)
+		set, err := buildLedgerSlots(context.Background(), base, base.Add(time.Hour), false, false, nil)
+		require.NoError(t, err)
+		require.Equal(t, 4, set.TotalSlots)
+		require.Len(t, set.Slots, 2)
+		require.Zero(t, set.FeedInFallbackSlots)
+	})
+
+	t.Run("static tariff matching the record: the unpriced slots are included", func(t *testing.T) {
+		base := seed(t)
+		set, err := buildLedgerSlots(context.Background(), base, base.Add(time.Hour), false, false, ptr(0))
+		require.NoError(t, err)
+		require.Len(t, set.Slots, 4)
+		require.Equal(t, 2, set.FeedInFallbackSlots)
+		require.InDelta(t, 0, set.FeedInFallbackPrice, 1e-9)
+		for _, s := range set.Slots {
+			require.InDelta(t, 0, s.PriceFeedIn, 1e-9)
+		}
+	})
+
+	t.Run("static tariff differing from the record: still excluded", func(t *testing.T) {
+		base := seed(t)
+		set, err := buildLedgerSlots(context.Background(), base, base.Add(time.Hour), false, false, ptr(0.0786))
+		require.NoError(t, err)
+		require.Len(t, set.Slots, 2, "the configured rate changed since those slots were recorded - substituting it would reprice history")
+		require.Zero(t, set.FeedInFallbackSlots)
+	})
+}
+
+// TestEarliestTariffSlotIgnoresFeedIn is P2: the endpoint's lower bound only needs a
+// grid price. Requiring a feed-in price too made every window before the first
+// recorded feed-in value a hard refusal - 352 slots / 3.7 days on this site, 331 of
+// them with a grid meter reading, none of them queryable at all.
+func TestEarliestTariffSlotIgnoresFeedIn(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	loc := time.Now().Location()
+	gridOnly := time.Date(2026, 8, 17, 20, 30, 0, 0, loc)
+	withFeedIn := time.Date(2026, 8, 21, 12, 30, 0, 0, loc)
+
+	g, f := 0.25, 0.0
+	require.NoError(t, PersistTariffs(gridOnly, &g, nil, nil, nil))
+	require.NoError(t, PersistTariffs(withFeedIn, &g, &f, nil, nil))
+
+	earliest, err := EarliestTariffSlot(context.Background())
+	require.NoError(t, err)
+	require.True(t, earliest.Equal(gridOnly), "expected %v, got %v", gridOnly, earliest)
+}
+
+// TestFeedInFallbackCountExcludesDroppedSlots: FeedInFallbackSlots is what the payload
+// note quotes, so it has to count slots the substitution actually put into the result.
+// Counting at the point of substitution instead over-reported badly on real data - a
+// 590-slot window claimed 416 substituted slots while only 217 slots were included at
+// all, because the pre-battery half took the fallback price and was then dropped for
+// having no battery SoC.
+func TestFeedInFallbackCountExcludesDroppedSlots(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	pv := mustCreateEntity(t, PV, PV)
+
+	base := time.Date(2026, 8, 21, 12, 30, 0, 0, time.Now().Location())
+	g, f := 0.25, 0.0
+
+	// slot 0: fully measured, feed-in on record - the evidence the guard needs
+	require.NoError(t, persist(grid, base, 1.0, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 1.0, 0, nil, false, false))
+	require.NoError(t, persist(pv, base, 0.5, 0, nil, false, false))
+	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
+	seedFeedInWitnesses(t, base.Add(24*time.Hour), f, minFeedInWitnessSlots)
+
+	// slot 1: no feed-in price AND no PV reading - takes the fallback, then drops
+	ts := base.Add(15 * time.Minute)
+	require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+	require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+	require.NoError(t, PersistTariffs(ts, &g, nil, nil, nil))
+
+	// slot 2: no feed-in price but every other reading present - takes the fallback
+	// and survives, so the count must see exactly this one
+	ts = base.Add(30 * time.Minute)
+	require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+	require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+	require.NoError(t, persist(pv, ts, 0.5, 0, nil, false, false))
+	require.NoError(t, PersistTariffs(ts, &g, nil, nil, nil))
+
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(45*time.Minute), false, false, ptr(0))
+	require.NoError(t, err)
+	require.Len(t, set.Slots, 2)
+	require.Equal(t, 1, set.FeedInFallbackSlots, "a slot dropped for an unrelated missing reading is not a slot the substitution produced")
 }

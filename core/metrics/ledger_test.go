@@ -33,7 +33,7 @@ func TestComputeLedgerHappyPath(t *testing.T) {
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 	require.NoError(t, PersistControlSlot(base, batteryModeNormal, batteryModeNormal, "", true, nil))
 
-	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute))
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.NotNil(t, ledger.Chain)
@@ -74,7 +74,7 @@ func TestChainNotesCarryLabellingCaveats(t *testing.T) {
 	require.NoError(t, PersistTariffs(slot1, &g, &f, nil, nil))
 	// no battery row for slot1
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(30*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(30*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.Contains(t, chain.Notes, noteInvoiceComparability)
@@ -106,7 +106,7 @@ func TestComputeLedgerDegradesOnBatteryPhysicsRefusal(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute))
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err, "a battery-physics refusal must degrade, not fail the whole request")
 
 	require.Nil(t, ledger.Chain)
@@ -159,7 +159,7 @@ func TestComputeLedgerDegradesOnRateCeilingRefusal(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute))
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err, "a rate-ceiling refusal must degrade, not fail the whole request")
 
 	require.Nil(t, ledger.Chain)
@@ -167,7 +167,7 @@ func TestComputeLedgerDegradesOnRateCeilingRefusal(t *testing.T) {
 	require.InDelta(t, 2.0*0.30, ledger.Realised.Settled.PerSlot, 1e-9,
 		"the realised-cost figure must survive a chain-only refusal")
 
-	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.ErrorIs(t, err, ErrBatteryRateCeilingUnavailable)
 }
 
@@ -196,7 +196,7 @@ func TestChainNotesEVTimingUnattributed(t *testing.T) {
 	g, f := 0.18, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.InDelta(t, 0.0, chain.Contributions[2].Settled.PerSlot, 1e-9,
@@ -232,7 +232,7 @@ func TestChainNotesFeedInZeroExplained(t *testing.T) {
 	g, f := 0.30, 0.0
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.InDelta(t, 0.0, chain.Worlds[3].Settled.PerSlot-0.0, 1e-9) // export priced at 0 either way, sanity check
@@ -274,7 +274,7 @@ func TestChainPublishesMeterResidual(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, chain.MeterResidual.Slots)
@@ -285,4 +285,99 @@ func TestChainPublishesMeterResidual(t *testing.T) {
 		return strings.Contains(n, "meterResidual")
 	})
 	require.True(t, found, "chain.Notes must point a reader at meterResidual")
+}
+
+// TestRealisedNoteDisclosesItsOwnFallbackCount is the regression test on the P1
+// disclosure. ComputeRealisedCost and the chain build DIFFERENT slot sets - the
+// realised figure keeps slots the chain drops for a missing battery SoC (see
+// buildLedgerSlots' includeBattery gate) - so they have different feed-in-fallback
+// counts. Only the chain's count was ever emitted, so the realised euros were
+// disclosed against a slot set they were not computed on: on this site's own database
+// a EUR 35.70 headline over 547 slots, 416 of them imputed, sat beside a note saying
+// 86. Each figure must quote the imputation its own slot set actually used.
+func TestRealisedNoteDisclosesItsOwnFallbackCount(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	base := time.Date(2026, 8, 15, 0, 0, 0, 0, loc)
+	g := 0.30
+	soc := 50.0
+
+	// both slots are priced from the fallback; only slot 0 has a battery SoC, so the
+	// chain keeps one slot and the realised figure keeps two
+	require.NoError(t, persist(grid, base, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(bat, base, 0, 0, &soc, false, false))
+	require.NoError(t, PersistTariffs(base, &g, nil, nil, nil))
+
+	slot1 := base.Add(15 * time.Minute)
+	require.NoError(t, persist(grid, slot1, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(home, slot1, 2.0, 0, nil, false, false))
+	require.NoError(t, PersistTariffs(slot1, &g, nil, nil, nil))
+
+	seedFeedInWitnesses(t, base.Add(24*time.Hour), 0, minFeedInWitnessSlots)
+
+	static := 0.0
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(30*time.Minute), &static)
+	require.NoError(t, err)
+
+	require.Equal(t, 2, ledger.Realised.Coverage.ValidSlots)
+	require.NotNil(t, ledger.Chain)
+	require.Equal(t, 1, ledger.Chain.Coverage.ValidSlots)
+
+	require.Contains(t, ledger.Realised.Note, "no feed-in price was recorded for 2 of the slots behind this figure",
+		"the realised figure must disclose the imputation ITS OWN slot set used, not the chain's smaller count")
+
+	var chainNote string
+	for _, n := range ledger.Chain.Notes {
+		if strings.HasPrefix(n, "no feed-in price was recorded") {
+			chainNote = n
+		}
+	}
+	require.Contains(t, chainNote, "for 1 of the slots behind this figure",
+		"the chain must keep quoting its own count")
+}
+
+// TestRealisedFallbackNoteSurvivesChainRefusal: a battery-physics refusal leaves Chain
+// nil, and with it every note the chain carries. RealisedCost is documented as
+// independent of the chain and is still returned - so if the fallback disclosure only
+// lived on the chain, the one figure the ledger exists to publish would be priced with
+// imputed values and say nothing about it. ErrBatteryRateCeilingUnavailable is derived
+// from the battery's whole history, so a freshly commissioned battery makes this the
+// DEFAULT state for every window, not an edge case.
+func TestRealisedFallbackNoteSurvivesChainRefusal(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 15, 0, 0, 0, 0, loc)
+
+	require.NoError(t, persist(grid, base, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 2.0, 0, nil, false, false))
+	soc := 50.0
+	require.NoError(t, persist(bat, base, 0, 0, &soc, false, false)) // no charge/discharge evidence
+	g := 0.30
+	require.NoError(t, PersistTariffs(base, &g, nil, nil, nil))
+
+	seedFeedInWitnesses(t, base.Add(24*time.Hour), 0, minFeedInWitnessSlots)
+
+	static := 0.0
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), &static)
+	require.NoError(t, err)
+
+	require.Nil(t, ledger.Chain)
+	require.NotEmpty(t, ledger.ChainUnavailable)
+	require.Equal(t, 1, ledger.Realised.Coverage.ValidSlots)
+	require.Contains(t, ledger.Realised.Note, "no feed-in price was recorded for 1 of the slots behind this figure",
+		"the disclosure must not disappear with the chain that used to carry it")
 }

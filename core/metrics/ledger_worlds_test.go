@@ -407,7 +407,7 @@ func TestChainContributionsSumToWhole(t *testing.T) {
 	from := base
 	to := base.Add(time.Duration(len(seeds)) * 15 * time.Minute)
 
-	chain, err := ComputeChain(context.Background(), from, to)
+	chain, err := ComputeChain(context.Background(), from, to, nil)
 	require.NoError(t, err)
 	require.Len(t, chain.Worlds, 4)
 	require.Len(t, chain.Contributions, 3)
@@ -522,7 +522,7 @@ func TestChainOraclePerSlotEuros(t *testing.T) {
 	from := base
 	to := base.Add(time.Duration(len(seeds)) * 15 * time.Minute)
 
-	chain, err := ComputeChain(context.Background(), from, to)
+	chain, err := ComputeChain(context.Background(), from, to, nil)
 	require.NoError(t, err)
 	require.Len(t, chain.Worlds, 4)
 	require.NotNil(t, chain.BatteryPhysics)
@@ -575,7 +575,7 @@ func TestFloorFracSensitivityIsLabelled(t *testing.T) {
 		g, f := 0.30, 0.05
 		require.NoError(t, PersistTariffs(period, &g, &f, nil, nil))
 
-		chain, err := ComputeChain(context.Background(), period, period.Add(15*time.Minute))
+		chain, err := ComputeChain(context.Background(), period, period.Add(15*time.Minute), nil)
 		require.NoError(t, err)
 		return chain
 	}
@@ -644,7 +644,7 @@ func TestChainAccountsForEVChargingAgainstControlAndPV(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	control := chain.Contributions[2]
@@ -681,7 +681,7 @@ func TestChainAttributesPVToEVChargingNotPhantomExport(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	pvContribution := chain.Contributions[0]
@@ -719,10 +719,10 @@ func TestBuildLedgerSlotsRefusesLoadpointWithoutChargeMeter(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	_, err := ComputeRealisedCost(context.Background(), base, base.Add(15*time.Minute))
+	_, err := ComputeRealisedCost(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err, "ComputeRealisedCost reads only the grid meter and tariffs - it must not be affected by a loadpoint's missing charge meter")
 
-	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.ErrorIs(t, err, ErrLoadpointNoChargeMeter)
 }
 
@@ -766,7 +766,7 @@ func TestChainControlSplitIdentities(t *testing.T) {
 	from := base
 	to := base.Add(time.Duration(len(seeds)) * 15 * time.Minute)
 
-	chain, err := ComputeChain(context.Background(), from, to)
+	chain, err := ComputeChain(context.Background(), from, to, nil)
 	require.NoError(t, err)
 	require.NotNil(t, chain.Control)
 
@@ -797,7 +797,7 @@ func TestChainReportsLossWithoutClamp(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.InDelta(t, 0.30, chain.Worlds[0].Settled.PerSlot, 1e-9)
@@ -809,4 +809,44 @@ func TestChainReportsLossWithoutClamp(t *testing.T) {
 	control := chain.Contributions[2]
 	require.InDelta(t, total, control.Settled.PerSlot, 1e-9)
 	require.Less(t, control.Settled.PerSlot, 0.0, "a loss-making period must be reported as a loss, not clamped to zero")
+}
+
+// TestChainNotesFeedInStaticFallback: an imputed feed-in price must never be
+// indistinguishable from an observed one. The coverage figure beside it depends on the
+// substitution, so the payload has to say how many slots it applied to and why it was
+// allowed (ADR-011 rule 7).
+func TestChainNotesFeedInStaticFallback(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+
+	base := time.Date(2026, 8, 21, 12, 30, 0, 0, time.Now().Location())
+	g, f := 0.25, 0.0
+	for i := range 2 {
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+		require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+		if i == 0 {
+			require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+		} else {
+			require.NoError(t, PersistTariffs(ts, &g, nil, nil, nil))
+		}
+	}
+
+	seedFeedInWitnesses(t, base.Add(24*time.Hour), 0, minFeedInWitnessSlots)
+
+	static := 0.0
+	chain, err := ComputeChain(context.Background(), base, base.Add(30*time.Minute), &static)
+	require.NoError(t, err)
+	require.Equal(t, 2, chain.Coverage.ValidSlots)
+
+	var found string
+	for _, n := range chain.Notes {
+		if strings.HasPrefix(n, "no feed-in price was recorded for 1 of the slots behind this figure") {
+			found = n
+		}
+	}
+	require.NotEmpty(t, found, "notes must disclose the substituted feed-in price, got %v", chain.Notes)
 }

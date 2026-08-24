@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/metrics"
+	"github.com/evcc-io/evcc/tariff"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,4 +97,30 @@ func TestSavingsLedgerErrorBody(t *testing.T) {
 		_, present := decoded["earliest"]
 		require.False(t, present)
 	})
+}
+
+// TestStaticFeedInPrice is the outer half of the ledger's feed-in guard: only a tariff
+// that declares its price time-invariant may stand in for a slot whose feed-in price
+// was never recorded. A time-varying tariff's value today says nothing about a past
+// slot, so it must not be offered at all - core/metrics' feedInFallback can only
+// refuse what it is given, it cannot tell a static price from a forecast one.
+func TestStaticFeedInPrice(t *testing.T) {
+	require.Nil(t, staticFeedInPrice(nil), "no feed-in tariff configured")
+
+	static, err := tariff.NewFixedFromConfig(map[string]any{"price": 0.0786})
+	require.NoError(t, err)
+	require.Equal(t, api.TariffTypePriceStatic, static.Type())
+
+	got := staticFeedInPrice(static)
+	require.NotNil(t, got)
+	require.InDelta(t, 0.0786, *got, 1e-9)
+
+	// the same provider with zones varies by time of day - not a lookup any more
+	zoned, err := tariff.NewFixedFromConfig(map[string]any{
+		"price": 0.0786,
+		"zones": []map[string]any{{"price": 0.12, "hours": "10-16"}},
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, api.TariffTypePriceStatic, zoned.Type())
+	require.Nil(t, staticFeedInPrice(zoned), "a time-varying feed-in tariff must never back-fill a past slot")
 }

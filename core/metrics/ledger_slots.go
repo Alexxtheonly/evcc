@@ -71,14 +71,19 @@ func (e *ErrBeforeTariffStart) Error() string {
 	return fmt.Sprintf("no tariff data before %s", e.Earliest.Format(time.RFC3339))
 }
 
-// EarliestTariffSlot returns the start of the first 15min slot for which both a grid
-// and a feed-in price are on record, or the zero time if none is. Both prices are
-// required because the ledger needs to cost import and export together - a slot with
-// only one of the two can't honestly price either.
+// EarliestTariffSlot returns the start of the first 15min slot for which a grid price
+// is on record, or the zero time if none is. It deliberately does NOT require a
+// feed-in price: this bound exists to refuse a window the site has no price record
+// for at all, and a missing feed-in price is a per-slot condition buildLedgerSlots
+// already handles slot by slot (either from the static fallback, see feedInFallback,
+// or by dropping the slot). Requiring both here refused whole windows outright - on
+// this site's own database it made the 3.7 days between the first recorded grid price
+// and the first recorded feed-in price unqueryable, even though every one of those
+// slots had a grid price and a grid meter reading.
 func EarliestTariffSlot(ctx context.Context) (time.Time, error) {
 	var ts sql.NullInt64
 	if err := db.Instance.WithContext(ctx).Model(new(tariffValue)).
-		Where("grid IS NOT NULL AND feedin IS NOT NULL").
+		Where("grid IS NOT NULL").
 		Select("MIN(ts)").Scan(&ts).Error; err != nil {
 		return time.Time{}, err
 	}
@@ -178,6 +183,13 @@ type ledgerSlotSet struct {
 	HasPV        bool
 	HasBattery   bool
 	HasLoadpoint bool
+	// FeedInFallbackSlots counts the included slots whose feed-in price came from the
+	// site's configured static tariff rather than from the tariffs table, and
+	// FeedInFallbackPrice is that price. Reported in the payload's notes
+	// (noteFeedInStaticFallback) so an imputed price is never indistinguishable from
+	// an observed one.
+	FeedInFallbackSlots int
+	FeedInFallbackPrice float64
 }
 
 func (s *ledgerSlotSet) coverage() Coverage {
@@ -243,15 +255,19 @@ func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (row
 	return rows, true, nil
 }
 
-// tariffSlot is one 15min slot's realised grid/feed-in price.
+// tariffSlot is one 15min slot's realised grid/feed-in price. FeedIn is nil when no
+// feed-in price was recorded for the slot - a real hole, never a zero price.
 type tariffSlot struct {
-	Grid, FeedIn float64
+	Grid   float64
+	FeedIn *float64
 }
 
-// queryTariffSlots returns the slots in [from,to) that have BOTH a grid and a
-// feed-in price on record. A slot missing either is simply absent from the result -
-// see buildLedgerSlots, which then excludes it from coverage rather than pricing it
-// with a fabricated value.
+// queryTariffSlots returns the slots in [from,to) that have a grid price on record.
+// A slot without one is simply absent from the result - see buildLedgerSlots, which
+// then excludes it from coverage rather than pricing it with a fabricated value. A
+// slot WITH a grid price but without a feed-in price is returned with FeedIn nil;
+// buildLedgerSlots decides whether the site's static feed-in tariff may stand in for
+// it (feedInFallback) or whether the slot has to be dropped too.
 func queryTariffSlots(ctx context.Context, from, to time.Time) (map[int64]tariffSlot, error) {
 	type row struct {
 		Ts   int64
@@ -262,12 +278,12 @@ func queryTariffSlots(ctx context.Context, from, to time.Time) (map[int64]tariff
 		// every export in the ledger priced at EUR 0 regardless of what was on
 		// record. Grid was unaffected only because its column name happens to equal
 		// its lowercased field name. See TestQueryTariffSlotsBindsFeedIn.
-		FeedIn float64 `gorm:"column:feedin"`
+		FeedIn *float64 `gorm:"column:feedin"`
 	}
 	var res []row
 	if err := db.Instance.WithContext(ctx).Model(new(tariffValue)).
 		Select("ts, grid, feedin").
-		Where("ts >= ? AND ts < ? AND grid IS NOT NULL AND feedin IS NOT NULL", from.Unix(), to.Unix()).
+		Where("ts >= ? AND ts < ? AND grid IS NOT NULL", from.Unix(), to.Unix()).
 		Scan(&res).Error; err != nil {
 		return nil, err
 	}
@@ -277,6 +293,62 @@ func queryTariffSlots(ctx context.Context, from, to time.Time) (map[int64]tariff
 		m[r.Ts] = tariffSlot{Grid: r.Grid, FeedIn: r.FeedIn}
 	}
 	return m, nil
+}
+
+// minFeedInWitnessSlots is how many recorded feed-in prices the tariffs table must
+// hold before any of them count as corroboration. A single agreeing row proves only
+// that the configured rate held at one instant, which says nothing about the slots
+// the fallback is about to price; one full day of 15-minute slots is the smallest
+// record that can be read as a history of the rate rather than a snapshot of it.
+// Below that the fallback refuses and the affected slots stay excluded, which is the
+// honest outcome for a site whose feed-in record is younger than the gap it has.
+const minFeedInWitnessSlots = 96
+
+// feedInFallback returns the price a slot with no recorded feed-in value may be
+// priced at, or nil to keep excluding such slots.
+//
+// static is the site's currently configured feed-in price, and is non-nil only when
+// that tariff declares itself api.TariffTypePriceStatic - a declaration that the
+// price does not vary with time, which makes reading it a lookup rather than an
+// interpolation across a gap (ADR-011 rule 3).
+//
+// The declaration alone is not enough, because the configs table keeps no history:
+// applying today's configured value to a past slot asserts that it also held then,
+// and that assertion breaks silently the moment the owner edits the rate (e.g. from
+// the placeholder EUR 0.00 to the real EEG rate). So the fallback additionally
+// requires the record to corroborate it: the tariffs table must hold at least
+// minFeedInWitnessSlots recorded feed-in prices, and every one of them - MIN and MAX
+// alike - must equal the configured value.
+//
+// The corroboration deliberately reads the WHOLE table, not the requested window.
+// Window-scoped evidence is exactly as narrow as the caller makes it: a caller
+// picking a window that starts after a rate change sees only post-change values,
+// agrees with the current config, and imputes the new rate into slots billed at the
+// old one - the failure this guard exists to prevent, reachable straight from the
+// endpoint's query string. A rate change anywhere in the recorded history now makes
+// MIN != MAX and the fallback refuses everywhere, which is the only reading the
+// history-less configs table supports.
+func feedInFallback(ctx context.Context, static *float64) (*float64, error) {
+	if static == nil {
+		return nil, nil
+	}
+
+	var res struct {
+		N      int64
+		Lo, Hi sql.NullFloat64
+	}
+	// COUNT/MIN/MAX all skip NULLs, so no WHERE is needed - and must not be added:
+	// the point is to see every feed-in price the site ever recorded.
+	if err := db.Instance.WithContext(ctx).Model(new(tariffValue)).
+		Select("COUNT(feedin) AS n, MIN(feedin) AS lo, MAX(feedin) AS hi").
+		Scan(&res).Error; err != nil {
+		return nil, err
+	}
+
+	if res.N < minFeedInWitnessSlots || res.Lo.Float64 != *static || res.Hi.Float64 != *static {
+		return nil, nil
+	}
+	return static, nil
 }
 
 // ErrLoadpointNoChargeMeter means a configured loadpoint has never written a single
@@ -338,11 +410,17 @@ func verifyLoadpointChargeMeters(ctx context.Context, ids []int) error {
 // both: W0-W2, the routing/timing split and the decision replay all need
 // slotData.modelledLoadKWh() and BatterySocFrac to be honest, not silently zero/nil.
 //
+// feedInStatic is the site's currently configured feed-in price, non-nil only when
+// that tariff declares itself time-invariant. It lets a slot with a recorded grid
+// price but no recorded feed-in price still be included - but only if feedInFallback's
+// guard holds; see that function for why the declaration alone is not sufficient, and
+// why the corroboration reads the whole tariffs table rather than this window.
+//
 // from must not precede the earliest priced tariff slot; see ErrBeforeTariffStart. The
 // window is also capped at MaxLedgerRangeDays (ErrLedgerRangeTooLarge), and every query
 // runs WithContext(ctx) so a client disconnect (or the range guard) stops work instead
 // of running a query to completion nobody will read.
-func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint, includeBattery bool) (*ledgerSlotSet, error) {
+func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint, includeBattery bool, feedInStatic *float64) (*ledgerSlotSet, error) {
 	if !to.After(from) {
 		return nil, ErrLedgerRangeInverted
 	}
@@ -412,8 +490,14 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 		return nil, err
 	}
 
+	fallback, err := feedInFallback(ctx, feedInStatic)
+	if err != nil {
+		return nil, err
+	}
+
 	total := int(to.Sub(from) / tariff.SlotDuration)
 
+	var fallbackSlots int
 	slots := make([]slotData, 0, total)
 	for ts := from; ts.Before(to); ts = ts.Add(tariff.SlotDuration) {
 		u := ts.Unix()
@@ -430,6 +514,14 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 		if !ok {
 			continue
 		}
+		feedIn := tv.FeedIn
+		usedFallback := feedIn == nil
+		if usedFallback {
+			if fallback == nil {
+				continue
+			}
+			feedIn = fallback
+		}
 
 		s := slotData{
 			Start:         ts,
@@ -437,7 +529,7 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 			GridExportKWh: g.ReturnEnergy,
 			HomeKWh:       h.Energy,
 			PriceGrid:     tv.Grid,
-			PriceFeedIn:   tv.FeedIn,
+			PriceFeedIn:   *feedIn,
 		}
 
 		if hasPV {
@@ -468,7 +560,18 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 		}
 
 		slots = append(slots, s)
+		// counted only here, after every other requirement has passed: a slot that
+		// took the fallback price and was then dropped for an unrelated missing
+		// reading is not a slot this substitution produced.
+		if usedFallback {
+			fallbackSlots++
+		}
 	}
 
-	return &ledgerSlotSet{Slots: slots, TotalSlots: total, HasPV: hasPV, HasBattery: hasBattery, HasLoadpoint: hasLoadpoint}, nil
+	set := &ledgerSlotSet{Slots: slots, TotalSlots: total, HasPV: hasPV, HasBattery: hasBattery, HasLoadpoint: hasLoadpoint}
+	if fallbackSlots > 0 {
+		set.FeedInFallbackSlots = fallbackSlots
+		set.FeedInFallbackPrice = *fallback
+	}
+	return set, nil
 }

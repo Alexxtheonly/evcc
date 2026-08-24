@@ -41,8 +41,13 @@ type Ledger struct {
 // ComputeLedger runs the full savings ledger for [from,to): the realised-cost figure
 // (item 1), the world chain (item 2) priced both ways (item 3), and the per-slot
 // battery-mode decision replay (item 4).
-func ComputeLedger(ctx context.Context, from, to time.Time) (*Ledger, error) {
-	realised, err := ComputeRealisedCost(ctx, from, to)
+//
+// feedInStatic is the site's currently configured feed-in price, and must be non-nil
+// only when that tariff declares itself time-invariant - see buildLedgerSlots and
+// feedInFallback. The same value goes to every slot-set build below, so the realised
+// figure, the chain and the decision replay always cover the identical slots.
+func ComputeLedger(ctx context.Context, from, to time.Time, feedInStatic *float64) (*Ledger, error) {
+	realised, err := ComputeRealisedCost(ctx, from, to, feedInStatic)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +55,7 @@ func ComputeLedger(ctx context.Context, from, to time.Time) (*Ledger, error) {
 	// one slot-set build shared by the chain and the decision replay, so they price
 	// and replay the identical slots (see DecisionDeltas' doc comment) without a
 	// second full buildLedgerSlots pass.
-	set, err := buildLedgerSlots(ctx, from, to, true, true)
+	set, err := buildLedgerSlots(ctx, from, to, true, true, feedInStatic)
 	if err != nil {
 		return nil, err
 	}
