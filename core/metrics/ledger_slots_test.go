@@ -517,3 +517,98 @@ func TestFeedInFallbackCountExcludesDroppedSlots(t *testing.T) {
 	require.Len(t, set.Slots, 2)
 	require.Equal(t, 1, set.FeedInFallbackSlots, "a slot dropped for an unrelated missing reading is not a slot the substitution produced")
 }
+
+// TestMeterResidualCarriesAEuroBand is the N2 fix at its source: the residual was
+// published in kWh beside euro contributions and called "the noise floor under every euro
+// figure", but nothing ever put the two on the same axis - so the UI compared
+// contributions against a hardcoded half-cent instead, a hundred times below the measured
+// uncertainty, and rendered a -EUR 0.07 Control figure as a loss under a EUR 0.49 residual.
+func TestMeterResidualCarriesAEuroBand(t *testing.T) {
+	slots := []slotData{
+		// R = 2 - 0 + 0 + 0 - 0 - 1 - 0 = +1kWh at EUR 0.20
+		{GridImportKWh: 2, HomeKWh: 1, PriceGrid: 0.20},
+		// R = -1kWh at EUR 0.40 - cancels in SumKWh, not in AbsSumKWh
+		{GridImportKWh: 1, HomeKWh: 2, PriceGrid: 0.40},
+	}
+
+	res := computeMeterResidual(slots)
+	require.InDelta(t, 0, res.SumKWh, 1e-9)
+	require.InDelta(t, 2, res.AbsSumKWh, 1e-9)
+	// the UNcancelled noise at the period's mean rate: 2kWh * EUR 0.30
+	require.InDelta(t, 0.6, res.EurBand, 1e-9)
+}
+
+// D4: a band is a magnitude. A period whose mean grid price is negative (a long enough
+// run of negative-price slots is ordinary on a dynamic tariff) used to publish a NEGATIVE
+// eurBand, under a note calling it the floor "any figure smaller than is inside the
+// noise" - which every |contribution| clears, so every contribution reads as evidence.
+// The UI's own Math.max(ZERO_EPSILON_EUR, ...) hid it; no other consumer of
+// /api/savingsledger has one.
+func TestMeterResidualBandStaysPositiveUnderNegativePrices(t *testing.T) {
+	slots := []slotData{
+		{GridImportKWh: 2, HomeKWh: 1, PriceGrid: -0.20},
+		{GridImportKWh: 1, HomeKWh: 2, PriceGrid: -0.40},
+	}
+
+	res := computeMeterResidual(slots)
+	require.InDelta(t, 2, res.AbsSumKWh, 1e-9)
+	require.InDelta(t, 0.6, res.EurBand, 1e-9)
+}
+
+// TestEarliestChainSlotIsBoundedByEveryRequiredMeter is the N0 fix: EarliestTariffSlot is
+// not the earliest instant the chain can be computed for, and treating it as one produced
+// a default window where the realised figure covered 584 slots and the diagram 254 - with
+// every figure the card draws coming from the diagram.
+func TestEarliestChainSlotIsBoundedByEveryRequiredMeter(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+
+	loc := time.Now().Location()
+	tariffStart := time.Date(2026, 8, 17, 20, 30, 0, 0, loc)
+	batteryStart := time.Date(2026, 8, 21, 12, 45, 0, 0, loc)
+
+	g, f := 0.30, 0.05
+	for ts := tariffStart; !ts.After(batteryStart); ts = ts.Add(15 * time.Minute) {
+		require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+		require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+		require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+	}
+	soc := 50.0
+	require.NoError(t, persist(bat, batteryStart, 0, 0, &soc, false, false))
+
+	tariffEarliest, err := EarliestTariffSlot(context.Background())
+	require.NoError(t, err)
+	require.True(t, tariffEarliest.Equal(tariffStart))
+
+	chainEarliest, err := EarliestChainSlot(context.Background())
+	require.NoError(t, err)
+	require.True(t, chainEarliest.Equal(batteryStart),
+		"the chain needs a battery SoC reading, which starts %s - not %s where the prices start", batteryStart, tariffStart)
+}
+
+// TestEarliestChainSlotRefusesWhenARequiredMeterHasNoRows: a configured group with no
+// history at all means the chain cannot be computed anywhere, so there is no instant to
+// narrow a window to - the zero time, not the tariff start.
+func TestEarliestChainSlotRefusesWhenARequiredMeterHasNoRows(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	mustCreateEntity(t, Battery, "bat1") // configured, never wrote a row
+
+	loc := time.Now().Location()
+	ts := time.Date(2026, 8, 17, 20, 30, 0, 0, loc)
+	g, f := 0.30, 0.05
+	require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+	require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+	require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+
+	chainEarliest, err := EarliestChainSlot(context.Background())
+	require.NoError(t, err)
+	require.True(t, chainEarliest.IsZero())
+}

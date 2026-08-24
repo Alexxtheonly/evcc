@@ -1219,9 +1219,10 @@
       },
       "chainUnavailable": "The battery-vs-baseline comparison isn't available for this period: {reason}",
       "chartAria": "Waterfall diagram: {start} without solar, battery or control, stepping down through what each measure did, to {end} actually paid.",
+      "controlInsideNoiseShort": "control moved {amount}, inside this period's measurement noise of {band} - too small to call either way",
       "controlOverspendShort": "control cost {amount} against its baseline",
       "coverageChainDiverges": "The diagram is computed over {pct} of slots - fewer than the headline figures, because it also needs battery and vehicle data the grid-only figure doesn't.",
-      "coverageChainDivergesShort": "diagram over {pct}",
+      "coverageDiagramShort": "diagram over {pct} of slots ({valid} of {total})",
       "coverageExcluded": "Excluded slots are dropped, never scaled up to cover the gap.",
       "coverageShort": "{pct} of slots ({valid} of {total})",
       "decisions": {
@@ -1234,6 +1235,7 @@
         "modeChanged": "The applied mode changed again later in this slot - the point above is only a sample taken at its start.",
         "noVeto": "Nothing was vetoed in this slot.",
         "outcome": {
+          "noSuggestion": "no suggestion recorded",
           "steady": "steady, nothing vetoed",
           "vetoedCost": "vetoed, cost {delta}",
           "vetoedSaved": "vetoed, saved {delta}",
@@ -1260,6 +1262,7 @@
         "wouldHaveCost": "would have cost",
         "youPaid": "you paid"
       },
+      "diagramSubsetWarning": "Every figure above is for the {pct} of slots the diagram could be drawn over. Across the whole period you paid {amount}.",
       "estimated": "estimated",
       "estimatedCaption": "battery and control are estimated",
       "evTimingShort": "Moving a car charge to a cheaper hour counts as nothing here.",
@@ -1278,6 +1281,7 @@
         "steps": "Each step after it removes what one measure saved, so the bar descends. A step that raised the bill is drawn upward and coloured red - shown, never clamped to zero. On the three middle bars, ↓ is what the measure took off the bill and ↑ is what it added; the first and last bars are totals, printed plain.",
         "title": "How this is worked out"
       },
+      "insideNoise": "smaller than this period's measurement noise ({band}) - the amount is real, the direction is not",
       "loading": "Loading the savings ledger…",
       "measured": "measured",
       "notesTitle": "Technical notes",

@@ -77,6 +77,21 @@ export interface LedgerMeterResidual {
   sumKWh: number;
   absSumKWh: number;
   slots: number;
+  /** absSumKWh priced at the period's mean grid rate - the noise floor in the same unit
+   * as every contribution, so the two can actually be compared. A contribution smaller
+   * than this is inside the noise and must not be rendered as a direction. */
+  eurBand: number;
+}
+
+/** core/metrics/ledger_worlds.go W2Drift: the counterfactual battery's energy
+ * bookkeeping. carriedKWh is what it was handed across gaps in the record (the measured
+ * pack's own movement across the slots the ledger could not price - which the real bill
+ * receives too); finalKWh is where it ended relative to the real pack. Both unpriced -
+ * see the Go doc comment. */
+export interface LedgerW2Drift {
+  gaps: number;
+  carriedKWh: number;
+  finalKWh: number;
 }
 
 /** core/metrics/ledger_worlds.go Chain: the full W0..W3 chain for a period, priced both
@@ -89,6 +104,7 @@ export interface LedgerChain {
   batteryPhysics?: LedgerBatteryPhysics;
   control?: LedgerControlSplit;
   meterResidual: LedgerMeterResidual;
+  w2Drift?: LedgerW2Drift;
   notes?: string[];
 }
 
@@ -104,7 +120,10 @@ export interface LedgerDecisionRow {
   /** @format date-time */
   ts: string;
   appliedMode: string;
-  suggestedMode: string;
+  /** undefined - never the string "unknown" - when no optimizer run produced a suggestion
+   * for this slot. Absence is not a sentinel: see the Go field's doc comment. Legacy rows
+   * written before that distinction existed still carry the literal "unknown". */
+  suggestedMode?: string;
   vetoReason?: string;
   healthOk: boolean;
   /** True when AppliedMode (a point sample seconds into the slot) may not have held for
@@ -122,6 +141,11 @@ export interface SavingsLedger {
   /** @format date-time */
   to: string;
   realised: LedgerRealisedCost;
+  /** The earliest instant the chain could have a valid slot for (core/metrics'
+   * EarliestChainSlot) - NOT the same bound as an ErrBeforeTariffStart refusal's
+   * `earliest`, which is where the tariff prices start. Absent when there is none.
+   * @format date-time */
+  chainEarliest?: string;
   chain?: LedgerChain;
   chainUnavailable?: string;
   decisions: LedgerDecisionRow[];

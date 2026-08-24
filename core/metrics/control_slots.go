@@ -43,7 +43,19 @@ type controlSlot struct {
 	// before any downstream override such as HEMS dimming. "charge" alongside
 	// VetoReason "payback" is expected and is the whole point of persisting
 	// both: the suggestion that was rejected, and why.
-	SuggestedMode string `gorm:"column:suggested_mode"`
+	//
+	// Nil when no run produced a suggestion at all - the same reason Price is a
+	// pointer, one field down. It used to be api.BatteryMode.String(), and
+	// api.BatteryUnknown stringifies to "unknown": the identical token written
+	// after clearSuggestions() fires on a failed run, and the one a site with no
+	// controllable battery produces. On this site's own database that made 35 of
+	// 57 rows (62%) indistinguishable from deliberate decisions, all with
+	// health_ok = 1. ADR-011 rule 3: absence is never a sentinel.
+	//
+	// Rows written before this was nullable still carry the literal "unknown"
+	// string; that legacy value is folded by effectiveMode rather than migrated,
+	// so a historical row is never rewritten to say something it did not say.
+	SuggestedMode *string `gorm:"column:suggested_mode"`
 
 	// VetoReason explains why AppliedMode and SuggestedMode differ, empty
 	// when they don't. Empty is not a placeholder for "unknown" here - it is
@@ -73,7 +85,7 @@ func (controlSlot) TableName() string {
 // observation is authoritative and later calls within the same slot (there
 // should be none, given the caller's own slot gate) are silently ignored
 // rather than overwriting it.
-func PersistControlSlot(ts time.Time, appliedMode, suggestedMode, vetoReason string, healthOk bool, price *float64) error {
+func PersistControlSlot(ts time.Time, appliedMode string, suggestedMode *string, vetoReason string, healthOk bool, price *float64) error {
 	if db.Instance == nil {
 		return nil
 	}

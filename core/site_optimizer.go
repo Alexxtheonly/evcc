@@ -746,7 +746,18 @@ func (site *Site) persistControlSlot() {
 		p = &price
 	}
 
-	if err := metrics.PersistControlSlot(slot, applied.String(), suggested.String(), string(veto), healthOk, p); err != nil {
+	// api.BatteryUnknown is not a suggestion - it is what clearSuggestions() leaves
+	// behind after a failed run, and what a site with no controllable battery
+	// produces. Recording its "unknown" spelling made those indistinguishable from
+	// a deliberate decision; nil says "no run produced one" (see
+	// metrics.controlSlot.SuggestedMode).
+	var sm *string
+	if suggested != api.BatteryUnknown {
+		s := suggested.String()
+		sm = &s
+	}
+
+	if err := metrics.PersistControlSlot(slot, applied.String(), sm, string(veto), healthOk, p); err != nil {
 		site.log.ERROR.Printf("persist control slot: %v", err)
 	}
 }

@@ -33,7 +33,7 @@ function baseChain(overrides: Partial<LedgerChain> = {}): LedgerChain {
       { label: "Control", settled: settled(3.42, 0.32) }, // W2-W3: savings (real controller beat the dumb rule)
     ],
     coverage: { validSlots: 651, totalSlots: 672, fraction: 651 / 672 },
-    meterResidual: { sumKWh: 0.1, absSumKWh: 4.2, slots: 651 },
+    meterResidual: { sumKWh: 0.1, absSumKWh: 4.2, slots: 651, eurBand: 0 },
     ...overrides,
   };
 }

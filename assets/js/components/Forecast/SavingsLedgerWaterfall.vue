@@ -23,7 +23,7 @@ import formatter from "@/mixins/formatter";
 import echartsChart from "@/mixins/echartsChart";
 import type { CURRENCY } from "@/types/evcc";
 import type { LedgerChain } from "./savingsLedger.types";
-import { ZERO_EPSILON_EUR, type SettlementHeadline } from "./savingsLedgerChain";
+import { contributionBand, ZERO_EPSILON_EUR, type SettlementHeadline } from "./savingsLedgerChain";
 import {
 	waterfallLayout,
 	waterfallAxis,
@@ -62,7 +62,10 @@ export default defineComponent({
 	mixins: [formatter, echartsChart],
 	props: {
 		chain: { type: Object as PropType<LedgerChain>, required: true },
-		headline: { type: String as PropType<SettlementHeadline>, required: true },
+		headline: {
+			type: String as PropType<SettlementHeadline>,
+			required: true,
+		},
 		currency: { type: String as PropType<CURRENCY> },
 	},
 	computed: {
@@ -71,6 +74,11 @@ export default defineComponent({
 		},
 		layout(): WaterfallLayout {
 			return waterfallLayout(this.chain, this.headline);
+		},
+		// the period's own measurement noise floor, in euro - what a contribution's
+		// magnitude has to clear before its sign is evidence (savingsLedgerChain.ts).
+		band(): number {
+			return contributionBand(this.chain);
 		},
 		ariaLabel(): string {
 			const money = (v: number) => this.fmtMoney(v, this.currency, true, true);
@@ -212,7 +220,10 @@ export default defineComponent({
 						silent: true,
 						z: 1,
 						animation: false,
-						lineStyle: { color: setAlpha(colors.muted, "66") || muted, width: 1 },
+						lineStyle: {
+							color: setAlpha(colors.muted, "66") || muted,
+							width: 1,
+						},
 						tooltip: { show: false },
 						data: plotLevels(layout),
 					},
@@ -321,6 +332,19 @@ export default defineComponent({
 					2,
 					0,
 					`<div class="fw-normal">${t(`forecast.savingsLedger.${key}`)}</div>`
+				);
+			}
+
+			// N2: a figure smaller than the period's own measured noise floor has a
+			// magnitude but not a usable direction. The number stays exactly as computed -
+			// this only stops the tooltip reading as though the sign meant something.
+			if (column.insideNoise && !column.zero) {
+				lines.splice(
+					2,
+					0,
+					`<div class="fw-normal">${t("forecast.savingsLedger.insideNoise", {
+						band: this.fmtMoney(this.band, this.currency, true, true),
+					})}</div>`
 				);
 			}
 

@@ -31,7 +31,24 @@ export function pickSettled(s: LedgerSettled, headline: SettlementHeadline): num
 //
 // A measure under this magnitude renders as a rule, not a swatch - matches the Go side's
 // own "drawn" filter in the (fake-data) mockup, applied here to real contributions.
+//
+// It is a DRAWING threshold, not an evidence threshold. Using it to decide whether a
+// contribution's sign may be asserted was the card's worst bug: half a cent is a hundred
+// times below the measured uncertainty the same payload publishes, so a Control figure of
+// -EUR 0.0664 was rendered in the danger colour as "the controller cost you money" while
+// chain.meterResidual said the period's measurement noise was 1.345 kWh - about EUR 0.49,
+// 7x the figure it was underwriting. Use contributionBand() for any sign claim.
 export const ZERO_EPSILON_EUR = 0.005;
+
+/** The smallest magnitude a contribution must reach before its SIGN may be asserted:
+ * the period's own measurement noise (chain.meterResidual.eurBand, absSumKWh priced at
+ * the mean grid rate), never below ZERO_EPSILON_EUR so a period with a perfect residual
+ * still gets the drawing threshold. Published by the backend precisely so the UI stops
+ * comparing euros against a hardcoded constant - see the Go MeterResidual.EurBand doc
+ * comment. */
+export function contributionBand(chain: LedgerChain): number {
+  return Math.max(ZERO_EPSILON_EUR, chain.meterResidual?.eurBand ?? 0);
+}
 
 /** Coverage differs between the headline (realised, grid+home+tariff only) and the
  * chain (also needs PV/battery/loadpoint - see buildLedgerSlots's includeLoadpoint/
@@ -98,7 +115,10 @@ export function defaultWindow(now: Date): LedgerWindow {
 export function shiftWindow(win: LedgerWindow, dir: 1 | -1, now: Date): LedgerWindow {
   const span = DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   if (dir === -1) {
-    return { from: new Date(win.from.getTime() - span), to: new Date(win.from.getTime()) };
+    return {
+      from: new Date(win.from.getTime() - span),
+      to: new Date(win.from.getTime()),
+    };
   }
   const nowAligned = alignToSlotStart(now);
   let to = new Date(win.to.getTime() + span);
@@ -133,14 +153,28 @@ export function clampWindowToEarliest(win: LedgerWindow, earliestRaw: string): L
   return { from: earliest, to: win.to };
 }
 
-/** True when the Control contribution (W2->W3, the real controller vs. the W2 dumb rule)
- * is a genuine overspend at the given headline. Drives the named clause under the chart:
- * a period where solar and the battery saved a great deal can legitimately headline
- * "saved 91 %" while this step lost money, and nothing else on the card says so. Absent
- * Control (no battery) is never a loss: there's nothing for software to have gotten
- * wrong. */
-export function isControlOverspend(chain: LedgerChain, headline: SettlementHeadline): boolean {
+function controlEur(chain: LedgerChain, headline: SettlementHeadline): number | null {
   const control = chain.contributions.find((c) => c.label === "Control");
-  if (!control) return false;
-  return pickSettled(control.settled, headline) < -ZERO_EPSILON_EUR;
+  return control ? pickSettled(control.settled, headline) : null;
+}
+
+/** True when the Control contribution (W2->W3, the real controller vs. the W2 dumb rule)
+ * is an overspend the period's own measurement noise can actually support. Drives the
+ * named clause under the chart: a period where solar and the battery saved a great deal
+ * can legitimately headline "saved 91 %" while this step lost money, and nothing else on
+ * the card says so. Absent Control (no battery) is never a loss: there's nothing for
+ * software to have gotten wrong. Compared against contributionBand(), not
+ * ZERO_EPSILON_EUR - a false "it lost money" is the most expensive wrong answer this card
+ * can give. */
+export function isControlOverspend(chain: LedgerChain, headline: SettlementHeadline): boolean {
+  const eur = controlEur(chain, headline);
+  return eur !== null && eur < -contributionBand(chain);
+}
+
+/** True when Control is present but smaller in magnitude than the period's measurement
+ * noise, in either direction - the card must then say the step is too small to call
+ * rather than render it as a saving or a loss. */
+export function isControlInsideNoise(chain: LedgerChain, headline: SettlementHeadline): boolean {
+  const eur = controlEur(chain, headline);
+  return eur !== null && Math.abs(eur) <= contributionBand(chain);
 }

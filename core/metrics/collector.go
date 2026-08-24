@@ -192,6 +192,25 @@ func (c *Collector) SetCapacity(kWh float64) error {
 	return c.entity.updateCapacity(kWh)
 }
 
+// updateMinSoc persists the entity's configured minimum SoC (0..1) if it changed.
+func (e *entity) updateMinSoc(frac float64) error {
+	if e.MinSocFrac != nil && *e.MinSocFrac == frac {
+		return nil
+	}
+
+	e.MinSocFrac = &frac
+	return db.Instance.Model(e).UpdateColumn("min_soc_frac", frac).Error
+}
+
+// SetMinSoc records a battery's configured minimum SoC as a 0..1 fraction
+// (api.BatterySocLimiter, the same limit core/site_optimizer.go turns into the solver's
+// s_min), so the savings ledger's counterfactual battery (core/metrics/ledger_worlds.go's
+// deriveBatteryPhysics) has a floor that is a property of the installation rather than
+// the lowest SoC the audited controller ever happened to reach.
+func (c *Collector) SetMinSoc(frac float64) error {
+	return c.entity.updateMinSoc(frac)
+}
+
 func (c *Collector) EnergyProfile(from time.Time) (*[96]float64, error) {
 	return energyProfile(c.entity, from)
 }

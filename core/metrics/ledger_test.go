@@ -31,7 +31,7 @@ func TestComputeLedgerHappyPath(t *testing.T) {
 	require.NoError(t, persist(bat, base, 0, 0, &soc, false, false))
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
-	require.NoError(t, PersistControlSlot(base, batteryModeNormal, batteryModeNormal, "", true, nil))
+	require.NoError(t, PersistControlSlot(base, batteryModeNormal, ptrMode(batteryModeNormal), "", true, nil))
 
 	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)

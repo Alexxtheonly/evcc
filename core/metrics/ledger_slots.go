@@ -93,6 +93,85 @@ func EarliestTariffSlot(ctx context.Context) (time.Time, error) {
 	return time.Unix(ts.Int64, 0), nil
 }
 
+// EarliestChainSlot returns the earliest instant the world chain could produce a valid
+// slot for - the latest of EarliestTariffSlot and the first recorded reading of every
+// meter group buildLedgerSlots requires with includeLoadpoint/includeBattery set (grid,
+// home, and whichever of PV/loadpoint/battery the site actually has configured; the
+// battery additionally needs a non-NULL soc_temp).
+//
+// It exists because EarliestTariffSlot is NOT that bound, and a caller that treats it as
+// one publishes a wrong number rather than a missing one. On this site's own database the
+// tariffs table starts 2026-08-17 20:30 while the battery was commissioned on 2026-08-21,
+// so a default 7-day window is accepted, computes the realised figure over 584 slots
+// (EUR 34.69) and the chain over 254 (W3 = EUR 4.60), and every figure the card draws
+// comes from the chain - telling a reader they paid a seventh of what they paid. The
+// divergence is legitimate arithmetic; the fix is for the default window to land where
+// the chain can actually be drawn, which needs this bound published.
+//
+// Returns the zero time - meaning "nowhere, don't narrow to it" - when the tariffs table
+// has no priced slot, or when a configured group has no rows at all (the chain cannot
+// compute anywhere, so there is no earlier-or-later instant that helps). It is a lower
+// bound, not a guarantee: it says the chain has NO valid slot before this instant, not
+// that the slot at it is valid.
+func EarliestChainSlot(ctx context.Context) (time.Time, error) {
+	earliest, err := EarliestTariffSlot(ctx)
+	if err != nil || earliest.IsZero() {
+		return time.Time{}, err
+	}
+
+	for _, req := range []struct {
+		group      string
+		requireSoc bool
+	}{
+		{Grid, false}, {Home, false}, {PV, false}, {Loadpoint, false}, {Battery, true},
+	} {
+		ts, configured, err := earliestGroupSlot(ctx, req.group, req.requireSoc)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if !configured {
+			continue
+		}
+		if ts.IsZero() {
+			return time.Time{}, nil
+		}
+		if ts.After(earliest) {
+			earliest = ts
+		}
+	}
+
+	return earliest, nil
+}
+
+// earliestGroupSlot returns the first slot any entity in the group recorded. configured
+// is false when the site has no entity in that group at all - distinct from a configured
+// group with no rows, which returns a zero time with configured true, exactly the
+// distinction queryGroupSlots' hasEntities exists to make.
+func earliestGroupSlot(ctx context.Context, group string, requireSoc bool) (time.Time, bool, error) {
+	var ids []int
+	if err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, group).Pluck("id", &ids).Error; err != nil {
+		return time.Time{}, false, err
+	}
+	if len(ids) == 0 {
+		return time.Time{}, false, nil
+	}
+
+	q := db.Instance.WithContext(ctx).Table("meters").
+		Where("meter IN ? AND COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0", ids)
+	if requireSoc {
+		q = q.Where("soc_temp IS NOT NULL")
+	}
+
+	var ts sql.NullInt64
+	if err := q.Select("MIN(ts)").Scan(&ts).Error; err != nil {
+		return time.Time{}, true, err
+	}
+	if !ts.Valid {
+		return time.Time{}, true, nil
+	}
+	return time.Unix(ts.Int64, 0), true, nil
+}
+
 // slotData is one 15min slot's merged view: measured grid/home/pv/battery energy and
 // the realised tariff prices. A slot only ends up here if every input the requested
 // computation needs was present and neither recovered nor incomplete (see
@@ -143,6 +222,35 @@ type MeterResidual struct {
 	// AbsSumKWh is Σ |R| - the total measurement noise, uncancelled.
 	AbsSumKWh float64 `json:"absSumKWh"`
 	Slots     int     `json:"slots"`
+	// EurBand is AbsSumKWh priced at the period's mean grid rate: the same noise
+	// floor, in the unit every other figure in this payload is denominated in, so a
+	// caller can actually compare the two. Publishing the residual in kWh beside euro
+	// contributions and calling it "the noise floor under every euro figure" left the
+	// comparison to be done by eye and it never was: on this site's own database a
+	// 1.345kWh residual sat under a -EUR 0.0664 Control figure the card rendered, in
+	// the danger colour, as "the controller cost you money" - an assertion 7x smaller
+	// than its own uncertainty.
+	//
+	// It is a WORST-CASE UPPER BOUND, not an error bar, and deliberately so. Summing
+	// the unsigned per-slot residuals counts every slot's mismatch as if it pushed the
+	// contribution the same way; an error bar for INDEPENDENT per-slot errors would
+	// instead grow like sqrt(N)*sigma, which on the reference window (252 slots) is
+	// EUR 0.08 against this bound's EUR 1.26 - about 16x narrower. The independence
+	// that would justify it is not what this site's residuals show: their net drift is
+	// 0.776kWh where independent slots of the same size would average 0.231kWh, 3.4x
+	// smaller - they carry a systematic component, and the sqrt(N) band (EUR 0.08) is
+	// narrower than the drift already measured (EUR 0.27). Between a band that can
+	// withhold a true overspend claim and one that can manufacture a false one, this
+	// ledger takes the first: a false "the controller cost you money" is the most
+	// expensive wrong answer it can give. Callers must present it as what it is - a
+	// bound - and treat a contribution smaller than it as "inside the noise", never as
+	// a direction.
+	//
+	// Always a magnitude: a period whose mean grid price is negative still has a noise
+	// floor of some size, and a negative "band" would make every comparison against it
+	// meaningless (the UI's own Math.max saved it, no other consumer of this payload
+	// has one).
+	EurBand float64 `json:"eurBand"`
 }
 
 // computeMeterResidual computes MeterResidual over an already-built, already-filtered
@@ -151,13 +259,19 @@ type MeterResidual struct {
 // the site doesn't have (correctly, not fabricated) and a real per-slot figure for
 // every group it does.
 func computeMeterResidual(slots []slotData) MeterResidual {
-	var sum, abssum float64
+	var sum, abssum, price float64
 	for _, s := range slots {
 		r := s.GridImportKWh - s.GridExportKWh + s.PVKWh + s.BatteryDischargeKWh - s.BatteryChargeKWh - s.HomeKWh - s.LoadpointKWh
 		sum += r
 		abssum += math.Abs(r)
+		price += s.PriceGrid
 	}
-	return MeterResidual{SumKWh: sum, AbsSumKWh: abssum, Slots: len(slots)}
+
+	res := MeterResidual{SumKWh: sum, AbsSumKWh: abssum, Slots: len(slots)}
+	if n := len(slots); n > 0 {
+		res.EurBand = abssum * math.Abs(price/float64(n))
+	}
+	return res
 }
 
 // Coverage reports what fraction of a period's slots the ledger could actually

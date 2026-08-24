@@ -5,7 +5,12 @@
 // comments for the Go source each type mirrors.
 
 import type { LedgerChain } from "./savingsLedger.types";
-import { pickSettled, ZERO_EPSILON_EUR, type SettlementHeadline } from "./savingsLedgerChain";
+import {
+  contributionBand,
+  pickSettled,
+  ZERO_EPSILON_EUR,
+  type SettlementHeadline,
+} from "./savingsLedgerChain";
 
 /** The five columns, left to right. Always all five, even when a contribution is absent
  * (a site without a battery draws battery/control as zero-magnitude columns rather than
@@ -46,11 +51,18 @@ export interface WaterfallColumn {
    * strings say whether that's a device-reported fact or a fallback derived from history;
    * this module never fabricates a numeric error bar the API doesn't provide. */
   estimated: boolean;
-  /** The measure cost money rather than saving it - drawn rising, in the danger colour.
-   * Never clamped to zero (ADR-011 rule 1). */
+  /** The measure cost money rather than saving it, by more than the period's own
+   * measurement noise (contributionBand) - drawn rising, in the danger colour. The bar
+   * still rises whenever eur is negative; this flag only governs whether the card is
+   * entitled to call it a loss. Never clamped to zero (ADR-011 rule 1). */
   overspend: boolean;
   /** |eur| <= ZERO_EPSILON_EUR: drawn as a zero-height bar carrying its own label. */
   zero: boolean;
+  /** |eur| <= contributionBand: the figure is smaller than the period's measured noise
+   * floor, so its DIRECTION is not evidence. The figure itself is still drawn and
+   * printed - never hidden, never rounded to zero - but it must not be coloured or
+   * worded as a saving or a loss. */
+  insideNoise: boolean;
 }
 
 export interface WaterfallLayout {
@@ -99,6 +111,7 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
   const w0 = worldCost(chain, 0, headline);
   const paid = worldCost(chain, 3, headline);
   const hasPhysics = !!chain.batteryPhysics;
+  const band = contributionBand(chain);
 
   const columns: WaterfallColumn[] = [
     {
@@ -111,6 +124,7 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
       estimated: false,
       overspend: false,
       zero: false,
+      insideNoise: false,
     },
   ];
 
@@ -130,8 +144,9 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
       level: after,
       total: false,
       estimated: key === "pv" ? false : hasPhysics,
-      overspend: eur < -ZERO_EPSILON_EUR,
+      overspend: eur < -band,
       zero: Math.abs(eur) <= ZERO_EPSILON_EUR,
+      insideNoise: Math.abs(eur) <= band,
     });
     level = after;
   }
@@ -146,6 +161,7 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
     estimated: false,
     overspend: false,
     zero: false,
+    insideNoise: false,
   });
 
   const origin = Math.min(0, ...columns.map((c) => c.base));

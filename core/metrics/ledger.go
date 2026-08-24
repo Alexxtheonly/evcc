@@ -30,8 +30,16 @@ import (
 // number everything else hangs off" shouldn't disappear because a derived comparison
 // number couldn't be computed.
 type Ledger struct {
-	From             time.Time     `json:"from"`
-	To               time.Time     `json:"to"`
+	From time.Time `json:"from"`
+	To   time.Time `json:"to"`
+	// ChainEarliest is the earliest instant the chain could have a valid slot for (see
+	// EarliestChainSlot), omitted when there is none. It is NOT the same bound as the
+	// ErrBeforeTariffStart refusal's `earliest`: the tariffs table can start well before
+	// the battery was commissioned, in which case a request inside the tariff range
+	// succeeds while the chain covers a fraction of it - and every figure the card draws
+	// comes from the chain. Published so a default view can land where the diagram is
+	// actually drawable instead of where the prices happen to start.
+	ChainEarliest    *time.Time    `json:"chainEarliest,omitempty"`
 	Realised         RealisedCost  `json:"realised"`
 	Chain            *Chain        `json:"chain,omitempty"`
 	ChainUnavailable string        `json:"chainUnavailable,omitempty"`
@@ -84,9 +92,17 @@ func ComputeLedger(ctx context.Context, from, to time.Time, feedInStatic *float6
 		return nil, err
 	}
 
+	var chainEarliest *time.Time
+	if ts, err := EarliestChainSlot(ctx); err != nil {
+		return nil, err
+	} else if !ts.IsZero() {
+		chainEarliest = &ts
+	}
+
 	return &Ledger{
 		From:             from,
 		To:               to,
+		ChainEarliest:    chainEarliest,
 		Realised:         *realised,
 		Chain:            chain,
 		ChainUnavailable: chainUnavailable,
