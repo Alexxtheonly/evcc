@@ -152,6 +152,7 @@ import {
 	pickSettled,
 	isControlOverspend,
 	coverageDivergence,
+	clampWindowToEarliest,
 	type LedgerWindow,
 	type SettlementHeadline,
 } from "./savingsLedgerChain";
@@ -204,6 +205,12 @@ export default defineComponent({
 			ledger: null as SavingsLedger | null,
 			refusal: null as string | null,
 			loadError: null as string | null,
+			// guards the auto-clamp in fetch() (see its doc comment) to at most one retry
+			// per explicit navigation - reset to false everywhere this.win is reassigned
+			// by an explicit user action (page(), jumpToPresent(), the $route.query
+			// watcher), so a genuinely-empty clamped period doesn't retry forever, but a
+			// fresh navigation always gets one clamp attempt of its own.
+			hasAutoClamped: false,
 		};
 	},
 	computed: {
@@ -287,6 +294,7 @@ export default defineComponent({
 					(win.from.getTime() !== this.win.from.getTime() ||
 						win.to.getTime() !== this.win.to.getTime())
 				) {
+					this.hasAutoClamped = false;
 					this.win = win;
 				}
 			},
@@ -305,9 +313,11 @@ export default defineComponent({
 			this.headline = value === "perSlot" ? "perSlot" : "periodAverage";
 		},
 		page(dir: 1 | -1) {
+			this.hasAutoClamped = false;
 			this.win = shiftWindow(this.win, dir, new Date());
 		},
 		jumpToPresent() {
+			this.hasAutoClamped = false;
 			this.win = defaultWindow(new Date());
 		},
 		async fetch() {
@@ -324,8 +334,29 @@ export default defineComponent({
 				if (res.status === 200) {
 					this.ledger = res.data as SavingsLedger;
 				} else {
+					const body = res.data as SavingsLedgerErrorBody | undefined;
+
+					// Auto-narrow ONLY the default/present view (isAtPresent) - a user who
+					// explicitly paged into the past and hits a genuine "before any data
+					// exists" refusal must see the honest refusal, never get silently
+					// redirected to a period they didn't ask for. Guarded to at most one
+					// attempt per explicit navigation (hasAutoClamped, reset by
+					// page()/jumpToPresent()/the $route.query watcher) so a clamp that
+					// still can't produce a usable window doesn't retry forever.
+					if (this.isAtPresent && !this.hasAutoClamped && body?.earliest) {
+						const clamped = clampWindowToEarliest(this.win, body.earliest);
+						if (clamped) {
+							this.hasAutoClamped = true;
+							// don't also set refusal/ledger here: the deep watcher on win
+							// (below) fires fetch() again for the clamped window on its
+							// own - calling fetch() a second time here would double-request.
+							this.win = clamped;
+							return;
+						}
+					}
+
 					this.ledger = null;
-					this.refusal = (res.data as SavingsLedgerErrorBody)?.error || res.statusText;
+					this.refusal = body?.error || res.statusText;
 				}
 			} catch (e) {
 				this.ledger = null;

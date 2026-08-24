@@ -9,6 +9,7 @@ import (
 	"github.com/evcc-io/evcc/core/metrics"
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
+	"github.com/evcc-io/evcc/util"
 )
 
 // savingsLedgerHandler serves the ADR-011 savings ledger for a period: the
@@ -40,7 +41,8 @@ func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
 
 	ledger, err := metrics.ComputeLedger(r.Context(), from, to)
 	if err != nil {
-		jsonError(w, savingsLedgerErrorStatus(err), err)
+		w.WriteHeader(savingsLedgerErrorStatus(err))
+		jsonWrite(w, savingsLedgerErrorBody(err))
 		return
 	}
 
@@ -50,6 +52,30 @@ func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", int(maxAge.Seconds())))
 
 	jsonWrite(w, ledger)
+}
+
+// savingsLedgerErrorBody builds the JSON error body for a ComputeLedger error. Pulled
+// out of savingsLedgerHandler for the same testability reason as savingsLedgerErrorStatus
+// below (see its doc comment) - and because ErrBeforeTariffStart is the one error on
+// this endpoint that needs more than the plain util.ErrorAsJson shape every other
+// handler in this file uses: an "earliest" field carrying the earliest instant the
+// tariffs table has a price for, so the frontend can retry with a window that won't
+// also be refused (see savingsLedgerChain.ts's clampWindowToEarliest). Only added when
+// Earliest is non-zero - the zero-value case ("no priced tariff slots recorded yet",
+// see the type's doc comment) has no instant to give, so it falls through to the plain
+// body like every other refusal.
+func savingsLedgerErrorBody(err error) any {
+	var refused *metrics.ErrBeforeTariffStart
+	if errors.As(err, &refused) && !refused.Earliest.IsZero() {
+		return struct {
+			Error    string `json:"error"`
+			Earliest string `json:"earliest"`
+		}{
+			Error:    err.Error(),
+			Earliest: refused.Earliest.Format(time.RFC3339),
+		}
+	}
+	return util.ErrorAsJson(err)
 }
 
 // savingsLedgerErrorStatus maps a ComputeLedger error to an HTTP status. Pulled out

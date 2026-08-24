@@ -127,8 +127,13 @@ export interface SavingsLedger {
   decisions: LedgerDecisionRow[];
 }
 
-/** util.ErrorAsJson: the shape of every error response this endpoint returns (400/422/500). */
+/** util.ErrorAsJson: the shape of every error response this endpoint returns (400/422/500).
+ * earliest (server/http_savings_ledger_handler.go's savingsLedgerErrorBody) is only ever
+ * present alongside a 422 ErrBeforeTariffStart refusal whose Earliest is non-zero - see
+ * savingsLedgerChain.ts's clampWindowToEarliest for how the UI uses it. */
 export interface SavingsLedgerErrorBody {
   error: string;
   line?: number;
+  /** @format date-time */
+  earliest?: string;
 }

@@ -6,9 +6,11 @@ import {
   coverageDivergence,
   isControlOverspend,
   alignToSlotStart,
+  ceilToSlotStart,
   defaultWindow,
   shiftWindow,
   isWindowAtPresent,
+  clampWindowToEarliest,
   pickSettled,
   ZERO_EPSILON_EUR,
   type ChainSegment,
@@ -286,5 +288,55 @@ describe("period window", () => {
     const next = shiftWindow(win, 1, now);
     expect(next.to.getTime()).toBe(alignToSlotStart(now).getTime());
     expect(isWindowAtPresent(next, now)).toBe(true);
+  });
+});
+
+describe("ceilToSlotStart", () => {
+  it("rounds up to the next 15-minute slot boundary", () => {
+    const d = new Date("2026-08-23T13:07:42.123Z");
+    const ceiled = ceilToSlotStart(d);
+    expect(ceiled.getTime()).toBeGreaterThan(d.getTime());
+    expect(ceiled.getSeconds()).toBe(0);
+    expect(ceiled.getMilliseconds()).toBe(0);
+    expect(ceiled.getMinutes() % 15).toBe(0);
+    // exactly one slot past the floor of the same instant, never more
+    expect(ceiled.getTime() - alignToSlotStart(d).getTime()).toBe(15 * 60 * 1000);
+  });
+
+  it("leaves an instant already on a slot boundary unchanged - no spurious extra slot", () => {
+    const d = new Date("2026-08-21T12:30:00.000Z");
+    expect(ceilToSlotStart(d).getTime()).toBe(d.getTime());
+  });
+});
+
+describe("clampWindowToEarliest", () => {
+  const win = { from: new Date("2026-08-17T00:00:00.000Z"), to: new Date("2026-08-24T00:00:00.000Z") };
+
+  it("clamps from forward to the ceiling-aligned earliest, keeping to unchanged", () => {
+    const clamped = clampWindowToEarliest(win, "2026-08-21T12:30:00+02:00");
+    expect(clamped).not.toBeNull();
+    // 2026-08-21T12:30:00+02:00 = 2026-08-21T10:30:00Z, already slot-aligned
+    expect(clamped!.from.getTime()).toBe(new Date("2026-08-21T10:30:00.000Z").getTime());
+    expect(clamped!.to.getTime()).toBe(win.to.getTime());
+  });
+
+  it("earliest already on a slot boundary adds no extra slot", () => {
+    const clamped = clampWindowToEarliest(win, "2026-08-21T10:30:00.000Z");
+    expect(clamped!.from.getTime()).toBe(new Date("2026-08-21T10:30:00.000Z").getTime());
+  });
+
+  it("returns null when the earliest instant wouldn't actually narrow the window (at/before win.from)", () => {
+    expect(clampWindowToEarliest(win, "2026-08-10T00:00:00.000Z")).toBeNull();
+    expect(clampWindowToEarliest(win, win.from.toISOString())).toBeNull();
+  });
+
+  it("returns null when the earliest instant leaves no window at all (at/after win.to)", () => {
+    expect(clampWindowToEarliest(win, "2026-08-25T00:00:00.000Z")).toBeNull();
+    expect(clampWindowToEarliest(win, win.to.toISOString())).toBeNull();
+  });
+
+  it("returns null for an unparseable earliest string", () => {
+    expect(clampWindowToEarliest(win, "not-a-date")).toBeNull();
+    expect(clampWindowToEarliest(win, "")).toBeNull();
   });
 });
