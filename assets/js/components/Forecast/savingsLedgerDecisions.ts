@@ -58,12 +58,29 @@ export function reasonLabelKey(reason?: string): string | undefined {
  *    battery physics, or the slot fell outside the ledger's valid slot set) - ADR-011
  *    rule 3: absence is never a sentinel, so this is a distinct state, not "saved".
  */
-export type DecisionOutcome = "steady" | "vetoed-cost" | "vetoed-saved" | "vetoed-unknown";
+export type DecisionOutcome =
+  | "no-suggestion"
+  | "steady"
+  | "vetoed-cost"
+  | "vetoed-saved"
+  | "vetoed-unknown";
 
 export function decisionOutcome(row: LedgerDecisionRow): DecisionOutcome {
+  // absent, not "unknown": the backend now records nil when no optimizer run produced a
+  // suggestion for the slot (core/metrics/control_slots.go). Folding that into "steady"
+  // via normalizeMode would claim the optimizer agreed with what was applied - on this
+  // site's own database that was 62 % of the rows. Rows written before the column was
+  // nullable still carry the literal "unknown" and are still folded, below.
+  if (row.suggestedMode == null) return "no-suggestion";
   if (normalizeMode(row.appliedMode) === normalizeMode(row.suggestedMode)) return "steady";
   if (row.slotFlowDeltaEur == null) return "vetoed-unknown";
   return row.slotFlowDeltaEur > 0 ? "vetoed-cost" : "vetoed-saved";
+}
+
+/** True for the outcomes where the controller actually overrode a recorded suggestion -
+ * the only ones with a rejected alternative to name or to price. */
+export function isVeto(outcome: DecisionOutcome): boolean {
+  return outcome !== "steady" && outcome !== "no-suggestion";
 }
 
 export interface DecisionSlot {
@@ -83,5 +100,5 @@ export function decisionSlots(rows: LedgerDecisionRow[]): DecisionSlot[] {
 /** Count of vetoed rows whose health flag was false at the time - a decision made under
  * a condition the site itself flagged as unhealthy, worth surfacing distinctly. */
 export function unhealthyVetoCount(rows: LedgerDecisionRow[]): number {
-  return rows.filter((r) => decisionOutcome(r) !== "steady" && !r.healthOk).length;
+  return rows.filter((r) => isVeto(decisionOutcome(r)) && !r.healthOk).length;
 }

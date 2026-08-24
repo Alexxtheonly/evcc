@@ -16,13 +16,13 @@ func TestPersistControlSlot(t *testing.T) {
 	slot := time.Date(2026, 4, 15, 16, 15, 0, 0, time.UTC)
 	price := 0.22
 
-	require.NoError(t, PersistControlSlot(slot, "charge", "charge", "", true, &price))
+	require.NoError(t, PersistControlSlot(slot, "charge", ptrMode("charge"), "", true, &price))
 
 	var res controlSlot
 	require.NoError(t, db.Instance.First(&res).Error)
 	require.Equal(t, slot.Unix(), res.Timestamp)
 	require.Equal(t, "charge", res.AppliedMode)
-	require.Equal(t, "charge", res.SuggestedMode)
+	require.Equal(t, ptrMode("charge"), res.SuggestedMode)
 	require.Equal(t, "", res.VetoReason)
 	require.True(t, res.HealthOk)
 	require.NotNil(t, res.Price)
@@ -30,7 +30,7 @@ func TestPersistControlSlot(t *testing.T) {
 
 	// a slot with no active charge decision carries no price - absence, not 0
 	other := slot.Add(15 * time.Minute)
-	require.NoError(t, PersistControlSlot(other, "normal", "normal", "", true, nil))
+	require.NoError(t, PersistControlSlot(other, "normal", ptrMode("normal"), "", true, nil))
 
 	var res2 controlSlot
 	require.NoError(t, db.Instance.Where("ts = ?", other.Unix()).First(&res2).Error)
@@ -39,16 +39,16 @@ func TestPersistControlSlot(t *testing.T) {
 	// a vetoed suggestion records why the applied mode differs from the
 	// suggested one - the whole point of the table
 	third := other.Add(15 * time.Minute)
-	require.NoError(t, PersistControlSlot(third, "normal", "charge", "payback", true, nil))
+	require.NoError(t, PersistControlSlot(third, "normal", ptrMode("charge"), "payback", true, nil))
 
 	var res3 controlSlot
 	require.NoError(t, db.Instance.Where("ts = ?", third.Unix()).First(&res3).Error)
 	require.Equal(t, "normal", res3.AppliedMode)
-	require.Equal(t, "charge", res3.SuggestedMode)
+	require.Equal(t, ptrMode("charge"), res3.SuggestedMode)
 	require.Equal(t, "payback", res3.VetoReason)
 
 	// duplicate slot ignored, first observation kept (mirrors PersistTariffs)
-	require.NoError(t, PersistControlSlot(slot, "normal", "normal", "", false, nil))
+	require.NoError(t, PersistControlSlot(slot, "normal", ptrMode("normal"), "", false, nil))
 
 	var count int64
 	require.NoError(t, db.Instance.Model(new(controlSlot)).Where("ts = ?", slot.Unix()).Count(&count).Error)
@@ -56,6 +56,15 @@ func TestPersistControlSlot(t *testing.T) {
 
 	require.NoError(t, db.Instance.Where("ts = ?", slot.Unix()).First(&res).Error)
 	require.Equal(t, "charge", res.AppliedMode)
+
+	// N4: no run produced a suggestion for this slot - nil, not the "unknown" token
+	// that clearSuggestions() and a battery-less site both also write.
+	fourth := third.Add(15 * time.Minute)
+	require.NoError(t, PersistControlSlot(fourth, "normal", nil, "", true, nil))
+
+	var res4 controlSlot
+	require.NoError(t, db.Instance.Where("ts = ?", fourth.Unix()).First(&res4).Error)
+	require.Nil(t, res4.SuggestedMode)
 }
 
 // TestDeleteControlSlots covers F9: a manual-delete endpoint for
@@ -67,7 +76,7 @@ func TestDeleteControlSlots(t *testing.T) {
 	base := time.Date(2026, 4, 15, 16, 0, 0, 0, time.UTC)
 	for i := range 4 {
 		ts := base.Add(time.Duration(i) * 15 * time.Minute)
-		require.NoError(t, PersistControlSlot(ts, "normal", "normal", "", true, nil))
+		require.NoError(t, PersistControlSlot(ts, "normal", ptrMode("normal"), "", true, nil))
 	}
 
 	count := func() int64 {
@@ -104,3 +113,7 @@ func TestPersistControlSlotLegacyRow(t *testing.T) {
 	require.NoError(t, db.Instance.First(&res).Error)
 	require.Nil(t, res.Price)
 }
+
+// ptrMode is the test-side counterpart of PersistControlSlot's nullable suggestedMode:
+// pass ptrMode("charge") for a recorded suggestion, plain nil for "no run produced one".
+func ptrMode(mode string) *string { return &mode }

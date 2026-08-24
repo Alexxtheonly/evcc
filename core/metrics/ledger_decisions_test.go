@@ -39,7 +39,7 @@ func TestDecisionDeltasHindsight(t *testing.T) {
 	g, f := 0.40, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	require.NoError(t, PersistControlSlot(base, batteryModeHold, batteryModeCharge, "payback", true, nil))
+	require.NoError(t, PersistControlSlot(base, batteryModeHold, ptrMode(batteryModeCharge), "payback", true, nil))
 
 	// a second, un-vetoed slot: nothing to compare
 	second := base.Add(15 * time.Minute)
@@ -47,7 +47,7 @@ func TestDecisionDeltasHindsight(t *testing.T) {
 	require.NoError(t, persist(home, second, 1.0, 0, nil, false, false))
 	require.NoError(t, persist(bat, second, 0, 0, &socPct, false, false))
 	require.NoError(t, PersistTariffs(second, &g, &f, nil, nil))
-	require.NoError(t, PersistControlSlot(second, batteryModeNormal, batteryModeNormal, "", true, nil))
+	require.NoError(t, PersistControlSlot(second, batteryModeNormal, ptrMode(batteryModeNormal), "", true, nil))
 
 	from := base
 	to := second.Add(15 * time.Minute)
@@ -87,7 +87,7 @@ func TestDecisionDeltasCarriesModeChanged(t *testing.T) {
 	loc := time.Now().Location()
 	base := time.Date(2026, 8, 6, 12, 0, 0, 0, loc)
 
-	require.NoError(t, PersistControlSlot(base, batteryModeNormal, batteryModeNormal, "", true, nil))
+	require.NoError(t, PersistControlSlot(base, batteryModeNormal, ptrMode(batteryModeNormal), "", true, nil))
 	require.NoError(t, MarkControlSlotModeChanged(base))
 
 	set := &ledgerSlotSet{}
@@ -104,7 +104,7 @@ func TestDecisionDeltasWithoutBatteryPhysics(t *testing.T) {
 	loc := time.Now().Location()
 	base := time.Date(2026, 8, 6, 12, 0, 0, 0, loc)
 
-	require.NoError(t, PersistControlSlot(base, batteryModeHold, batteryModeCharge, "payback", true, nil))
+	require.NoError(t, PersistControlSlot(base, batteryModeHold, ptrMode(batteryModeCharge), "payback", true, nil))
 
 	set := &ledgerSlotSet{}
 	rows, err := DecisionDeltas(context.Background(), base, base.Add(15*time.Minute), set, nil)
@@ -162,14 +162,14 @@ func TestSlotFlowDeltaIsSlotLocalNotForwardHindsight(t *testing.T) {
 	require.NoError(t, persist(bat, slot1, 0, 0, &soc, false, false))
 	g1, f1 := 0.05, 0.0
 	require.NoError(t, PersistTariffs(slot1, &g1, &f1, nil, nil))
-	require.NoError(t, PersistControlSlot(slot1, batteryModeNormal, batteryModeCharge, "payback", true, nil))
+	require.NoError(t, PersistControlSlot(slot1, batteryModeNormal, ptrMode(batteryModeCharge), "payback", true, nil))
 
 	require.NoError(t, persist(grid, slot2, 3.0, 0, nil, false, false))
 	require.NoError(t, persist(home, slot2, 3.0, 0, nil, false, false))
 	require.NoError(t, persist(bat, slot2, 0, 0, &soc, false, false))
 	g2, f2 := 0.50, 0.0
 	require.NoError(t, PersistTariffs(slot2, &g2, &f2, nil, nil))
-	require.NoError(t, PersistControlSlot(slot2, batteryModeNormal, batteryModeNormal, "", true, nil))
+	require.NoError(t, PersistControlSlot(slot2, batteryModeNormal, ptrMode(batteryModeNormal), "", true, nil))
 
 	from, to := slot1, slot2.Add(15*time.Minute)
 
@@ -223,7 +223,7 @@ func TestDecisionDeltasFoldsUnknownAgainstNormal(t *testing.T) {
 		require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
 		require.NoError(t, persist(bat, ts, 0, 0, &socPct, false, false))
 		require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
-		require.NoError(t, PersistControlSlot(ts, m[0], m[1], "", true, nil))
+		require.NoError(t, PersistControlSlot(ts, m[0], ptrMode(m[1]), "", true, nil))
 	}
 
 	from, to := base, base.Add(45*time.Minute)
@@ -242,8 +242,60 @@ func TestDecisionDeltasFoldsUnknownAgainstNormal(t *testing.T) {
 	// the raw wire words are still what was recorded: on a site with no battery
 	// "unknown" means "there is no battery", so the fold stays a comparison rule.
 	require.Equal(t, batteryModeUnknown, rows[0].AppliedMode)
-	require.Equal(t, batteryModeNormal, rows[0].SuggestedMode)
+	require.Equal(t, ptrMode(batteryModeNormal), rows[0].SuggestedMode)
 
 	// control: a genuine veto is untouched by the fold
 	require.NotNil(t, rows[2].SlotFlowDeltaEUR)
+}
+
+// TestDecisionDeltasDistinguishesNoSuggestionFromUnknown is the N4 fix: the sibling Price
+// field carries a careful doc comment about why absence must never be a sentinel, and
+// SuggestedMode then stored api.BatteryUnknown's "unknown" spelling - the same token
+// clearSuggestions() writes after a failed run and the same one a battery-less site
+// produces. A caller could not tell a deliberate decision from silence.
+func TestDecisionDeltasDistinguishesNoSuggestionFromUnknown(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	base := time.Date(2026, 8, 15, 12, 0, 0, 0, loc)
+	g, f := 0.30, 0.05
+	for i := range 2 {
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+		require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+		soc := 50.0
+		require.NoError(t, persist(bat, ts, 0, 0, &soc, false, false))
+		require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+	}
+
+	// slot 0: no run produced a suggestion. slot 1: a legacy row that recorded the
+	// "unknown" spelling, which must keep being folded rather than migrated.
+	require.NoError(t, PersistControlSlot(base, batteryModeHold, nil, "", true, nil))
+	require.NoError(t, PersistControlSlot(base.Add(15*time.Minute), batteryModeHold, ptrMode(batteryModeUnknown), "", true, nil))
+
+	from, to := base, base.Add(30*time.Minute)
+	set, err := buildLedgerSlots(context.Background(), from, to, true, true, nil)
+	require.NoError(t, err)
+	phys, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+
+	rows, err := DecisionDeltas(context.Background(), from, to, set, &phys)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+
+	require.Nil(t, rows[0].SuggestedMode, "no run produced one - absence, not a mode string")
+	require.Nil(t, rows[0].SlotFlowDeltaEUR, "there is no rejected alternative to price")
+
+	// the legacy row is still a recorded value, still folded against the applied mode -
+	// so it still prices as a veto of "normal" by "hold", exactly as before
+	require.NotNil(t, rows[1].SuggestedMode)
+	require.Equal(t, batteryModeUnknown, *rows[1].SuggestedMode)
+	require.NotNil(t, rows[1].SlotFlowDeltaEUR)
 }

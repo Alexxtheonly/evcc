@@ -31,6 +31,7 @@ type entity struct {
 	EnergyMeter       *float64 `gorm:"column:energy_meter"`        // kWh, at last persisted slot
 	ReturnEnergyMeter *float64 `gorm:"column:return_energy_meter"` // kWh, at last persisted slot
 	CapacityKWh       *float64 `gorm:"column:capacity_kwh"`        // battery only: device-reported capacity (api.BatteryCapacity), see Collector.SetCapacity
+	MinSocFrac        *float64 `gorm:"column:min_soc_frac"`        // battery only: configured minimum SoC as a 0..1 fraction (api.BatterySocLimiter), see Collector.SetMinSoc
 }
 
 func init() {

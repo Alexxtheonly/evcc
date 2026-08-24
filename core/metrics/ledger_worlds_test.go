@@ -292,68 +292,80 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	})
 }
 
-// TestComputeW2DailyReanchor covers ADR-011 rule 5: the counterfactual battery resets
-// to the measured SoC at the start of each calendar day. A free-running simulation
-// that carried day 1's simulated (near-full) ending SoC into day 2 would discharge
-// freely against a 2kWh deficit and show near-zero grid import; re-anchoring to a
-// measured, nearly-empty SoC instead forces almost all of it to be bought.
-func TestComputeW2DailyReanchor(t *testing.T) {
+// TestComputeW2DoesNotResetAtCalendarBoundary is the narrowest test of the N1 fix's
+// first half: a calendar-day boundary is not a measurement event, so crossing midnight
+// must not reset the simulated SoC to whatever the real battery happened to hold.
+//
+// Both slots are contiguous (23:45 -> 00:00), so the only thing that could reset the
+// simulation here is the calendar. Day 1 charges the counterfactual to 9.5kWh; the
+// measured SoC at 00:00 is nearly empty (0.5kWh) because the REAL controller ran the
+// pack down overnight, which is exactly the divergence the counterfactual exists to
+// express. Resetting to it handed W2 the controller's own state for free: the 2kWh
+// deficit then cost 1.55kWh of grid import instead of nothing.
+func TestComputeW2DoesNotResetAtCalendarBoundary(t *testing.T) {
 	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0, MaxChargeKWh: 100, MaxDischargeKWh: 100}
 
 	loc := time.Now().Location()
-	day1 := time.Date(2026, 8, 4, 23, 0, 0, 0, loc)
-	day2 := time.Date(2026, 8, 5, 0, 0, 0, 0, loc)
+	beforeMidnight := time.Date(2026, 8, 4, 23, 45, 0, 0, loc)
+	afterMidnight := beforeMidnight.Add(15 * time.Minute)
 
 	highSoc := 0.5 // day 1's own measured SoC - simulation still charges further from here
-	lowSoc := 0.05 // day 2's measured SoC is nearly empty
+	lowSoc := 0.05 // the real battery is nearly empty by 00:00
 
 	slots := []slotData{
-		{Start: day1, HomeKWh: 0, PVKWh: 5, BatterySocFrac: &highSoc, PriceGrid: 0.30, PriceFeedIn: 0.05},
-		{Start: day2, HomeKWh: 2, PVKWh: 0, BatterySocFrac: &lowSoc, PriceGrid: 0.30, PriceFeedIn: 0.05},
+		{Start: beforeMidnight, HomeKWh: 0, PVKWh: 5, BatterySocFrac: &highSoc, PriceGrid: 0.30, PriceFeedIn: 0.05},
+		{Start: afterMidnight, HomeKWh: 2, PVKWh: 0, BatterySocFrac: &lowSoc, PriceGrid: 0.30, PriceFeedIn: 0.05},
 	}
 
-	flows, err := computeW2(slots, phys)
+	flows, drift, err := computeW2(slots, phys)
 	require.NoError(t, err)
 	require.Len(t, flows, 2)
 
-	// re-anchored: soc starts day 2 at 0.5kWh, delivering at most 0.45kWh AC, leaving
-	// 1.55kWh of the 2kWh deficit to be bought. Without the re-anchor, day 1's
-	// simulated ending SoC (~9.5kWh) would cover the whole deficit and import would
-	// be 0.
-	require.InDelta(t, 2-0.5*phys.EtaD, flows[1].ImportKWh, 1e-9)
+	// slot 0 charges 5kWh of surplus into the pack at EtaC: 5 + 4.5 = 9.5kWh carried
+	// into slot 1, which covers the whole 2kWh deficit. With the old calendar reset
+	// this was 2 - 0.5*EtaD = 1.55kWh of import.
+	require.InDelta(t, 0.0, flows[1].ImportKWh, 1e-9)
+	require.Zero(t, drift.Gaps)
+	require.Zero(t, drift.CarriedKWh)
 }
 
-// TestComputeW2ReanchorsAcrossIntraDayGap is the intra-day counterpart to
-// TestComputeW2DailyReanchor: buildLedgerSlots can drop a single slot (a missing
-// reading, or one flagged recovered/incomplete) while keeping both its neighbours
-// valid, so the day-only reset left the simulation free-running across that gap - a
-// morning PV-read outage could leave the sim near-empty while the real battery
-// recovered to near-full by the time data resumed, later that same day.
-func TestComputeW2ReanchorsAcrossIntraDayGap(t *testing.T) {
+// TestComputeW2CarriesMeasuredMovementAcrossGap is the N1 fix's second half: at a gap
+// the counterfactual is handed the measured pack's OWN movement across the unmeasured
+// stretch - not the measured pack's SoC. Those slots are excluded from W3 too, but W3 is
+// a meter reading and so receives that energy anyway (its post-gap import is lower
+// because the real pack was charged during hours nobody priced); giving W2 the same
+// movement keeps the two comparable, while resetting to the measured level would also
+// wipe out the simulation's own divergence.
+//
+// The fixture separates all three candidate behaviours. Simulated SoC entering the gap
+// is 5.5kWh (1.0 measured + 5kWh surplus at EtaC), measured moves 1.0 -> 3.0kWh across
+// it, and the slot after the gap has an 8kWh deficit:
+//
+//	carry (this fix): 5.5 + 2.0 = 7.5kWh -> 6.75kWh delivered -> 1.25kWh imported
+//	reset (before):   3.0kWh          -> 2.70kWh delivered -> 5.30kWh imported
+//	free-running:     5.5kWh          -> 4.95kWh delivered -> 3.05kWh imported
+func TestComputeW2CarriesMeasuredMovementAcrossGap(t *testing.T) {
 	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0, MaxChargeKWh: 100, MaxDischargeKWh: 100}
 
 	loc := time.Now().Location()
 	slot0 := time.Date(2026, 8, 10, 9, 0, 0, 0, loc)
 	slot1 := slot0.Add(30 * time.Minute) // the 09:15 slot was dropped upstream - not contiguous
 
-	socAtSlot0 := 0.10 // measured, low
-	socAtSlot1 := 0.80 // measured, high - the real battery moved independently during the gap
+	socAtSlot0 := 0.10 // measured, 1.0kWh
+	socAtSlot1 := 0.30 // measured, 3.0kWh - the real pack gained 2kWh while unmeasured
 
 	slots := []slotData{
-		{Start: slot0, HomeKWh: 0, PVKWh: 1.0, BatterySocFrac: &socAtSlot0, PriceGrid: 0.30, PriceFeedIn: 0.05},
-		{Start: slot1, HomeKWh: 5.0, PVKWh: 0, BatterySocFrac: &socAtSlot1, PriceGrid: 0.30, PriceFeedIn: 0.05},
+		{Start: slot0, HomeKWh: 0, PVKWh: 5.0, BatterySocFrac: &socAtSlot0, PriceGrid: 0.30, PriceFeedIn: 0.05},
+		{Start: slot1, HomeKWh: 8.0, PVKWh: 0, BatterySocFrac: &socAtSlot1, PriceGrid: 0.30, PriceFeedIn: 0.05},
 	}
 
-	flows, err := computeW2(slots, phys)
+	flows, drift, err := computeW2(slots, phys)
 	require.NoError(t, err)
 	require.Len(t, flows, 2)
 
-	// re-anchored to the measured 8.0kWh at slot1: 5kWh deficit is fully covered
-	// (7.2kWh deliverable). Without the gap re-anchor, the carried-over simulated SoC
-	// from slot0 (~1.9kWh) would only cover 1.71kWh, leaving 3.29kWh to be bought -
-	// the wrong direction (it UNDERSTATES what the counterfactual battery could do,
-	// inflating Cost(W2) and flattering the real controller's Control contribution).
-	require.InDelta(t, 0.0, flows[1].ImportKWh, 1e-9)
+	require.InDelta(t, 1.25, flows[1].ImportKWh, 1e-9)
+	require.Equal(t, 1, drift.Gaps)
+	require.InDelta(t, 2.0, drift.CarriedKWh, 1e-9, "exactly the measured pack's movement across the gap, nothing else")
 }
 
 func TestComputeW2RefusesOnMissingSoc(t *testing.T) {
@@ -363,7 +375,7 @@ func TestComputeW2RefusesOnMissingSoc(t *testing.T) {
 		{Start: time.Now(), HomeKWh: 1, PVKWh: 0, BatterySocFrac: nil, PriceGrid: 0.3, PriceFeedIn: 0.05},
 	}
 
-	_, err := computeW2(slots, phys)
+	_, _, err := computeW2(slots, phys)
 	require.ErrorIs(t, err, ErrSocGap)
 }
 
@@ -849,4 +861,70 @@ func TestChainNotesFeedInStaticFallback(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, found, "notes must disclose the substituted feed-in price, got %v", chain.Notes)
+}
+
+// TestBatteryFloorPrefersConfiguredMinimum is the N3 fix: the counterfactual battery's
+// discharge floor must come from the installation's own configured minimum SoC
+// (api.BatterySocLimiter, persisted by Collector.SetMinSoc) rather than from the lowest
+// SoC the audited controller ever ran the pack down to.
+//
+// The seeded history's own minimum is ~13.67% (see seedBatteryCalibration); the
+// configured minimum here is 5%. Preferring the observed statistic makes the
+// counterfactual battery less able to discharge, which makes it more expensive, which
+// flatters the controller it is being compared against - a self-flattering metric in the
+// strict sense, and retroactive on top: one new low row restates every past figure.
+func TestBatteryFloorPrefersConfiguredMinimum(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	bat := mustCreateEntity(t, Battery, "bat1")
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	observed, err := deriveBatteryPhysicsUncached(context.Background())
+	require.NoError(t, err)
+	require.Greater(t, observed.FloorFrac, 0.10, "seeded history's own minimum")
+	require.Contains(t, observed.FloorSource, "fallback")
+	require.Contains(t, observed.floorNote(), "behaviour of the controller being measured")
+
+	// capacity as well as the floor: persistedBatteryFloorFrac needs both to have a
+	// defensible weight for the aggregate pack (see its doc comment).
+	require.NoError(t, bat.updateCapacity(10))
+	require.NoError(t, bat.updateMinSoc(0.05))
+
+	configured, err := deriveBatteryPhysicsUncached(context.Background())
+	require.NoError(t, err)
+	require.InDelta(t, 0.05, configured.FloorFrac, 1e-9)
+	require.Equal(t, floorSourceConfigured, configured.FloorSource)
+	require.Contains(t, configured.floorNote(), "configured minimum")
+}
+
+// TestBatteryFloorFallsBackWhenOnlyOneBatteryReportsALimit covers
+// persistedBatteryFloorFrac's all-or-nothing rule: two batteries where only one reports a
+// configured minimum have no honest aggregate floor, so the observed-minimum fallback -
+// clearly labelled - is the right answer rather than a partial figure.
+func TestBatteryFloorFallsBackWhenOnlyOneBatteryReportsALimit(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	loc := time.Now().Location()
+	bat1 := mustCreateEntity(t, Battery, "bat1")
+	bat2 := mustCreateEntity(t, Battery, "bat2")
+	seedBatteryCalibration(t, bat1, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	require.NoError(t, bat1.updateCapacity(10))
+	require.NoError(t, bat2.updateCapacity(10))
+	require.NoError(t, bat1.updateMinSoc(0.05))
+
+	phys, err := deriveBatteryPhysicsUncached(context.Background())
+	require.NoError(t, err)
+	require.Contains(t, phys.FloorSource, "fallback")
+
+	// once the second battery reports one too, the aggregate is the capacity-weighted
+	// mean of the two - not either one on its own.
+	require.NoError(t, bat2.updateMinSoc(0.15))
+	phys, err = deriveBatteryPhysicsUncached(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, floorSourceConfigured, phys.FloorSource)
+	require.InDelta(t, 0.10, phys.FloorFrac, 1e-9)
 }

@@ -41,11 +41,16 @@ import (
 // which doesn't exist yet) - out of scope here; renamed instead so this field cannot
 // be mistaken for that.
 type DecisionRow struct {
-	Ts            time.Time `json:"ts"`
-	AppliedMode   string    `json:"appliedMode"`
-	SuggestedMode string    `json:"suggestedMode"`
-	VetoReason    string    `json:"vetoReason,omitempty"`
-	HealthOk      bool      `json:"healthOk"`
+	Ts          time.Time `json:"ts"`
+	AppliedMode string    `json:"appliedMode"`
+	// SuggestedMode is nil - and omitted from the JSON - when no optimizer run
+	// produced a suggestion for this slot, so a caller can report "none recorded"
+	// instead of silently skipping the row or rendering a mode that was never
+	// suggested. See controlSlot.SuggestedMode for why this is a pointer and how a
+	// legacy "unknown" string is treated.
+	SuggestedMode *string `json:"suggestedMode,omitempty"`
+	VetoReason    string  `json:"vetoReason,omitempty"`
+	HealthOk      bool    `json:"healthOk"`
 	// ModeChanged carries controlSlot's own flag forward: AppliedMode is a single
 	// point sample taken seconds into the slot, and Phase A's doc comment on that
 	// field says a reader must not assume it held for the whole 15 minutes when this
@@ -102,13 +107,16 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 			ModeChanged:   r.ModeChanged,
 		}
 
-		if phys != nil && effectiveMode(r.AppliedMode) != effectiveMode(r.SuggestedMode) {
+		// no suggestion recorded means there is no rejected alternative to price -
+		// distinct from a suggestion that happened to match what was applied, which
+		// folds to no delta below.
+		if phys != nil && r.SuggestedMode != nil && effectiveMode(r.AppliedMode) != effectiveMode(*r.SuggestedMode) {
 			if s, ok := bySlot[r.Timestamp]; ok && s.BatterySocFrac != nil {
 				socKWh := *s.BatterySocFrac * phys.CapacityKWh
 				load := s.modelledLoadKWh()
 
 				_, appliedFlow, _, _ := simulateSlotStep(r.AppliedMode, load, s.PVKWh, socKWh, *phys)
-				_, rejectedFlow, _, _ := simulateSlotStep(r.SuggestedMode, load, s.PVKWh, socKWh, *phys)
+				_, rejectedFlow, _, _ := simulateSlotStep(*r.SuggestedMode, load, s.PVKWh, socKWh, *phys)
 
 				appliedCost := appliedFlow.ImportKWh*s.PriceGrid - appliedFlow.ExportKWh*s.PriceFeedIn
 				rejectedCost := rejectedFlow.ImportKWh*s.PriceGrid - rejectedFlow.ExportKWh*s.PriceFeedIn

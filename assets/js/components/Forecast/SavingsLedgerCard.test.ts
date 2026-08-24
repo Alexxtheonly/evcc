@@ -107,6 +107,49 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
     expect(wrapper.find('[data-testid="savings-ledger-detail-saved"]').exists()).toBe(false);
   });
 
+  // N0: a successful response can still be one the diagram cannot be drawn over. The
+  // tariffs table on this site starts 2026-08-17 while the battery was commissioned on
+  // 2026-08-21, so a default 7-day window is ACCEPTED, computes the realised figure over
+  // 584 slots and the chain over 254 - and every figure the card draws is the chain's.
+  test("narrows the present window to where the chain can actually be drawn", async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { ...ledgerStub, chainEarliest: "2026-08-21T12:45:00+02:00" },
+      })
+      .mockResolvedValueOnce({ status: 200, data: ledgerStub });
+
+    mountCard({
+      from: "2026-08-17T00:00:00.000Z",
+      to: "2026-08-24T00:00:00.000Z", // == NOW, so isAtPresent is true
+    });
+
+    await flushPromises();
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledTimes(2);
+    const secondCallParams = vi.mocked(api.get).mock.calls[1]![1] as any;
+    expect(secondCallParams.params.from).toBe("2026-08-21T10:45:00.000Z");
+    expect(secondCallParams.params.to).toBe("2026-08-24T00:00:00.000Z");
+  });
+
+  test("never narrows to chainEarliest on a window the user explicitly paged to", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      status: 200,
+      data: { ...ledgerStub, chainEarliest: "2026-08-21T12:45:00+02:00" },
+    });
+
+    const wrapper = mountCard({
+      from: "2026-08-01T00:00:00.000Z",
+      to: "2026-08-08T00:00:00.000Z", // well before NOW -> isAtPresent is false
+    });
+
+    await flushPromises();
+
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-testid="savings-ledger-content"]').exists()).toBe(true);
+  });
+
   test("a 422 with earliest while paged into the past renders the plain refusal and does not clamp", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({
       status: 422,
@@ -132,8 +175,18 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
   });
 });
 
+// liveSample's Control (-EUR 0.41 at the periodAverage lens) is SMALLER than that
+// period's own measurement noise (meterResidual.eurBand, EUR 0.625), so the card must not
+// call it a loss. overspendSample is the same payload with a quiet meter, which is what
+// the overspend clause needs to be exercised at all.
+function overspendSample() {
+  const s = JSON.parse(JSON.stringify(liveSample));
+  s.chain.meterResidual = { sumKWh: -0.02, absSumKWh: 0.15, slots: 84, eurBand: 0.05 };
+  return s;
+}
+
 describe("SavingsLedgerCard presentation", () => {
-  // the real API response the diagram was built against - a genuine Control overspend
+  // the real API response the diagram was built against
   const PRESENT_WINDOW = {
     from: "2026-08-22T00:00:00.000Z",
     to: "2026-08-24T00:00:00.000Z", // == NOW
@@ -294,7 +347,7 @@ describe("SavingsLedgerCard presentation", () => {
   });
 
   test("names a Control overspend under the chart even when the period headlines a saving", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: overspendSample() });
     const wrapper = mountCard(PRESENT_WINDOW);
     await flushPromises();
 
@@ -307,8 +360,28 @@ describe("SavingsLedgerCard presentation", () => {
     expect(clause.classes()).toContain("text-danger");
   });
 
+  // N2: the threshold for asserting a direction used to be a hardcoded half-cent, a
+  // hundred times below the uncertainty the same payload publishes - so the card rendered
+  // "the controller cost you €0.41" in the danger colour under a residual worth €0.63.
+  test("refuses to call a Control figure inside the period's noise a loss", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="savings-ledger-control-overspend"]').exists()).toBe(false);
+
+    const clause = wrapper.find('[data-testid="savings-ledger-control-inside-noise"]');
+    expect(clause.exists()).toBe(true);
+    // the figure is still named - never hidden, never rounded to zero - beside the band
+    // that makes its sign unusable
+    expect(clause.text()).toContain("control moved €0.41");
+    expect(clause.text()).toContain("€0.63");
+    expect(clause.text()).toContain("too small to call");
+    expect(clause.classes()).not.toContain("text-danger");
+  });
+
   test("says nothing about Control when Control saved money", async () => {
-    const saved = JSON.parse(JSON.stringify(liveSample));
+    const saved = overspendSample();
     // W2 -> W3 now favours the real controller at both lenses
     saved.chain.contributions[2].settled = { perSlot: 0.5, periodAverage: 0.5 };
 
@@ -317,6 +390,9 @@ describe("SavingsLedgerCard presentation", () => {
     await flushPromises();
 
     expect(wrapper.find('[data-testid="savings-ledger-control-overspend"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="savings-ledger-control-inside-noise"]').exists()).toBe(
+      false
+    );
   });
 
   test("names the EV-charge-timing non-attribution under the chart, not only in the modal", async () => {
@@ -344,6 +420,58 @@ describe("SavingsLedgerCard presentation", () => {
     await flushPromises();
 
     expect(wrapper.find('[data-testid="savings-ledger-ev-timing"]').exists()).toBe(false);
+  });
+
+  // N0: when the chain covers materially fewer slots than the period, every figure in the
+  // strip above is the chain's - "you paid EUR 0.60" is its W3 over its own subset, not
+  // the period's bill. The caption has to lead with the diagram's coverage, and the
+  // period's real figure has to be named rather than implied wrongly.
+  test("leads with the diagram's coverage and names the period's real bill when they diverge", async () => {
+    const diverged = JSON.parse(JSON.stringify(liveSample));
+    diverged.realised.coverage = { validSlots: 584, totalSlots: 635, fraction: 584 / 635 };
+    diverged.realised.settled = { perSlot: 35.746, periodAverage: 34.6859 };
+    diverged.chain.coverage = { validSlots: 254, totalSlots: 635, fraction: 254 / 635 };
+
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: diverged });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    const caption = wrapper.find('[data-testid="savings-ledger-caption"]').text();
+    expect(caption.indexOf("diagram over 40.0%")).toBeGreaterThan(-1);
+    // the diagram's coverage comes BEFORE the realised one, because the figures above
+    // it are the diagram's
+    expect(caption.indexOf("diagram over 40.0%")).toBeLessThan(caption.indexOf("92.0% of slots"));
+
+    const warning = wrapper.find('[data-testid="savings-ledger-diagram-subset"]');
+    expect(warning.exists()).toBe(true);
+    expect(warning.text()).toContain("40.0%");
+    expect(warning.text()).toContain("€34.69"); // what the period actually cost
+  });
+
+  test("says nothing about a subset when the diagram covers the same slots as the period", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="savings-ledger-diagram-subset"]').exists()).toBe(false);
+  });
+
+  // N5: realised.note now appends the static-feed-in disclosure to the invoice caveat, so
+  // it is no longer string-equal to chain.notes[0] and a Set-based dedupe rendered the
+  // invoice sentence twice.
+  test("renders the shared invoice caveat once even when one side has appended to it", async () => {
+    const appended = JSON.parse(JSON.stringify(liveSample));
+    appended.realised.note = `${appended.chain.notes[0]}; no feed-in price was recorded for 416 of the slots behind this figure`;
+
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: appended });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    const notes = (wrapper.vm as any).notes as string[];
+    const invoiceLines = notes.filter((n) => n.startsWith("prices only the grid tariff rate"));
+    expect(invoiceLines).toHaveLength(1);
+    // the LONGER form survives - the appended disclosure is never the thing dropped
+    expect(invoiceLines[0]).toContain("416 of the slots");
   });
 
   test("offers the caveats behind an info control rather than dropping them", async () => {

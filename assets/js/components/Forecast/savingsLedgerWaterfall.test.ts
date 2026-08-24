@@ -16,12 +16,23 @@ import {
 } from "./savingsLedgerWaterfall";
 import type { LedgerChain } from "./savingsLedger.types";
 // A real GET /api/savingsledger response from the owner's site (2 days, 2026-08-22..24).
-// Kept as a fixture rather than hand-written numbers because it carries a genuine
-// Control overspend at BOTH lenses, which is the case the diagram exists to render
+// Kept as a fixture rather than hand-written numbers because it carries a negative
+// Control contribution at BOTH lenses, which is the case the diagram exists to render
 // honestly (ADR-011 rule 1) and the one hand-rolled fixtures kept getting wrong.
 import liveSample from "./__fixtures__/ledgerLiveSample";
 
 const live = liveSample.chain as LedgerChain;
+
+// live's own Control (-EUR 0.326 perSlot) is smaller than that period's measured noise
+// floor (meterResidual.eurBand, EUR 0.625), so its DIRECTION is not evidence and the
+// diagram must not colour or word it as a loss. The bar-geometry and danger-colour
+// assertions therefore need a period whose Control clears its own noise floor: same
+// payload, quieter meter. Both cases are asserted - see "leaves a Control inside the
+// period's own noise floor uncoloured" below.
+const liveOverspend: LedgerChain = {
+  ...live,
+  meterResidual: { ...live.meterResidual, sumKWh: -0.02, absSumKWh: 0.15, eurBand: 0.05 },
+};
 
 const settled = (perSlot: number, periodAverage = perSlot) => ({ perSlot, periodAverage });
 
@@ -39,7 +50,7 @@ function baseChain(overrides: Partial<LedgerChain> = {}): LedgerChain {
       { label: "Control", settled: settled(3.42) }, // W2-W3, saved
     ],
     coverage: { validSlots: 651, totalSlots: 672, fraction: 651 / 672 },
-    meterResidual: { sumKWh: 0.1, absSumKWh: 4.2, slots: 651 },
+    meterResidual: { sumKWh: 0.1, absSumKWh: 4.2, slots: 651, eurBand: 0 },
     batteryPhysics: {
       capacityKWh: 19.32,
       capacitySource: "device-reported capacity, persisted",
@@ -93,7 +104,7 @@ describe("waterfallLayout", () => {
   });
 
   it("draws a Control overspend as a rising bar and never clamps it", () => {
-    const layout = waterfallLayout(live, "perSlot");
+    const layout = waterfallLayout(liveOverspend, "perSlot");
     const control = layout.columns.find((c) => c.key === "control")!;
     const battery = layout.columns.find((c) => c.key === "battery")!;
 
@@ -103,6 +114,21 @@ describe("waterfallLayout", () => {
     // rises: its bottom is the PREVIOUS level, its top the new (higher) one
     expect(control.base).toBeCloseTo(battery.level, 12);
     expect(control.base + control.span).toBeCloseTo(control.level, 12);
+    expect(control.level).toBeGreaterThan(battery.level);
+  });
+
+  it("leaves a Control inside the period's own noise floor uncoloured, but still drawn", () => {
+    const layout = waterfallLayout(live, "perSlot");
+    const control = layout.columns.find((c) => c.key === "control")!;
+    const battery = layout.columns.find((c) => c.key === "battery")!;
+
+    // -EUR 0.326 against an eurBand of EUR 0.625: real magnitude, unusable direction
+    expect(control.eur).toBeLessThan(0);
+    expect(control.insideNoise).toBe(true);
+    expect(control.overspend).toBe(false);
+    // never rounded away or clamped - the bar keeps its full height and still rises
+    expect(control.zero).toBe(false);
+    expect(control.span).toBeCloseTo(Math.abs(control.eur), 12);
     expect(control.level).toBeGreaterThan(battery.level);
   });
 
@@ -484,11 +510,13 @@ describe("SavingsLedgerWaterfall chart option", () => {
     // colors.* read back as "" under happy-dom, so this asserts on the distinction the
     // code makes rather than on the resolved hex: the overspend label is coloured
     // separately from the rest, and no label is ever left to inherit the bar's colour.
-    const labels = option().series[1].data.map((d: any) => d.label.color);
+    const labels = option("periodAverage", liveOverspend).series[1].data.map(
+      (d: any) => d.label.color
+    );
     expect(labels).toHaveLength(5);
     for (const c of labels) expect(typeof c).toBe("string");
     const saved: LedgerChain = {
-      ...live,
+      ...liveOverspend,
       contributions: live.contributions.map((c) =>
         c.label === "Control" ? { label: "Control" as const, settled: settled(1) } : c
       ),
@@ -505,7 +533,9 @@ describe("SavingsLedgerWaterfall chart option", () => {
     // the CSS-variable-backed colours (colors.self/grid/price/danger) all read back as
     // "" under happy-dom, so this asserts on the two that don't: the battery palette,
     // and the fact that an overspend column is NOT drawn in its normal palette colour.
-    const styles = option().series[1].data.map((d: any) => d.itemStyle);
+    const styles = option("periodAverage", liveOverspend).series[1].data.map(
+      (d: any) => d.itemStyle
+    );
     expect(styles[1].borderType).toBeUndefined(); // solar is measured
     expect(styles[2].borderType).toBe("dashed"); // battery: EUR 2.52, tall enough
     // Control is EUR 0.41 on an EUR 8 axis - about 7px tall. A 1px dash on all four
@@ -518,7 +548,7 @@ describe("SavingsLedgerWaterfall chart option", () => {
     expect(styles[3].color).not.toBe(batteryColor(1)); // control cost money here
 
     const saved: LedgerChain = {
-      ...live,
+      ...liveOverspend,
       contributions: live.contributions.map((c) =>
         c.label === "Control" ? { label: "Control" as const, settled: settled(1) } : c
       ),

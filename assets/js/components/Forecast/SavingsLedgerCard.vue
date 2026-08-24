@@ -135,6 +135,16 @@
 			     The overspend clause is appended here rather than raised into a banner:
 			     the strip above can legitimately read "saved 91 %" while Control itself
 			     lost money, and nothing else on the card names that. -->
+			<!-- N0: the strip above is entirely the chain's, over the chain's slots. When
+			     those are materially fewer than the period's, say what the period actually
+			     cost rather than letting "you paid" be read as the total. -->
+			<p
+				v-if="diagramSubsetWarning"
+				class="caption text-warning"
+				data-testid="savings-ledger-diagram-subset"
+			>
+				{{ diagramSubsetWarning }}
+			</p>
 			<p class="caption text-gray" data-testid="savings-ledger-caption">
 				{{ caption
 				}}<span
@@ -143,6 +153,13 @@
 					data-testid="savings-ledger-control-overspend"
 				>
 					· {{ controlOverspendClause }}</span
+				><!-- N2: same slot, deliberately NOT the danger colour - a figure inside the
+				     measurement noise is not a loss, and colouring it like one is the claim
+				     this clause exists to withdraw. --><span
+					v-if="controlNoiseClause"
+					data-testid="savings-ledger-control-inside-noise"
+				>
+					· {{ controlNoiseClause }}</span
 				>
 			</p>
 			<!-- ADR-011 rule 7: a measure that cannot be honestly attributed is named in
@@ -184,6 +201,8 @@ import {
 	pickSettled,
 	coverageDivergence,
 	clampWindowToEarliest,
+	contributionBand,
+	isControlInsideNoise,
 	isControlOverspend,
 	type LedgerWindow,
 	type SettlementHeadline,
@@ -363,11 +382,27 @@ export default defineComponent({
 			const divergence = this.chainCoverageDivergence;
 			return divergence ? this.fmtPercentage(divergence.chainFraction * 100, 1) : "";
 		},
+		// Coverage, in the order the figures above it actually come from. Every number in
+		// the waterfall and in the three-figure strip is the CHAIN's, over the chain's
+		// slots - so when the two coverages diverge the chain's is what qualifies them and
+		// has to come first. Leading with the realised coverage (92 % of slots) above a
+		// strip built entirely from a 40 % chain read as reassurance for figures it did not
+		// describe; see diagramSubsetWarning for the rest of that fix.
 		caption(): string {
 			if (!this.ledger) return "";
 			const parts: string[] = [];
 			if (this.ledger.chain?.batteryPhysics) {
 				parts.push(this.$t("forecast.savingsLedger.estimatedCaption") as string);
+			}
+			const chain = this.ledger.chain?.coverage;
+			if (this.chainCoveragePct && chain) {
+				parts.push(
+					this.$t("forecast.savingsLedger.coverageDiagramShort", {
+						pct: this.chainCoveragePct,
+						valid: chain.validSlots,
+						total: chain.totalSlots,
+					}) as string
+				);
 			}
 			parts.push(
 				this.$t("forecast.savingsLedger.coverageShort", {
@@ -376,14 +411,26 @@ export default defineComponent({
 					total: this.ledger.realised.coverage.totalSlots,
 				}) as string
 			);
-			if (this.chainCoveragePct) {
-				parts.push(
-					this.$t("forecast.savingsLedger.coverageChainDivergesShort", {
-						pct: this.chainCoveragePct,
-					}) as string
-				);
-			}
 			return parts.join(" · ");
+		},
+		// N0: when the diagram covers materially fewer slots than the period, "you paid
+		// EUR 4.60" above it is the chain's W3 over its own subset, not the period's bill -
+		// on this site's own database the same payload said EUR 34.69 over 584 slots while
+		// the strip read EUR 4.60 over 254. The default view auto-narrows to
+		// chainEarliest so this is rare (see fetch()); a user who explicitly pages into a
+		// divergent period gets the period's real figure named here instead of implied
+		// wrongly above.
+		diagramSubsetWarning(): string {
+			if (!this.ledger?.chain || !this.chainCoverageDivergence) return "";
+			return this.$t("forecast.savingsLedger.diagramSubsetWarning", {
+				pct: this.chainCoveragePct,
+				amount: this.fmtMoney(
+					pickSettled(this.ledger.realised.settled, this.headline),
+					this.currency,
+					true,
+					true
+				),
+			}) as string;
 		},
 		// ADR-011 rule 1, restated for the case the three-figure strip cannot express: on a
 		// period where solar and the battery saved a great deal, the strip legitimately
@@ -401,6 +448,22 @@ export default defineComponent({
 				amount: this.fmtMoney(Math.abs(eur), this.currency, true, true),
 			}) as string;
 		},
+		// N2: the counterpart to the clause above, for the case it must NOT fire. A Control
+		// figure smaller than the period's own measured noise floor has a magnitude but no
+		// usable direction, and a false "the controller cost you money" is the most
+		// expensive wrong answer this card can give. The figure is still drawn and printed
+		// - this says what it is worth, in the card's own gray, not in the danger colour.
+		controlNoiseClause(): string {
+			const chain = this.ledger?.chain;
+			if (!chain || !isControlInsideNoise(chain, this.headline)) return "";
+			const control = chain.contributions.find((c) => c.label === "Control");
+			if (!control) return "";
+			const money = (v: number) => this.fmtMoney(v, this.currency, true, true);
+			return this.$t("forecast.savingsLedger.controlInsideNoiseShort", {
+				amount: money(Math.abs(pickSettled(control.settled, this.headline))),
+				band: money(contributionBand(chain)),
+			}) as string;
+		},
 		// ADR-011 rule 7: rendered only when the API actually sent the EV-timing note (see
 		// EV_TIMING_NOTE_PREFIX), so a site without a loadpoint is not told about a
 		// non-attribution that cannot affect it.
@@ -410,14 +473,24 @@ export default defineComponent({
 			return this.$t("forecast.savingsLedger.evTimingShort") as string;
 		},
 		// ADR-011 rule 7: every caveat the API sends must be rendered, never dropped -
-		// realised.note is always present, chain.notes only when the chain computed.
-		// realised.note and chain.notes[0] are both noteInvoiceComparability
-		// (core/metrics/ledger_worlds.go/ledger_settlement.go) - deduped so the same
-		// sentence never renders twice, not a sign either side dropped anything.
+		// realised.note is always present, chain.notes only when the chain computed. Both
+		// OPEN with noteInvoiceComparability (core/metrics/ledger_worlds.go /
+		// ledger_settlement.go), but realised.note appends its own static-feed-in
+		// disclosure to it, so the two stopped being string-equal and a Set-based dedupe
+		// let the invoice sentence render twice. Deduped on the leading sentence instead:
+		// whichever form arrives first is kept whole, and a later note that merely repeats
+		// that opening is dropped. Nothing is ever lost - the longer form is the one the
+		// backend sends first (realised.note leads the list).
 		notes(): string[] {
 			if (!this.ledger) return [];
 			const all = [this.ledger.realised.note, ...(this.ledger.chain?.notes ?? [])];
-			return [...new Set(all)];
+			const kept: string[] = [];
+			for (const note of all) {
+				const head = note.split(";")[0] ?? note;
+				if (kept.some((k) => k.startsWith(head))) continue;
+				kept.push(note);
+			}
+			return kept;
 		},
 	},
 	watch: {
@@ -532,7 +605,27 @@ export default defineComponent({
 				// out from under the newer one
 				if (!current()) return;
 				if (res.status === 200) {
-					this.ledger = res.data as SavingsLedger;
+					const ledger = res.data as SavingsLedger;
+
+					// N0: the request succeeded, but the chain may only be computable over
+					// part of it - the tariffs table can start days before the battery was
+					// commissioned, and every figure this card draws comes from the chain.
+					// Narrow the DEFAULT/present view to where the diagram can actually be
+					// drawn, under exactly the guards the ErrBeforeTariffStart clamp below
+					// uses: never a window the user explicitly paged to, and at most one
+					// attempt per navigation. clampWindowToEarliest returns null when
+					// narrowing wouldn't honestly help, in which case the divergent period
+					// is rendered as-is with diagramSubsetWarning naming the real figure.
+					if (this.isAtPresent && !this.hasAutoClamped && ledger.chainEarliest) {
+						const clamped = clampWindowToEarliest(this.win, ledger.chainEarliest);
+						if (clamped) {
+							this.hasAutoClamped = true;
+							this.win = clamped;
+							return;
+						}
+					}
+
+					this.ledger = ledger;
 				} else {
 					const body = res.data as SavingsLedgerErrorBody | undefined;
 

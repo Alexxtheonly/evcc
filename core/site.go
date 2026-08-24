@@ -938,6 +938,16 @@ func (site *Site) updateBatteryMeters() {
 				site.log.ERROR.Printf("persist battery %d capacity: %v", i+1, err)
 			}
 		}
+		// the configured discharge floor, persisted for the same reason capacity is:
+		// the savings ledger's counterfactual battery otherwise has to fall back to
+		// "the lowest SoC this battery was ever run down to", which is a behaviour of
+		// the very controller the ledger audits (see deriveBatteryPhysicsUncached).
+		if bsl, ok := api.Cap[api.BatterySocLimiter](dev.Instance()); ok {
+			minSoc, _ := bsl.GetSocLimits()
+			if err := c.SetMinSoc(minSoc / 100); err != nil {
+				site.log.ERROR.Printf("persist battery %d min soc: %v", i+1, err)
+			}
+		}
 	}
 
 	site.publishBattery()

@@ -87,6 +87,10 @@
 						><i class="lg tick--vetoed-unknown"></i
 						>{{ $t("forecast.savingsLedger.decisions.deltaUnknown") }}</span
 					>
+					<span
+						><i class="lg tick--no-suggestion"></i
+						>{{ $t("forecast.savingsLedger.decisions.outcome.noSuggestion") }}</span
+					>
 				</div>
 
 				<div
@@ -108,7 +112,7 @@
 					<!-- D6: "did the controller override the suggestion" is the outcome, not
 					     a raw string comparison - a legacy row carrying "unknown" against
 					     "normal" is the same mode twice, not a veto worth a row of its own. -->
-					<template v-if="selected.outcome !== 'steady'">
+					<template v-if="isVeto(selected.outcome)">
 						<div class="dc-line">
 							<div class="dc-k">
 								{{ $t("forecast.savingsLedger.decisions.suggested") }}
@@ -141,7 +145,7 @@
 					     strings ("unknown" vs "normal") that was a fabricated "the veto was
 					     worth EUR 0.00" on every such slot. Shown only where a veto exists;
 					     absent-but-vetoed still says so, in its own words, below. -->
-					<div v-if="selected.outcome !== 'steady'" class="dc-line">
+					<div v-if="isVeto(selected.outcome)" class="dc-line">
 						<div class="dc-k">{{ $t("forecast.savingsLedger.decisions.delta") }}</div>
 						<div class="dc-v" data-testid="savings-ledger-decision-delta">
 							<span
@@ -209,9 +213,13 @@
 							<td>{{ modeLabel(slot.row.appliedMode) }}</td>
 							<td>
 								{{
-									slot.outcome === "steady"
-										? "—"
-										: modeLabel(slot.row.suggestedMode)
+									slot.outcome === "no-suggestion"
+										? $t(
+												"forecast.savingsLedger.decisions.outcome.noSuggestion"
+											)
+										: slot.outcome === "steady"
+											? "—"
+											: modeLabel(slot.row.suggestedMode)
 								}}
 							</td>
 							<!-- D6, same rule as the detail panel above: the delta prices a veto
@@ -226,7 +234,7 @@
 								:class="{ 'text-loss': slot.outcome === 'vetoed-cost' }"
 							>
 								{{
-									slot.outcome !== "steady" && slot.row.slotFlowDeltaEur != null
+									isVeto(slot.outcome) && slot.row.slotFlowDeltaEur != null
 										? fmtMoney(slot.row.slotFlowDeltaEur, currency, true, true)
 										: "—"
 								}}
@@ -251,9 +259,11 @@ import type { LedgerDecisionRow } from "./savingsLedger.types";
 import { SLOT_MINUTES } from "./savingsLedgerChain";
 import {
 	decisionSlots,
+	isVeto,
 	unhealthyVetoCount,
 	modeLabelKey,
 	reasonLabelKey,
+	type DecisionOutcome,
 	type DecisionSlot,
 } from "./savingsLedgerDecisions";
 
@@ -296,6 +306,9 @@ export default defineComponent({
 		},
 	},
 	methods: {
+		isVeto(outcome: DecisionOutcome): boolean {
+			return isVeto(outcome);
+		},
 		isSelected(slot: DecisionSlot): boolean {
 			return this.selected?.row.ts === slot.row.ts;
 		},
@@ -305,6 +318,9 @@ export default defineComponent({
 		// legend shows, plus the euro delta where one exists, as the button's real name.
 		tickAriaLabel(slot: DecisionSlot): string {
 			const time = this.fmtDayTime(new Date(slot.row.ts));
+			if (slot.outcome === "no-suggestion") {
+				return `${time}, ${this.$t("forecast.savingsLedger.decisions.outcome.noSuggestion")}`;
+			}
 			if (slot.outcome === "steady") {
 				return `${time}, ${this.$t("forecast.savingsLedger.decisions.outcome.steady")}`;
 			}
@@ -376,6 +392,13 @@ export default defineComponent({
 .tick--vetoed-cost {
 	height: 24px;
 	background: var(--evcc-red);
+}
+/* N4: "no optimizer run produced a suggestion for this slot" is its own state, not a
+   quieter kind of agreement - a hollow tick at the steady tick's height, so it reads as
+   present-but-empty rather than as either a veto or a match. */
+.tick--no-suggestion {
+	background: transparent;
+	box-shadow: inset 0 0 0 1px var(--evcc-gray);
 }
 .tick--vetoed-unknown {
 	height: 24px;

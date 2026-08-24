@@ -141,17 +141,25 @@ func (p batteryPhysics) rateCeilingNote() string {
 }
 
 // floorNote renders FloorFrac and its provenance into the chain's Notes (ADR-011
-// rule 7). Unlike CapacityKWh, this package has no configured/persisted floor to
-// prefer - FloorFrac is always "the lowest SoC observed anywhere in this battery's
-// history", an arbitrary statistic that directly throttles how much the W2
-// counterfactual battery is allowed to discharge. One extra low-SoC row can move it
-// enough to flip the sign of Control (see TestFloorFracSensitivityIsLabelled) - this
-// belongs in Notes, the one field every caller already renders unconditionally,
-// rather than sitting unused inside batteryPhysics.
+// rule 7). The floor directly throttles how much the W2 counterfactual battery is
+// allowed to discharge, and moving it is enough to flip the sign of Control (see
+// TestFloorFracSensitivityIsLabelled) - so which of the two sources produced it belongs
+// in Notes, the one field every caller already renders unconditionally, rather than
+// sitting unused inside batteryPhysics. The fallback wording is the sharper of the two
+// deliberately: an observed minimum is a statistic of the audited controller's own
+// behaviour (see resolveBatteryFloor).
 func (p batteryPhysics) floorNote() string {
-	return fmt.Sprintf("counterfactual battery floor: %.1f%% SoC (%s) - the lowest SoC observed anywhere in this battery's history, not a configured limit; a single extra low reading can move it and therefore the control contribution materially",
+	if p.FloorSource == floorSourceConfigured {
+		return fmt.Sprintf("counterfactual battery floor: %.1f%% SoC - the installation's configured minimum (%s)", p.FloorFrac*100, p.FloorSource)
+	}
+	return fmt.Sprintf("counterfactual battery floor: %.1f%% SoC (%s) - no configured minimum is on record for this battery, so this is the lowest SoC ever observed, which is a behaviour of the controller being measured; a single extra low reading can move it and therefore the control contribution materially",
 		p.FloorFrac*100, p.FloorSource)
 }
+
+// floorSourceConfigured is the FloorSource value resolveBatteryFloor sets when the
+// installation's own configured minimum SoC was available - a named constant rather than
+// a repeated literal because floorNote branches on it.
+const floorSourceConfigured = "configured minimum SoC, device-reported"
 
 // rateLimitPercentile is the percentile used to establish MaxChargeKWh/MaxDischargeKWh
 // from history, instead of the single largest slot ever observed - see those fields'
@@ -281,10 +289,7 @@ func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
 		return batteryPhysics{}, err
 	}
 
-	floorFrac, floorSource := 0.0, "no SoC history, defaulted to 0%"
-	if haveSoc {
-		floorFrac, floorSource = minSocFrac, "lowest observed SoC in history"
-	}
+	floorFrac, floorSource := resolveBatteryFloor(ctx, ids, minSocFrac, haveSoc)
 
 	return batteryPhysics{
 		CapacityKWh:          capacityKWh,
@@ -320,6 +325,73 @@ func persistedBatteryCapacityKWh(ctx context.Context, ids []int) (sum float64, o
 		sum += c.Float64
 	}
 	return sum, true, nil
+}
+
+// persistedBatteryFloorFrac is the capacity-weighted mean of every battery entity's
+// persisted min_soc_frac (Collector.SetMinSoc, from api.BatterySocLimiter) - i.e. the
+// floor of the single aggregate pack the counterfactual models, Sigma(min_i * cap_i) /
+// Sigma(cap_i). ok is true only when EVERY entity has BOTH a persisted floor and a
+// persisted capacity: without each battery's own capacity there is no defensible weight
+// to combine two different floors with, and a site where only one battery reports a
+// limit has no honest aggregate at all. Same all-or-nothing rule
+// persistedBatteryCapacityKWh already applies, for the same reason.
+func persistedBatteryFloorFrac(ctx context.Context, ids []int) (frac float64, ok bool, err error) {
+	// explicit column tags: gorm's default naming strategy turns CapacityKWh into
+	// "capacity_k_wh", which SQLite happily scans as NULL for every row - the same trap
+	// queryTariffSlots' FeedIn field documents. entity's own field carries the tag;
+	// a scan struct without one silently reports "no persisted capacity" forever.
+	var rows []struct {
+		MinSocFrac  sql.NullFloat64 `gorm:"column:min_soc_frac"`
+		CapacityKWh sql.NullFloat64 `gorm:"column:capacity_kwh"`
+	}
+	if err := db.Instance.WithContext(ctx).Model(new(entity)).
+		Select("min_soc_frac, capacity_kwh").Where("id IN ?", ids).Scan(&rows).Error; err != nil {
+		return 0, false, err
+	}
+	if len(rows) != len(ids) {
+		return 0, false, nil
+	}
+
+	var weighted, capacity float64
+	for _, r := range rows {
+		if !r.MinSocFrac.Valid || !r.CapacityKWh.Valid {
+			return 0, false, nil
+		}
+		weighted += r.MinSocFrac.Float64 * r.CapacityKWh.Float64
+		capacity += r.CapacityKWh.Float64
+	}
+	if capacity <= 0 {
+		return 0, false, nil
+	}
+	return weighted / capacity, true, nil
+}
+
+// resolveBatteryFloor establishes the counterfactual battery's discharge floor,
+// preferring the installation's own configured minimum SoC over the lowest SoC ever
+// observed.
+//
+// The observed minimum is what this used to use unconditionally, and it is unsound in
+// two ways. It is RETROACTIVE: it is taken over the whole retained history, so one new
+// low reading silently restates every figure the ledger has ever reported, and today's
+// low rows ageing past MaxLedgerRangeDays restates them again. And it is CIRCULAR: "how
+// deep has this pack ever been run" is a behaviour of the very controller the ledger
+// audits, so a controller that never discharges deeply gives its own counterfactual a
+// high floor, which makes the counterfactual expensive, which flatters the controller.
+// On this site's own database the difference was not academic - the observed 4.1% floor
+// against the configured 5% moved the Control contribution by EUR 0.17 on a window whose
+// entire realised grid cost was EUR 3.97, and a 10% floor flipped its sign.
+//
+// The observed minimum stays as the fallback for a battery that reports no limit, but it
+// is labelled as one: FloorSource is the provenance string floorNote renders, and it must
+// always say which of the two produced the number.
+func resolveBatteryFloor(ctx context.Context, ids []int, observedMin float64, haveSoc bool) (float64, string) {
+	if frac, ok, err := persistedBatteryFloorFrac(ctx, ids); err == nil && ok {
+		return frac, floorSourceConfigured
+	}
+	if haveSoc {
+		return observedMin, "lowest observed SoC in history (fallback: no configured minimum recorded)"
+	}
+	return 0, "no SoC history and no configured minimum, defaulted to 0%"
 }
 
 // resolveBatteryCapacity prefers persisted device capacity over derivation - see
@@ -520,13 +592,13 @@ func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryP
 	}
 }
 
-// ErrSocGap means a day in the requested period has no measured SoC at its first
-// valid slot, so the counterfactual battery has nothing to re-anchor to. In practice
-// this is currently unreachable through ComputeChain, since buildLedgerSlots already
-// drops any slot missing BatterySocFrac before computeW2 ever sees it - kept as a
-// defensive check (a future caller building slots another way must not silently free-
-// run instead) rather than something the existing test suite can exercise end-to-end.
-var ErrSocGap = errors.New("missing measured SoC at a day boundary")
+// ErrSocGap means a slot in the requested period has no measured SoC, so the
+// counterfactual battery has no state to start from. In practice this is currently
+// unreachable through ComputeChain, since buildLedgerSlots already drops any slot
+// missing BatterySocFrac before computeW2 ever sees it - kept as a defensive check (a
+// future caller building slots another way must not silently start from zero instead)
+// rather than something the existing test suite can exercise end-to-end.
+var ErrSocGap = errors.New("missing measured SoC")
 
 // ErrBatteryRateCeilingUnavailable means the battery's history has no observed
 // charge or discharge samples in one direction - see batteryPhysics'
@@ -534,52 +606,114 @@ var ErrSocGap = errors.New("missing measured SoC at a day boundary")
 // empty sample list must not be handed to computeW2 as if it were physical fact.
 var ErrBatteryRateCeilingUnavailable = errors.New("no observed charge or discharge history to establish the counterfactual battery's rate ceiling")
 
-// computeW2 simulates the "dumb rule" battery (charge from surplus only, discharge to
-// house load only, never from grid) across slots, re-anchoring the simulated SoC to
-// the measured SoC (BatterySocFrac) at the first slot of each calendar day AND at the
-// first slot after any gap in an otherwise-15-minute-contiguous run. A free-running
-// simulation is not evidence (ADR-011 rule 5): buildLedgerSlots can drop an individual
-// slot (a missing reading, or one flagged recovered/incomplete) while leaving both
-// neighbours in the valid set, so "new day" alone doesn't bound how far the simulated
-// and real batteries can have diverged - a morning PV-read outage, for example, can
-// leave the sim near-empty while the real battery recovered to near-full by the
-// afternoon, inflating that day's simulated cost in the direction that flatters the
-// real controller. Re-anchoring on every gap, not just midnight, bounds that.
-func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, error) {
-	out := make([]worldFlow, len(slots))
+// W2Drift is the counterfactual battery's energy bookkeeping, published beside
+// MeterResidual for the same reason: it is a known gap under W2's euro figure, and the
+// only honest thing to do with it is print it.
+//
+// The counterfactual battery is anchored to the measured SoC once, at the period's
+// first valid slot, and simulated from there. It is NOT re-anchored afterwards - see
+// computeW2 for why a re-anchor is an unpriced energy injection rather than a
+// correction. What it does do at a gap is CARRY the measured pack's own state change
+// across the unmeasured stretch (CarriedKWh), because the excluded slots are excluded
+// from W3 too and W3 still receives that energy implicitly, through the meter: its
+// post-gap import is lower because the real pack was filled during hours nobody priced.
+// Giving W2 the same movement, and nothing else, is what keeps the two worlds
+// comparable across a hole in the record.
+type W2Drift struct {
+	// Gaps is the number of breaks in the otherwise-15-minute-contiguous slot series.
+	Gaps int `json:"gaps"`
+	// CarriedKWh is the net energy handed to the counterfactual battery across those
+	// gaps - the measured pack's own movement while the ledger was not looking,
+	// bounded by the same floor/capacity simulateSlotStep enforces every slot. It is
+	// unpriced in W2 exactly as it is unpriced in W3.
+	CarriedKWh float64 `json:"carriedKWh"`
+	// FinalKWh is (simulated - measured) stored energy at the end of the period. The
+	// dumb rule is a different strategy, so it ends somewhere else; that divergence is
+	// the counterfactual doing its job, not an error, but it is also energy one world
+	// holds and the other does not, and the cost comparison does not value it. A large
+	// negative figure means W2 ended emptier than reality and so under-bought against a
+	// stock-neutral comparison, i.e. the Control contribution beside it is a lower bound.
+	FinalKWh float64 `json:"finalKWh"`
+}
 
-	var socKWh float64
-	var haveSoc bool
-	var day string
+// note renders W2Drift into the chain's Notes (ADR-011 rule 7) - the numbers are
+// in the payload either way, but the note is the field every caller already renders.
+func (d W2Drift) note() string {
+	return fmt.Sprintf("counterfactual battery: anchored to the measured charge once, at the period's first slot, then simulated - across %d gap(s) in the record it was handed the %+.2fkWh the real pack itself moved while unmeasured (unpriced in this world exactly as it is in what you paid), and it ends the period %+.2fkWh from the real pack, energy neither cost figure values",
+		d.Gaps, d.CarriedKWh, d.FinalKWh)
+}
+
+// computeW2 simulates the "dumb rule" battery (charge from surplus only, discharge to
+// house load only, never from grid) across slots.
+//
+// The simulated SoC is anchored to the measured SoC exactly once, at the first slot,
+// and free-runs from there. It used to be re-anchored at every calendar-day boundary
+// and at every gap in the otherwise-15-minute-contiguous run, on the argument that a
+// free-running simulation is not evidence (ADR-011 rule 5). That argument is real but
+// the cure was worse: each re-anchor is an unpriced energy injection. Whatever the real
+// battery had accumulated while the ledger was not looking - and, worse, whatever the
+// audited controller had achieved that the dumb rule had not - was credited to the
+// counterfactual for free, and every free kWh is a kWh W2 never has to buy. On this
+// site's own database, over 166 slots (2026-08-21 12:45 to 2026-08-24 10:45), the
+// re-anchors injected 9.685kWh net - 24% of the period's whole load - and moved the
+// Control contribution from -EUR 0.28 to -EUR 0.62. A calendar-day reset in particular
+// has no defence at all: midnight is not a measurement event, and those two resets
+// alone were worth EUR 0.036.
+//
+// The half of the old behaviour that WAS defensible is kept, in isolation: at a gap,
+// the measured pack's own state change across the unmeasured stretch is carried onto
+// the simulated SoC. Those slots are excluded from every world, including W3 - but W3
+// is a meter reading, so it receives that energy anyway: its post-gap import is lower
+// because the real pack was charged during hours nobody priced. Free-running W2 would
+// receive none of it, which penalises the counterfactual and flatters the controller by
+// exactly that amount (on the same 166 slots: 6.03kWh, moving Control to +EUR 0.48).
+// Carrying the delta - rather than resetting to the measured level - gives W2 the same
+// unmeasured movement W3 got while preserving the simulation's own divergence, which is
+// the counterfactual's entire point.
+//
+// soc_temp is recorded at SLOT START (see meter.SocTemp), so the pack's measured state
+// at the END of the last slot before a gap is that slot's start SoC plus its own
+// measured charge/discharge - applied with the same one-way efficiencies
+// simulateSlotStep uses, so this is the simulation's own physics rather than a new
+// assumption. Bounding the carried state to [floor, capacity] is the same physical
+// bound simulateSlotStep applies every slot, not a clamp on a reported figure, and
+// whatever the bound absorbs is reflected in W2Drift.CarriedKWh rather than hidden.
+func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, W2Drift, error) {
+	out := make([]worldFlow, len(slots))
+	var drift W2Drift
+
+	var socKWh, prevEndMeasured float64
+	var started bool
 	var prevStart time.Time
 
 	for i, s := range slots {
 		if s.BatterySocFrac == nil {
-			return nil, ErrSocGap
+			return nil, W2Drift{}, ErrSocGap
 		}
+		measured := *s.BatterySocFrac * phys.CapacityKWh
 
-		today := s.Start.Local().Format("2006-01-02")
-		gap := !prevStart.IsZero() && !s.Start.Equal(prevStart.Add(tariff.SlotDuration))
-		if today != day || gap {
-			// re-anchor: a new calendar day always resets to the measured SoC,
-			// even if the previous day also had one - drift must not accumulate.
-			// Same for a gap: whatever divergence built up before the gap is not
-			// evidence of anything after it.
-			socKWh = *s.BatterySocFrac * phys.CapacityKWh
-			haveSoc = true
-			day = today
-		}
-		if !haveSoc {
-			return nil, ErrSocGap
+		switch {
+		case !started:
+			socKWh, started = measured, true
+		case !s.Start.Equal(prevStart.Add(tariff.SlotDuration)):
+			drift.Gaps++
+			carried := min(max(socKWh+measured-prevEndMeasured, phys.FloorFrac*phys.CapacityKWh), phys.CapacityKWh)
+			drift.CarriedKWh += carried - socKWh
+			socKWh = carried
 		}
 
 		newSoc, flow, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
 		socKWh = newSoc
 		out[i] = flow
 		prevStart = s.Start
+		prevEndMeasured = measured + s.BatteryChargeKWh*phys.EtaC - s.BatteryDischargeKWh/phys.EtaD
 	}
 
-	return out, nil
+	if started {
+		drift.FinalKWh = socKWh - prevEndMeasured
+	}
+
+	return out, drift, nil
 }
 
 // WorldCost is one world's cost, priced both ways.
@@ -630,6 +764,10 @@ type Chain struct {
 	// every euro figure above, published rather than left implicit - see its own doc
 	// comment for why it is not expected to be zero.
 	MeterResidual MeterResidual `json:"meterResidual"`
+	// W2Drift is the counterfactual battery's energy bookkeeping - nil when the site
+	// has no battery and W2 collapses to W1, where there is no simulation to account
+	// for. See its own doc comment.
+	W2Drift *W2Drift `json:"w2Drift,omitempty"`
 	// Notes are caveats ADR-011 rule 7 says must be labelled in the payload, not left
 	// to a code comment or an unwritten UI convention - which settlement figures a
 	// PeriodAverage price actually reflects, what Routing/Timing do and don't include,
@@ -695,7 +833,7 @@ func noteFeedInStaticFallback(slots int, price float64) string {
 
 // noteMeterResidual, always present: points a reader at meterResidual rather than
 // leaving it to be found only by knowing the field exists.
-const noteMeterResidual = "meterResidual (kWh, not EUR) is the measured gap between this period's sources and sinks - see its own doc comment for why it is not expected to be zero; treat it as the noise floor under every euro figure above"
+const noteMeterResidual = "meterResidual is the measured gap between this period's sources and sinks - see its own doc comment for why it is not expected to be zero; its eurBand is that gap priced at the period's mean grid rate, and any figure above smaller than it is inside the noise, not a direction"
 
 // allFeedInZero reports whether every slot's feed-in price is exactly 0 - see
 // noteFeedInZero.
@@ -742,6 +880,7 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	var w2 []worldFlow
 	var phys *batteryPhysics
 	var control *ControlSplit
+	var drift *W2Drift
 
 	if set.HasBattery {
 		p, err := deriveBatteryPhysics(ctx)
@@ -758,10 +897,12 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 		}
 		phys = &p
 
-		w2, err = computeW2(set.Slots, p)
+		var d W2Drift
+		w2, d, err = computeW2(set.Slots, p)
 		if err != nil {
 			return nil, err
 		}
+		drift = &d
 
 		w2Settled := settleFlows(set.Slots, w2)
 		w3Settled := settleFlows(set.Slots, w3)
@@ -791,7 +932,7 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	coverage := set.coverage()
 	notes := []string{noteInvoiceComparability, noteMeterResidual}
 	if control != nil {
-		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement, noteSlotFlowDeltaIsSlotLocal, phys.rateCeilingNote(), phys.floorNote())
+		notes = append(notes, noteRoutingIncludesLosses, noteTimingSettlement, noteSlotFlowDeltaIsSlotLocal, phys.rateCeilingNote(), phys.floorNote(), drift.note())
 	}
 	if coverage.TotalSlots > 0 && coverage.ValidSlots < coverage.TotalSlots {
 		notes = append(notes, notePeriodAverageCoverage(coverage))
@@ -813,6 +954,7 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 		BatteryPhysics: phys,
 		Control:        control,
 		MeterResidual:  computeMeterResidual(set.Slots),
+		W2Drift:        drift,
 		Notes:          notes,
 	}, nil
 }
