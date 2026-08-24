@@ -263,6 +263,17 @@ export default defineComponent({
 		},
 		columnColor(column: WaterfallColumn): string {
 			if (column.overspend) return colors.danger || "";
+			// The overspend test above is band-gated for a reason: a figure smaller than
+			// the period's own measurement noise is not evidence of a direction, so it
+			// must not be coloured as a loss. That reasoning is symmetric - it is not
+			// evidence of a saving either, and a saturated palette colour says "this
+			// measure saved you money" just as loudly as the danger colour says the
+			// opposite, while the caption underneath says the figure is too small to call.
+			// Neutral in BOTH directions; the bar, its arrow and its printed figure are
+			// all untouched, only the semantic colour goes. Totals never carry this flag
+			// (waterfallLayout hardcodes insideNoise false for them), so this only ever
+			// catches a contribution.
+			if (column.insideNoise) return colors.muted || "";
 			switch (column.key) {
 				case "baseline":
 					// the quietest element on the chart: it is the reference every other

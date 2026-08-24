@@ -46,8 +46,8 @@ type DecisionRow struct {
 	// SuggestedMode is nil - and omitted from the JSON - when no optimizer run
 	// produced a suggestion for this slot, so a caller can report "none recorded"
 	// instead of silently skipping the row or rendering a mode that was never
-	// suggested. See controlSlot.SuggestedMode for why this is a pointer and how a
-	// legacy "unknown" string is treated.
+	// suggested. Legacy rows spelling that absence as "unknown" arrive here as nil
+	// too - see decodeSuggestedMode.
 	SuggestedMode *string `json:"suggestedMode,omitempty"`
 	VetoReason    string  `json:"vetoReason,omitempty"`
 	HealthOk      bool    `json:"healthOk"`
@@ -80,6 +80,26 @@ func effectiveMode(mode string) string {
 	return mode
 }
 
+// decodeSuggestedMode reads a stored suggested mode back as the presence or absence it
+// actually recorded. Rows written before the column became nullable spell "no suggestion"
+// as api.BatteryUnknown's "unknown" (an empty column is the same absence again), and on
+// the write path that token is never a decision: batteryModeCandidate only leaves the mode
+// at api.BatteryUnknown when no controllable battery produced a suggestion at all, and
+// clearSuggestions/ResetOptimizerBatteryMode leave it after a failed run or an
+// automatic-mode toggle. Decoding it here is recovering what the row meant, not inventing
+// it - and doing it once, on the read path, keeps the stored bytes untouched and leaves
+// the Go and TypeScript sides with a single rule instead of two.
+//
+// Note the asymmetry with effectiveMode above, which is deliberate: a stored APPLIED
+// "unknown" means "evcc held no override", which on a site with a battery is normal
+// operation, so it folds to normal rather than to absence.
+func decodeSuggestedMode(mode *string) *string {
+	if mode == nil || *mode == "" || *mode == batteryModeUnknown {
+		return nil
+	}
+	return mode
+}
+
 // DecisionDeltas replays every control_slots row in [from,to). set and phys should
 // come from the same request's ComputeChain/buildLedgerSlots call so the replay uses
 // the identical slot data and battery assumptions the chain was priced with; phys may
@@ -98,10 +118,12 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 
 	out := make([]DecisionRow, 0, len(rows))
 	for _, r := range rows {
+		suggested := decodeSuggestedMode(r.SuggestedMode)
+
 		dr := DecisionRow{
 			Ts:            time.Unix(r.Timestamp, 0),
 			AppliedMode:   r.AppliedMode,
-			SuggestedMode: r.SuggestedMode,
+			SuggestedMode: suggested,
 			VetoReason:    r.VetoReason,
 			HealthOk:      r.HealthOk,
 			ModeChanged:   r.ModeChanged,
@@ -110,13 +132,13 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 		// no suggestion recorded means there is no rejected alternative to price -
 		// distinct from a suggestion that happened to match what was applied, which
 		// folds to no delta below.
-		if phys != nil && r.SuggestedMode != nil && effectiveMode(r.AppliedMode) != effectiveMode(*r.SuggestedMode) {
+		if phys != nil && suggested != nil && effectiveMode(r.AppliedMode) != effectiveMode(*suggested) {
 			if s, ok := bySlot[r.Timestamp]; ok && s.BatterySocFrac != nil {
 				socKWh := *s.BatterySocFrac * phys.CapacityKWh
 				load := s.modelledLoadKWh()
 
 				_, appliedFlow, _, _ := simulateSlotStep(r.AppliedMode, load, s.PVKWh, socKWh, *phys)
-				_, rejectedFlow, _, _ := simulateSlotStep(*r.SuggestedMode, load, s.PVKWh, socKWh, *phys)
+				_, rejectedFlow, _, _ := simulateSlotStep(*suggested, load, s.PVKWh, socKWh, *phys)
 
 				appliedCost := appliedFlow.ImportKWh*s.PriceGrid - appliedFlow.ExportKWh*s.PriceFeedIn
 				rejectedCost := rejectedFlow.ImportKWh*s.PriceGrid - rejectedFlow.ExportKWh*s.PriceFeedIn
