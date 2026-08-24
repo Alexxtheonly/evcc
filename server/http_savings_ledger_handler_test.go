@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -46,4 +47,52 @@ func TestSavingsLedgerErrorStatus(t *testing.T) {
 			require.Equal(t, tt.want, savingsLedgerErrorStatus(tt.err))
 		})
 	}
+}
+
+// TestSavingsLedgerErrorBody covers the "earliest" field savingsLedgerErrorBody adds
+// for ErrBeforeTariffStart: the frontend's only way to learn what window would NOT be
+// refused (see savingsLedgerChain.ts's clampWindowToEarliest). Asserts the field is
+// present and RFC3339-correct when Earliest is set, and absent - not merely empty - in
+// the zero-value case ("no priced tariff slots recorded yet"), and that every other
+// error on this endpoint keeps the plain body with no earliest key at all.
+func TestSavingsLedgerErrorBody(t *testing.T) {
+	earliest := time.Date(2026, 8, 21, 12, 30, 0, 0, time.FixedZone("CEST", 2*60*60))
+
+	t.Run("non-zero earliest is included as RFC3339", func(t *testing.T) {
+		body := savingsLedgerErrorBody(&metrics.ErrBeforeTariffStart{Earliest: earliest})
+
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(b, &decoded))
+		require.Equal(t, "no tariff data before 2026-08-21T12:30:00+02:00", decoded["error"])
+		require.Equal(t, earliest.Format(time.RFC3339), decoded["earliest"])
+	})
+
+	t.Run("zero-value earliest omits the field entirely", func(t *testing.T) {
+		body := savingsLedgerErrorBody(&metrics.ErrBeforeTariffStart{})
+
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(b, &decoded))
+		require.Equal(t, "no priced tariff slots recorded yet", decoded["error"])
+		_, present := decoded["earliest"]
+		require.False(t, present, "earliest key must be absent, not just empty, when there is no instant to give")
+	})
+
+	t.Run("an unrelated error keeps the plain body with no earliest key", func(t *testing.T) {
+		body := savingsLedgerErrorBody(errors.New("boom"))
+
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(b, &decoded))
+		require.Equal(t, "boom", decoded["error"])
+		_, present := decoded["earliest"]
+		require.False(t, present)
+	})
 }

@@ -181,6 +181,17 @@ export function alignToSlotStart(d: Date): Date {
   return aligned;
 }
 
+/** Ceiling counterpart to alignToSlotStart: rounds UP to the next 15-minute slot
+ * boundary, or returns the same instant unchanged if it's already exactly on one.
+ * alignToSlotStart (floor) would be dishonest for clampWindowToEarliest below - flooring
+ * the backend's earliest-available instant could land back before the first priced slot
+ * and get refused all over again. */
+export function ceilToSlotStart(d: Date): Date {
+  const floored = alignToSlotStart(d);
+  if (floored.getTime() === d.getTime()) return floored;
+  return new Date(floored.getTime() + SLOT_MINUTES * 60 * 1000);
+}
+
 export interface LedgerWindow {
   from: Date;
   to: Date;
@@ -206,6 +217,32 @@ export function shiftWindow(win: LedgerWindow, dir: 1 | -1, now: Date): LedgerWi
 
 export function isWindowAtPresent(win: LedgerWindow, now: Date): boolean {
   return win.to.getTime() >= alignToSlotStart(now).getTime();
+}
+
+/** Narrows a refused window's `from` forward to the earliest instant the backend says it
+ * actually has tariff data for - the `earliest` field on a 422 ErrBeforeTariffStart body
+ * (server/http_savings_ledger_handler.go's savingsLedgerErrorBody), consumed by
+ * SavingsLedgerCard.vue's fetch() ONLY for the default/present window, never a window the
+ * user explicitly paged to (see that file for why). Ceiling-aligned via ceilToSlotStart so
+ * the retried request can't land on an unpriced instant and get refused again.
+ *
+ * Returns null - caller must fall back to the plain refusal, never fabricate a window -
+ * whenever clamping wouldn't honestly help: earliestRaw doesn't parse; the ceiling-aligned
+ * earliest isn't strictly before win.to (nothing left in the window to show); or it isn't
+ * strictly after win.from (clamping wouldn't narrow anything - the original refusal
+ * already told the whole story). */
+export function clampWindowToEarliest(
+  win: LedgerWindow,
+  earliestRaw: string
+): LedgerWindow | null {
+  const parsed = new Date(earliestRaw);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  const earliest = ceilToSlotStart(parsed);
+  if (earliest.getTime() <= win.from.getTime()) return null;
+  if (earliest.getTime() >= win.to.getTime()) return null;
+
+  return { from: earliest, to: win.to };
 }
 
 /** True when the Control contribution (W2->W3, the real controller vs. the W2 dumb
