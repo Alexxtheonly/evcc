@@ -109,7 +109,24 @@
 					/>
 				</Card>
 
-				<SavingsLedgerCard :currency="currency" />
+				<SavingsLedgerCard
+					:currency="currency"
+					@update:decisions="ledgerDecisions = $event"
+				/>
+
+				<!-- own card, fed by SavingsLedgerCard's single /api/savingsledger request
+				     (emitted upward, never re-fetched) so the ledger card above stays one
+				     diagram and nothing is lost. Null while that request is loading, has
+				     been refused, or failed - which is exactly when there is nothing to
+				     show here either. -->
+				<Card
+					v-if="ledgerDecisions"
+					:title="$t('forecast.savingsLedger.decisions.title')"
+					edge-to-edge
+					class="box-pull-out mb-4"
+				>
+					<SavingsLedgerDecisions :decisions="ledgerDecisions" :currency="currency" />
+				</Card>
 
 				<Card
 					v-for="t in valueForecastTypes"
@@ -148,6 +165,7 @@ import SolarDetails from "../components/Forecast/SolarDetails.vue";
 import PriceChart from "../components/Forecast/PriceChart.vue";
 import GridDetails from "../components/Forecast/GridDetails.vue";
 import SavingsLedgerCard from "../components/Forecast/SavingsLedgerCard.vue";
+import SavingsLedgerDecisions from "../components/Forecast/SavingsLedgerDecisions.vue";
 import ValueChart, { type ValueChartType } from "../components/Forecast/ValueChart.vue";
 import ValueDetails from "../components/Forecast/ValueDetails.vue";
 import formatter from "@/mixins/formatter";
@@ -157,6 +175,7 @@ import store from "../store";
 import { adjustedSolar, ForecastType, isStaticTariff } from "@/utils/forecast";
 import vehicleList from "@/utils/vehicleList";
 import { deviceColorMap } from "@/colors";
+import type { LedgerDecisionRow } from "../components/Forecast/savingsLedger.types";
 
 const MIN_HOURS = 76;
 const MAX_HOURS = 96;
@@ -172,12 +191,19 @@ export default defineComponent({
 		PriceChart,
 		GridDetails,
 		SavingsLedgerCard,
+		SavingsLedgerDecisions,
 		ValueChart,
 		ValueDetails,
 	},
 	mixins: [formatter],
 	data() {
-		return { ForecastType, scrollLeft: 0, isScrolling: false };
+		return {
+			ForecastType,
+			scrollLeft: 0,
+			isScrolling: false,
+			// per-slot decision rows handed up by SavingsLedgerCard
+			ledgerDecisions: null as LedgerDecisionRow[] | null,
+		};
 	},
 	head() {
 		return { title: this.$t("forecast.modalTitle") };

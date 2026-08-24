@@ -1,7 +1,8 @@
 <template>
 	<div class="savings-ledger-decisions" data-testid="savings-ledger-decisions">
+		<!-- no heading of its own: this strip is mounted as its own Card in
+		     views/Forecast.vue, whose header renders decisions.title. -->
 		<div class="section-head">
-			<h4 class="section-title">{{ $t("forecast.savingsLedger.decisions.title") }}</h4>
 			<button
 				v-if="slots.length"
 				type="button"
@@ -289,15 +290,9 @@ export default defineComponent({
 <style scoped>
 .section-head {
 	display: flex;
-	justify-content: space-between;
+	justify-content: flex-end;
 	align-items: baseline;
 	gap: 0.5rem;
-	margin-top: 1.25rem;
-}
-.section-title {
-	font-size: 0.9375rem;
-	font-weight: 700;
-	margin: 0;
 }
 
 .timeline-strip {

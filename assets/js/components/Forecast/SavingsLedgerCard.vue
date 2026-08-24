@@ -7,6 +7,22 @@
 		     the header row. A plain heading in the body wraps normally instead. -->
 		<h3 class="ledger-title" data-testid="savings-ledger-title">
 			{{ $t("forecast.savingsLedger.title") }}
+			<!-- the diagram's caveats (what each step means, what is estimated and on what
+			     basis, every note the API sent) are one tap away rather than a wall of
+			     text under the chart. A modal, not a bootstrap tooltip: the content does
+			     not fit a hover tooltip on a phone. -->
+			<span
+				class="value-icon info-icon"
+				role="button"
+				tabindex="0"
+				:aria-label="$t('forecast.savingsLedger.info.title')"
+				data-testid="savings-ledger-info-icon"
+				@click="openInfo"
+				@keydown.enter.prevent="openInfo"
+				@keydown.space.prevent="openInfo"
+			>
+				<shopicon-regular-info size="s"></shopicon-regular-info>
+			</span>
 		</h3>
 		<div class="toolbar" data-testid="savings-ledger-toolbar">
 			<div class="d-flex align-items-center gap-1" data-testid="savings-ledger-period-nav">
@@ -59,46 +75,7 @@
 		</div>
 
 		<div v-else-if="ledger" data-testid="savings-ledger-content">
-			<p class="coverage" data-testid="savings-ledger-coverage">
-				{{
-					$t("forecast.savingsLedger.coverage", {
-						pct: fmtPercentage(ledger.realised.coverage.fraction * 100, 1),
-						valid: ledger.realised.coverage.validSlots,
-						total: ledger.realised.coverage.totalSlots,
-					})
-				}}
-				<template v-if="chainCoverageDivergence">
-					{{
-						$t("forecast.savingsLedger.coverageChainDiverges", {
-							pct: fmtPercentage(chainCoverageDivergence.chainFraction * 100, 1),
-						})
-					}}
-				</template>
-			</p>
-
-			<div class="hero">
-				<div class="hero-label">
-					{{ $t("forecast.savingsLedger.heroLabel", { headline: headlineLabel }) }}
-				</div>
-				<div class="hero-value" data-testid="savings-ledger-hero-value">
-					{{ fmtMoney(heroEur, currency, true, true) }}
-				</div>
-				<div class="hero-sub text-muted" data-testid="savings-ledger-hero-sub">
-					{{ ledger.realised.note }}
-					{{
-						$t("forecast.savingsLedger.headlineFootnote", {
-							other: fmtMoney(otherHeroEur, currency, true, true),
-							otherLabel: otherHeadlineLabel,
-						})
-					}}
-				</div>
-			</div>
-
-			<div v-if="isLoss" class="loss-banner" data-testid="savings-ledger-loss-banner">
-				{{ $t("forecast.savingsLedger.lossBanner") }}
-			</div>
-
-			<SavingsLedgerChain
+			<SavingsLedgerWaterfall
 				v-if="ledger.chain"
 				:chain="ledger.chain"
 				:headline="headline"
@@ -116,25 +93,41 @@
 				}}
 			</p>
 
-			<div v-if="notes.length" class="notes" data-testid="savings-ledger-notes">
-				<p class="notes-title">{{ $t("forecast.savingsLedger.notesTitle") }}</p>
-				<ul class="notes-list">
-					<li
-						v-for="(note, i) in notes"
-						:key="i"
-						:data-testid="`savings-ledger-note-${i}`"
-					>
-						{{ note }}
-					</li>
-				</ul>
+			<div class="row gx-2 mt-1" data-testid="savings-ledger-details">
+				<div
+					v-for="detail in details"
+					:key="detail.key"
+					:class="[detail.colClass, `text-${detail.align}`]"
+				>
+					<small>
+						<span class="text-gray">{{ detail.label }}</span>
+						<br />
+						<span
+							class="fw-bold"
+							:class="detail.valueClass"
+							:data-testid="`savings-ledger-detail-${detail.key}`"
+							>{{ detail.value }}</span
+						>
+					</small>
+				</div>
 			</div>
 
-			<SavingsLedgerDecisions :decisions="ledger.decisions" :currency="currency" />
+			<!-- ADR-011 rule 3 (coverage visible without interaction) and rule 7 (the
+			     estimate marker is on the figures, not hidden behind a click) in one line. -->
+			<p class="caption text-gray" data-testid="savings-ledger-caption">{{ caption }}</p>
 		</div>
+
+		<SavingsLedgerInfoModal
+			ref="infoModal"
+			:chain="ledger?.chain"
+			:notes="notes"
+			:chain-coverage-pct="chainCoveragePct"
+		/>
 	</Card>
 </template>
 
 <script lang="ts">
+import "@h2d2/shopicons/es/regular/info";
 import { defineComponent, type PropType } from "vue";
 import formatter from "@/mixins/formatter";
 import api from "@/api";
@@ -142,20 +135,20 @@ import type { CURRENCY } from "@/types/evcc";
 import Card from "../Helper/Card.vue";
 import SelectGroup from "../Helper/SelectGroup.vue";
 import DateNavigatorButton from "../Sessions/DateNavigatorButton.vue";
-import SavingsLedgerChain from "./SavingsLedgerChain.vue";
-import SavingsLedgerDecisions from "./SavingsLedgerDecisions.vue";
+import SavingsLedgerWaterfall from "./SavingsLedgerWaterfall.vue";
+import SavingsLedgerInfoModal from "./SavingsLedgerInfoModal.vue";
 import type { SavingsLedger, SavingsLedgerErrorBody } from "./savingsLedger.types";
 import {
 	defaultWindow,
 	shiftWindow,
 	isWindowAtPresent,
 	pickSettled,
-	isControlOverspend,
 	coverageDivergence,
 	clampWindowToEarliest,
 	type LedgerWindow,
 	type SettlementHeadline,
 } from "./savingsLedgerChain";
+import { waterfallLayout, type WaterfallLayout } from "./savingsLedgerWaterfall";
 
 // ?from=&to= (RFC3339) seeds/reseeds the period, deliberately NOT aligned or clamped
 // the way paging (page()/jumpToPresent()) always is - this is the sanctioned way to
@@ -180,19 +173,32 @@ function windowFromQuery(query: Record<string, unknown> | undefined): LedgerWind
 	return { from, to };
 }
 
+interface LedgerDetail {
+	key: string;
+	label: string;
+	value: string;
+	align: "start" | "center" | "end";
+	colClass: string;
+	valueClass: string;
+}
+
 export default defineComponent({
 	name: "SavingsLedgerCard",
 	components: {
 		Card,
 		SelectGroup,
 		DateNavigatorButton,
-		SavingsLedgerChain,
-		SavingsLedgerDecisions,
+		SavingsLedgerWaterfall,
+		SavingsLedgerInfoModal,
 	},
 	mixins: [formatter],
 	props: {
 		currency: { type: String as PropType<CURRENCY> },
 	},
+	// the per-slot decisions strip is its own card in Forecast.vue, but its data comes
+	// from this card's single GET /api/savingsledger response - emitted upward rather
+	// than fetched a second time, so a period change is still exactly one request.
+	emits: ["update:decisions"],
 	data() {
 		return {
 			// seeded from ?from=/?to= (see windowFromQuery above) when present so the
@@ -223,15 +229,6 @@ export default defineComponent({
 				{ value: "perSlot", name: this.$t("forecast.savingsLedger.headline.perSlot") },
 			];
 		},
-		headlineLabel(): string {
-			return this.$t(`forecast.savingsLedger.headline.${this.headline}`) as string;
-		},
-		otherHeadline(): SettlementHeadline {
-			return this.headline === "perSlot" ? "periodAverage" : "perSlot";
-		},
-		otherHeadlineLabel(): string {
-			return this.$t(`forecast.savingsLedger.headline.${this.otherHeadline}`) as string;
-		},
 		isAtPresent(): boolean {
 			return isWindowAtPresent(this.win, new Date());
 		},
@@ -243,20 +240,89 @@ export default defineComponent({
 			const to = new Date(this.win.to.getTime() - 1);
 			return `${fmt.format(this.win.from)} – ${fmt.format(to)}`;
 		},
-		heroEur(): number {
-			return this.ledger ? pickSettled(this.ledger.realised.settled, this.headline) : 0;
+		waterfall(): WaterfallLayout | null {
+			return this.ledger?.chain ? waterfallLayout(this.ledger.chain, this.headline) : null;
 		},
-		otherHeroEur(): number {
-			return this.ledger ? pickSettled(this.ledger.realised.settled, this.otherHeadline) : 0;
-		},
-		isLoss(): boolean {
-			return this.ledger?.chain
-				? isControlOverspend(this.ledger.chain, this.headline)
-				: false;
+		// The strip under the diagram, house pattern (SolarDetails/ValueDetails): label,
+		// break, bold coloured value. Without a chain there is no baseline to compare
+		// against, so only the one measured figure is shown - never a fabricated pair.
+		details(): LedgerDetail[] {
+			if (!this.ledger) return [];
+			const wf = this.waterfall;
+			const paid = wf ? wf.paid : pickSettled(this.ledger.realised.settled, this.headline);
+			const money = (v: number) => this.fmtMoney(v, this.currency, true, true);
+			const colClass = wf ? "col-4" : "col-12";
+
+			const items: LedgerDetail[] = [];
+			if (wf) {
+				items.push({
+					key: "baseline",
+					label: this.$t("forecast.savingsLedger.details.wouldHaveCost") as string,
+					value: money(wf.w0),
+					align: "start",
+					colClass,
+					valueClass: "text-primary",
+				});
+			}
+			items.push({
+				key: "paid",
+				label: this.$t("forecast.savingsLedger.details.youPaid") as string,
+				value: money(paid),
+				align: wf ? "center" : "start",
+				colClass,
+				valueClass: "text-primary",
+			});
+			if (wf) {
+				// ADR-011 rule 1: a period that came out worse than the baseline says so.
+				// The sign is carried by the label ("cost you") and the danger colour, and
+				// the magnitude is never clamped at zero.
+				const loss = wf.saved < 0;
+				const pct =
+					wf.savedFraction != null
+						? ` (${this.fmtPercentage(Math.abs(wf.savedFraction) * 100, 0)})`
+						: "";
+				items.push({
+					key: "saved",
+					label: this.$t(
+						`forecast.savingsLedger.details.${loss ? "cost" : "saved"}`
+					) as string,
+					value: `${money(Math.abs(wf.saved))}${pct}`,
+					align: "end",
+					colClass,
+					valueClass: loss ? "text-danger" : "text-primary",
+				});
+			}
+			return items;
 		},
 		chainCoverageDivergence() {
 			if (!this.ledger?.chain) return null;
 			return coverageDivergence(this.ledger.realised.coverage, this.ledger.chain.coverage);
+		},
+		chainCoveragePct(): string {
+			const divergence = this.chainCoverageDivergence;
+			return divergence ? this.fmtPercentage(divergence.chainFraction * 100, 1) : "";
+		},
+		caption(): string {
+			if (!this.ledger) return "";
+			const parts: string[] = [];
+			if (this.ledger.chain?.batteryPhysics) {
+				parts.push(this.$t("forecast.savingsLedger.estimatedCaption") as string);
+			}
+			parts.push(
+				this.$t("forecast.savingsLedger.coverageShort", {
+					pct: this.fmtPercentage(this.ledger.realised.coverage.fraction * 100, 1),
+					valid: this.ledger.realised.coverage.validSlots,
+					total: this.ledger.realised.coverage.totalSlots,
+				}) as string
+			);
+			if (this.chainCoveragePct) {
+				parts.push(
+					this.$t("forecast.savingsLedger.coverageChainDivergesShort", {
+						pct: this.chainCoveragePct,
+					}) as string
+				);
+			}
+			return parts.join(" · ");
 		},
 		// ADR-011 rule 7: every caveat the API sends must be rendered, never dropped -
 		// realised.note is always present, chain.notes only when the chain computed.
@@ -275,6 +341,13 @@ export default defineComponent({
 				this.fetch();
 			},
 			deep: true,
+		},
+		// hand the decisions rows to Forecast.vue, which mounts them as their own card.
+		// Watching `ledger` rather than emitting from fetch() keeps the fetch/refusal
+		// layer below untouched: a refusal or an error nulls `ledger`, which emits null
+		// and takes the decisions card down with it.
+		ledger(value: SavingsLedger | null) {
+			this.$emit("update:decisions", value ? value.decisions : null);
 		},
 		// D2: a hash-fragment-only URL change (e.g. following a shared link, or
 		// browser back/forward over one) is a same-document navigation - the component
@@ -309,6 +382,11 @@ export default defineComponent({
 		this.fetch();
 	},
 	methods: {
+		openInfo() {
+			(
+				this.$refs["infoModal"] as InstanceType<typeof SavingsLedgerInfoModal> | undefined
+			)?.open();
+		},
 		setHeadline(value: string | number | boolean | null) {
 			this.headline = value === "perSlot" ? "perSlot" : "periodAverage";
 		},
@@ -380,6 +458,12 @@ export default defineComponent({
 	margin: 0;
 	color: var(--evcc-default-text);
 }
+.info-icon {
+	cursor: help;
+	display: inline-flex;
+	vertical-align: -0.3rem;
+	color: var(--evcc-gray);
+}
 .toolbar {
 	display: flex;
 	align-items: center;
@@ -392,70 +476,13 @@ export default defineComponent({
 	color: inherit;
 	max-width: 10em;
 }
-.coverage {
+.caption {
 	font-size: 0.75rem;
-	color: var(--evcc-gray);
-	margin: 0.25rem 0 0;
-}
-.hero {
-	margin: 1rem 0 0.25rem;
-}
-.hero-label {
-	font-size: 0.75rem;
-	color: var(--evcc-gray);
-	margin-bottom: 2px;
-}
-.hero-value {
-	font-size: 2.75rem;
-	font-weight: 700;
-	line-height: 1;
-	letter-spacing: -0.025em;
-}
-.hero-sub {
-	font-size: 0.8125rem;
-	margin-top: 0.5rem;
-	max-width: 52ch;
-}
-.loss-banner {
-	display: flex;
-	gap: 0.5rem;
-	align-items: flex-start;
-	margin-top: 0.75rem;
-	background: color-mix(in srgb, var(--evcc-red) 12%, transparent);
-	border: 1px solid color-mix(in srgb, var(--evcc-red) 35%, transparent);
-	border-radius: 12px;
-	padding: 0.625rem 0.75rem;
-	font-size: 0.78125rem;
-	line-height: 1.5;
+	margin: 0.5rem 0 0;
 }
 .chain-unavailable {
 	margin-top: 1rem;
 	font-size: 0.8125rem;
-}
-.notes {
-	margin-top: 1rem;
-	padding: 0.6875rem 0.8125rem;
-	border-radius: 12px;
-	background: var(--evcc-box);
-	border: 1px solid var(--evcc-box-border);
-}
-.notes-title {
-	font-size: 0.6875rem;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-	font-weight: 700;
-	color: var(--evcc-gray);
-	margin: 0 0 0.375rem;
-}
-.notes-list {
-	margin: 0;
-	padding-left: 1.1rem;
-	font-size: 0.75rem;
-	color: var(--evcc-gray);
-	line-height: 1.5;
-}
-.notes-list li + li {
-	margin-top: 0.25rem;
 }
 .refuse-title {
 	font-weight: 700;
