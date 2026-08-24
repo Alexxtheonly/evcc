@@ -51,9 +51,20 @@ const (
 
 	// batteryPowerMinSamples is the minimum number of qualifying (non-zero, non-recovered,
 	// non-incomplete) 15min slots required before batteryPowerLimits trusts the observed
-	// maximum over the batteryPower fallback. A newly added battery, or one that has barely
+	// history over the batteryPower fallback. A newly added battery, or one that has barely
 	// charged or discharged yet, stays on the fallback until it has a real track record.
 	batteryPowerMinSamples = 20
+
+	// batteryPowerPercentile is the rank batteryPowerLimits takes from the observed slot
+	// powers instead of the plain maximum. Nothing between the meters table and here bounds
+	// a sample's magnitude - BatteryPowerSamples filters recovered and incomplete rows, not
+	// implausible ones - so a single corrupt row (a counter rollover, a briefly
+	// double-reporting meter, a downtime backfill the recovered flag missed) would otherwise
+	// set CMax/DMax for the whole batteryPowerLookback window, at whatever magnitude the
+	// corruption happened to have. A battery that really can sustain a given power reaches it
+	// in many slots, so the percentile tracks the true maximum closely; one implausible slot
+	// in isolation no longer speaks for the hardware.
+	batteryPowerPercentile = 0.95
 )
 
 // optimizerChargingStrategies are the valid grid charging strategies; the first
@@ -1879,12 +1890,18 @@ func clearDemandWhenFull(demand []float32, headroom float32) []float32 {
 // limit below the fallback from this data is worse than not deriving one at all - a
 // too-low limit makes the optimizer schedule fewer, shorter hard charges/discharges, which
 // then keeps producing exactly the low-power samples that justify the low limit next time
-// (self-reinforcing). So history here can only ever raise the fallback, never lower it: take
-// the maximum observed sustained slot power per direction, once there is enough of it
-// (batteryPowerMinSamples), and use batteryPower as a floor under that, not a starting point
-// to average around. A battery that has demonstrably sustained more than the default gets
-// credit for it; one that has only ever trickled keeps the default instead of being pinned
-// below it.
+// (self-reinforcing). So history here can only ever raise the fallback, never lower it: take a
+// high percentile (batteryPowerPercentile) of the observed sustained slot power per direction,
+// once there is enough of it (batteryPowerMinSamples), and use batteryPower as a floor under
+// that, not a starting point to average around. A battery that has demonstrably sustained more
+// than the default gets credit for it; one that has only ever trickled keeps the default
+// instead of being pinned below it.
+//
+// The percentile rather than the maximum is what keeps a single implausible sample from
+// setting the limit for a month - see batteryPowerPercentile. There is deliberately no
+// absolute ceiling here: evcc has no notion of a battery's C-rate, so any such bound would be
+// an invented constant, and a battery that does know its own limits reports them through
+// api.BatteryPowerLimiter, which overrides this derivation entirely (see batteryRequest).
 func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit float64) {
 	chargeLimit, dischargeLimit = batteryPower, batteryPower
 
@@ -1900,11 +1917,11 @@ func (site *Site) batteryPowerLimits(name string) (chargeLimit, dischargeLimit f
 	}
 
 	// kWh observed in one 15min slot -> average W sustained over that slot
-	if len(charge) >= batteryPowerMinSamples {
-		chargeLimit = max(chargeLimit, slices.Max(charge)*1e3*slotsPerHour)
+	if v, ok := percentileOf(charge, batteryPowerPercentile, batteryPowerMinSamples); ok {
+		chargeLimit = max(chargeLimit, v*1e3*slotsPerHour)
 	}
-	if len(discharge) >= batteryPowerMinSamples {
-		dischargeLimit = max(dischargeLimit, slices.Max(discharge)*1e3*slotsPerHour)
+	if v, ok := percentileOf(discharge, batteryPowerPercentile, batteryPowerMinSamples); ok {
+		dischargeLimit = max(dischargeLimit, v*1e3*slotsPerHour)
 	}
 
 	return chargeLimit, dischargeLimit

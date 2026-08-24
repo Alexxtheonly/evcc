@@ -462,12 +462,15 @@ func TestBatteryPowerLimits(t *testing.T) {
 
 		// exactly batteryPowerMinSamples (20) slots per direction: mostly modest slot averages
 		// (as a real battery running well under its cap for most 15min windows would produce)
-		// plus one slot that came closest to running at full power for the whole window - the
-		// demonstrated maximum, not an average of the whole history, becomes the limit
-		dischargePowers := append([]float64{}, repeat(19, 4000.0)...)
-		dischargePowers = append(dischargePowers, 12000) // demonstrated sustained capability
-		chargePowers := append([]float64{}, repeat(19, -5000.0)...)
-		chargePowers = append(chargePowers, -15000)
+		// plus a handful of slots that ran at full power for most of the window - repeatedly
+		// demonstrated capability, not an average of the whole history, becomes the limit.
+		// batteryPowerPercentile of 20 samples is the second-highest, so the high group has to
+		// be more than one slot for the battery to get credit for it - which is the point:
+		// one slot on its own is indistinguishable from a bad meter reading.
+		dischargePowers := append([]float64{}, repeat(16, 4000.0)...)
+		dischargePowers = append(dischargePowers, repeat(4, 12000.0)...) // demonstrated sustained capability
+		chargePowers := append([]float64{}, repeat(16, -5000.0)...)
+		chargePowers = append(chargePowers, repeat(4, -15000.0)...)
 
 		persistBatteryQuarterHours(t, c, clk, dischargePowers)
 		persistBatteryQuarterHours(t, c, clk, chargePowers)
@@ -477,6 +480,36 @@ func TestBatteryPowerLimits(t *testing.T) {
 
 		assert.Equal(t, 12000.0, discharge, "discharge limit must reflect the demonstrated maximum, not an average")
 		assert.Equal(t, 15000.0, charge, "charge limit must reflect the demonstrated maximum, not an average")
+	})
+
+	// a single corrupt meters row must not set CMax/DMax for the whole lookback window.
+	// Nothing between the meters table and batteryPowerLimits bounds a sample's magnitude,
+	// so this is the failure mode batteryPowerPercentile exists for: taking slices.Max here
+	// would hand the solver 120kW/150kW for a battery that has never exceeded 8kW/9kW.
+	t.Run("one implausible sample: percentile ignores it, plain max would not", func(t *testing.T) {
+		clk := clock.NewMock()
+		clk.Set(time.Now().Truncate(tariff.SlotDuration))
+
+		c, err := metrics.NewCollector(metrics.Battery, "glitched", "", metrics.WithClock(clk))
+		require.NoError(t, err)
+		require.NoError(t, c.AddEnergy(nil, nil, 0, false)) // baseline, no persist yet
+
+		// 19 consistent slots per direction plus one rollover-sized reading
+		dischargePowers := append([]float64{}, repeat(19, 8000.0)...)
+		dischargePowers = append(dischargePowers, 120000) // counter rollover / double-reporting meter
+		chargePowers := append([]float64{}, repeat(19, -9000.0)...)
+		chargePowers = append(chargePowers, -150000)
+
+		persistBatteryQuarterHours(t, c, clk, dischargePowers)
+		persistBatteryQuarterHours(t, c, clk, chargePowers)
+
+		site.collectors["glitched"] = c
+		charge, discharge := site.batteryPowerLimits("glitched")
+
+		// 20 samples, batteryPowerPercentile 0.95 -> index int(0.95*19) = 18 of the sorted
+		// series, i.e. the second-highest: the 8kW/9kW the battery actually demonstrated
+		assert.Equal(t, 8000.0, discharge, "one implausible slot must not become the discharge limit")
+		assert.Equal(t, 9000.0, charge, "one implausible slot must not become the charge limit")
 	})
 
 	t.Run("enough history but all below the fallback: keeps the default as a floor", func(t *testing.T) {
