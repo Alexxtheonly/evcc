@@ -63,7 +63,7 @@ func TestPersistOptimizerRun(t *testing.T) {
 // that policy (sample one Optimal/Feasible row per slot, but always record
 // every other status at its own timestamp) lives in the caller
 // (core.Site.persistOptimizerRun, see TestPersistOptimizerRunNonOptimalAlwaysRecorded
-// in core/site_optimizer_test.go for F2's behavioral coverage). Here, several
+// in core/site_optimizer_test.go for the behavioural coverage). Here, several
 // runs at distinct real timestamps within the same nominal slot must all
 // land their own row.
 func TestPersistOptimizerRunDistinctTimestamps(t *testing.T) {
@@ -96,7 +96,7 @@ func TestPersistOptimizerRunDistinctTimestamps(t *testing.T) {
 // DoNothing would get wrong for the non-sampled (always-record) path: two
 // runs landing in the same wall-clock second (this table's ts granularity is
 // whole unix seconds) must not have the second one silently vanish - that
-// would undermine F2's "every non-Optimal run is recorded" guarantee for
+// would undermine the "every non-Optimal run is recorded" guarantee for
 // exactly the runs it exists to catch. UpdateAll means the latest status for
 // that second wins instead of being dropped.
 func TestPersistOptimizerRunNonSampledCollisionUpdates(t *testing.T) {
@@ -117,8 +117,8 @@ func TestPersistOptimizerRunNonSampledCollisionUpdates(t *testing.T) {
 	assert.Equal(t, "Error", status, "the later run wins rather than being silently dropped")
 }
 
-// TestDeleteOptimizerRuns covers F9: a manual-delete endpoint for
-// optimizer_runs, matching the existing energy/tariffs ones.
+// TestDeleteOptimizerRuns: the manual-delete endpoint for optimizer_runs, matching
+// the existing energy/tariffs ones.
 func TestDeleteOptimizerRuns(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, db.Instance.AutoMigrate(new(optimizerRun)))

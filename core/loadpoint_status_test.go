@@ -38,14 +38,14 @@ func TestStatusEvents(t *testing.T) {
 	}
 }
 
-// TestConnectAtBootDoesNotFabricateConnectedTime covers F7: statusEvents
+// TestConnectAtBootDoesNotFabricateConnectedTime: statusEvents
 // fires evVehicleConnect on the first poll after startup with a car already
 // plugged in (prevStatus == api.StatusNone), same as a real connect - only
 // the notification is suppressed for that case (see updateChargerStatus),
 // not the event itself. evVehicleConnectHandler must not stamp
 // session.Connected with evcc's start time in that case: the real plug-in
-// time isn't known, and per ADR-011 honesty rule 4 it must be left unset
-// rather than fabricated as indistinguishable from a genuine connect.
+// time isn't known, so it must be left unset rather than fabricated as
+// indistinguishable from a genuine connect.
 func TestConnectAtBootDoesNotFabricateConnectedTime(t *testing.T) {
 	var err error
 	serverdb.Instance, err = serverdb.New("sqlite", ":memory:")

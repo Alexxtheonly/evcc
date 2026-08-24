@@ -17,7 +17,7 @@ func mustCreateEntity(t *testing.T, group, name string) entity {
 	return e
 }
 
-// TestRefusedBeforeTariffStart covers ADR-011 honesty rule 4: no figure for any
+// TestRefusedBeforeTariffStart: no figure for any
 // period before the tariffs table starts - the caller gets the earliest computable
 // date back, not a silently back-filled number.
 func TestRefusedBeforeTariffStart(t *testing.T) {
@@ -46,7 +46,7 @@ func TestRefusedBeforeTariffStart(t *testing.T) {
 	require.True(t, refused.Earliest.Equal(tariffStart), "expected earliest computable date %v, got %v", tariffStart, refused.Earliest)
 }
 
-// TestCoverageExcludesRecoveredIncompleteSlots covers ADR-011 honesty rule 3: an
+// TestCoverageExcludesRecoveredIncompleteSlots: an
 // incomplete grid reading and a slot with no meter row at all are both dropped from
 // the computation and reported in Coverage, never scaled up to compensate.
 func TestCoverageExcludesRecoveredIncompleteSlots(t *testing.T) {
@@ -87,7 +87,7 @@ func TestCoverageExcludesRecoveredIncompleteSlots(t *testing.T) {
 	require.InDelta(t, 3*0.25, res.Settled.PerSlot, 1e-9)
 }
 
-// TestBuildLedgerSlotsRefusesOversizedRange covers the Priority-3 fix: the ledger
+// TestBuildLedgerSlotsRefusesOversizedRange: the ledger
 // endpoint is unauthenticated (server/http_savings_ledger_handler.go) and
 // ComputeLedger runs upwards of a dozen queries against a database with a single
 // connection (server/db/db.go's SetMaxOpenConns(1)) - an unbounded ?from=2000-01-01
@@ -136,12 +136,10 @@ func TestBuildLedgerSlotsRefusesUnalignedRange(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestBuildLedgerSlotsRefusesInvertedRange covers D1: a reversed or identical
-// [from,to) used to fall through to a plain errors.New("invalid period: to must be
-// after from"), which savingsLedgerErrorStatus doesn't recognise, so the HTTP handler
-// reported 500 for what is a malformed request, not a server fault - the same failure
-// mode ErrLoadpointNoChargeMeter had before it got its own case (see that error's doc
-// comment). ErrLedgerRangeInverted gives the handler something to match on.
+// TestBuildLedgerSlotsRefusesInvertedRange: a reversed or identical [from,to) must
+// fail with the ErrLedgerRangeInverted sentinel, not a plain errors.New that
+// savingsLedgerErrorStatus cannot recognise - the handler would then report 500 for
+// what is a malformed request, not a server fault.
 func TestBuildLedgerSlotsRefusesInvertedRange(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -158,13 +156,12 @@ func TestBuildLedgerSlotsRefusesInvertedRange(t *testing.T) {
 	require.ErrorIs(t, err, ErrLedgerRangeInverted)
 }
 
-// TestComputeRealisedCostIgnoresBatterySocFailures covers the Priority-4 finding: one
-// shared filter previously served every ledger computation, so a slot with a missing
-// or invalid battery SoC reading was dropped from EVERY computation - including
-// ComputeRealisedCost, whose own doc comment says it reads only the grid meter and
-// tariffs and is deliberately independent of the battery. A week of BYD SoC read
-// failures must not delete a week from "the one measured number everything hangs
-// off".
+// TestComputeRealisedCostIgnoresBatterySocFailures: one shared filter across every
+// ledger computation drops a slot with a missing or invalid battery SoC reading from
+// EVERY computation - including ComputeRealisedCost, which reads only the grid meter
+// and tariffs and is deliberately independent of the battery. A run of failed SoC
+// reads must not delete the same period from "the one measured number everything
+// hangs off".
 func TestComputeRealisedCostIgnoresBatterySocFailures(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -199,8 +196,8 @@ func TestComputeRealisedCostIgnoresBatterySocFailures(t *testing.T) {
 // (PV generation, grid import, battery discharge) must balance its measured sinks
 // (household residual, loadpoint charging, grid export, battery charge) to within
 // meter rounding. This is the invariant a future change to which meters feed which
-// slotData field (the exact class of mistake ADR-011's Priority-1 rework fixed for
-// loadpoints) would violate.
+// slotData field would violate - the same class of mistake that once left loadpoint
+// energy out of the counterfactual worlds.
 func TestBuildLedgerSlotsEnergyBalance(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -275,7 +272,7 @@ func seedFeedInWitnesses(t *testing.T, after time.Time, price float64, n int) {
 	}
 }
 
-// TestFeedInFallbackGuard is the safety net on P1. Substituting the site's currently
+// TestFeedInFallbackGuard is the safety net on the static fallback. Substituting the site's currently
 // configured static feed-in price for a slot that has none on record is only honest
 // while that configured price is also what the site actually recorded - the configs
 // table keeps no history, so nothing else can tell us the rate hasn't changed since.
@@ -390,11 +387,12 @@ func TestFeedInFallbackCorroboratesWholeHistory(t *testing.T) {
 	require.Zero(t, set.FeedInFallbackSlots)
 }
 
-// TestBuildLedgerSlotsStaticFeedInFallback is P1 end to end: a slot with a grid price,
-// a grid and a home reading, but no recorded feed-in price used to be dropped outright.
-// On this site that was 86 of 238 slots in the current period - and the dropped half
-// was the PV-rich daytime half, so the headline figures were computed on a biased
-// sample. It is now included when (and only when) feedInFallback's guard holds.
+// TestBuildLedgerSlotsStaticFeedInFallback exercises the static fallback end to end: a
+// slot with a grid price and grid/home readings but no recorded feed-in price would
+// otherwise be dropped outright. That can be a third of a period, and the dropped slots
+// cluster in the PV-rich daytime half, so the headline figures end up computed on a
+// biased sample. Such a slot is included when (and only when) feedInFallback's guard
+// holds.
 func TestBuildLedgerSlotsStaticFeedInFallback(t *testing.T) {
 	seed := func(t *testing.T) time.Time {
 		t.Helper()
@@ -451,10 +449,10 @@ func TestBuildLedgerSlotsStaticFeedInFallback(t *testing.T) {
 	})
 }
 
-// TestEarliestTariffSlotIgnoresFeedIn is P2: the endpoint's lower bound only needs a
-// grid price. Requiring a feed-in price too made every window before the first
-// recorded feed-in value a hard refusal - 352 slots / 3.7 days on this site, 331 of
-// them with a grid meter reading, none of them queryable at all.
+// TestEarliestTariffSlotIgnoresFeedIn: the endpoint's lower bound only needs a grid
+// price. Requiring a feed-in price too turns every window before the first recorded
+// feed-in value into a hard refusal - days' worth of slots that have a grid price and
+// a grid meter reading, none of them queryable at all.
 func TestEarliestTariffSlotIgnoresFeedIn(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -474,10 +472,9 @@ func TestEarliestTariffSlotIgnoresFeedIn(t *testing.T) {
 
 // TestFeedInFallbackCountExcludesDroppedSlots: FeedInFallbackSlots is what the payload
 // note quotes, so it has to count slots the substitution actually put into the result.
-// Counting at the point of substitution instead over-reported badly on real data - a
-// 590-slot window claimed 416 substituted slots while only 217 slots were included at
-// all, because the pre-battery half took the fallback price and was then dropped for
-// having no battery SoC.
+// Counting at the point of substitution instead over-reports badly: it can claim more
+// substituted slots than the result has slots at all, because a slot that took the
+// fallback price and was then dropped for a missing battery SoC still gets counted.
 func TestFeedInFallbackCountExcludesDroppedSlots(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -516,11 +513,10 @@ func TestFeedInFallbackCountExcludesDroppedSlots(t *testing.T) {
 	require.Equal(t, 1, set.FeedInFallbackSlots, "a slot dropped for an unrelated missing reading is not a slot the substitution produced")
 }
 
-// TestMeterResidualCarriesAEuroBand is the N2 fix at its source: the residual was
-// published in kWh beside euro contributions and called "the noise floor under every euro
-// figure", but nothing ever put the two on the same axis - so the UI compared
-// contributions against a hardcoded half-cent instead, a hundred times below the measured
-// uncertainty, and rendered a -EUR 0.07 Control figure as a loss under a EUR 0.49 residual.
+// TestMeterResidualCarriesAEuroBand: publishing the residual in kWh beside euro
+// contributions never puts the two on the same axis, so a caller compares contributions
+// against some hardcoded epsilon orders of magnitude below the measured uncertainty and
+// renders noise as a loss. The band has to arrive in euros.
 func TestMeterResidualCarriesAEuroBand(t *testing.T) {
 	slots := []slotData{
 		// R = 2 - 0 + 0 + 0 - 0 - 1 - 0 = +1kWh at EUR 0.20
@@ -536,12 +532,11 @@ func TestMeterResidualCarriesAEuroBand(t *testing.T) {
 	require.InDelta(t, 0.6, res.EurBand, 1e-9)
 }
 
-// D4: a band is a magnitude. A period whose mean grid price is negative (a long enough
-// run of negative-price slots is ordinary on a dynamic tariff) used to publish a NEGATIVE
-// eurBand, under a note calling it the floor "any figure smaller than is inside the
-// noise" - which every |contribution| clears, so every contribution reads as evidence.
-// The UI's own Math.max(ZERO_EPSILON_EUR, ...) hid it; no other consumer of
-// /api/savingsledger has one.
+// A band is a magnitude. A period whose mean grid price is negative (a long enough run
+// of negative-price slots is ordinary on a dynamic tariff) must not publish a NEGATIVE
+// eurBand: the note calls it the floor "any figure smaller than is inside the noise",
+// which every |contribution| then clears, so every contribution reads as evidence. The
+// UI clamps it with a Math.max; no other consumer of /api/savingsledger does.
 func TestMeterResidualBandStaysPositiveUnderNegativePrices(t *testing.T) {
 	slots := []slotData{
 		{GridImportKWh: 2, HomeKWh: 1, PriceGrid: -0.20},
@@ -553,10 +548,10 @@ func TestMeterResidualBandStaysPositiveUnderNegativePrices(t *testing.T) {
 	require.InDelta(t, 0.6, res.EurBand, 1e-9)
 }
 
-// TestEarliestChainSlotIsBoundedByEveryRequiredMeter is the N0 fix: EarliestTariffSlot is
-// not the earliest instant the chain can be computed for, and treating it as one produced
-// a default window where the realised figure covered 584 slots and the diagram 254 - with
-// every figure the card draws coming from the diagram.
+// TestEarliestChainSlotIsBoundedByEveryRequiredMeter: EarliestTariffSlot is not the
+// earliest instant the chain can be computed for, and treating it as one produces a
+// default window where the realised figure covers far more slots than the diagram -
+// while every figure the card draws comes from the diagram.
 func TestEarliestChainSlotIsBoundedByEveryRequiredMeter(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())

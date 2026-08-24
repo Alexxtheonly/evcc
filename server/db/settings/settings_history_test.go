@@ -90,7 +90,7 @@ func TestSettingsHistoryWithoutDatabase(t *testing.T) {
 	assert.Equal(t, "bar", v)
 }
 
-// TestSettingsHistoryDelete asserts F1's second half: deleting a key must
+// TestSettingsHistoryDelete: deleting a key must
 // leave a trace, or a replay has no way to tell "still at its last value"
 // apart from "removed at time T" - both look identical from the surviving
 // write rows alone.
@@ -112,8 +112,8 @@ func TestSettingsHistoryDelete(t *testing.T) {
 	assert.Empty(t, history(t, "residualPower"))
 }
 
-// TestDeleteHistory covers F9: a manual-delete endpoint for settings_history,
-// matching the existing energy/tariffs ones.
+// TestDeleteHistory: the manual-delete endpoint for settings_history, matching the
+// existing energy/tariffs ones.
 func TestDeleteHistory(t *testing.T) {
 	setupHistoryTest(t)
 
@@ -155,18 +155,17 @@ func TestSettingsHistoryIndependentKeys(t *testing.T) {
 	assert.Len(t, history(t, "bufferSoc"), 1)
 }
 
-// TestSettingsHistoryExcludesCredentials is the regression test for a leak
-// found in production: settings_history had accumulated 14 rows, ~36 KB, of
-// full OAuth access and refresh tokens in cleartext under a plugin/auth
-// subject key, appended roughly hourly as the token refreshed, into a table
-// that is append-only and never pruned. The live settings table holds only
-// the current token; the history table was building a permanent archive of
-// every credential the process had ever held.
+// TestSettingsHistoryExcludesCredentials is the regression test against a credential
+// leak: without the allowlist, settings_history accumulates full OAuth access and
+// refresh tokens in cleartext under a plugin/auth subject key, appended every time the
+// token refreshes, into a table that is append-only and never pruned. The live settings
+// table holds only the current token; the history table would build a permanent archive
+// of every credential the process had ever held.
 func TestSettingsHistoryExcludesCredentials(t *testing.T) {
 	setupHistoryTest(t)
 
 	// a plugin/auth OAuth subject ("<clientID>-<hash>", plugin/auth/oauth.go)
-	// - the key that actually leaked, and one no denylist could have named
+	// - a dynamically named key no denylist could have covered
 	SetString("41c41da0aab6f052df12164523bb1b80-5bac2d30", `{"access_token":"ey.secret","refresh_token":"ey.also-secret"}`)
 	// and the statically named secrets sharing the same key space
 	SetString("sponsorToken", "ey.sponsor")

@@ -123,13 +123,12 @@ func TestBatteryMaxDischargePowerWithMinSoc(t *testing.T) {
 	}
 }
 
-// D2: api.BatterySocLimiter is decorated whenever EITHER limit is configured
+// api.BatterySocLimiter is decorated whenever EITHER limit is configured
 // (meter/usage_battery.go's batterySocLimits.Decorator only declines when both are zero),
 // so a battery with maxsoc and no minsoc reports a minimum of 0 - absence, not a
 // configured floor of 0 %. Persisting that 0 hands the savings ledger's counterfactual
 // battery a 0 % floor labelled "configured minimum SoC, device-reported" and lets it run
-// the pack flat: on this site's own reference window, EUR 0.38 on the Control
-// contribution, enough to flip its sign.
+// the pack flat, enough on a short window to flip the sign of the Control contribution.
 func TestBatteryMinSocPersistedOnlyWhenConfigured(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, metrics.SetupSchema())

@@ -113,8 +113,8 @@ type Site struct {
 	collectors          map[string]*metrics.Collector // keyed by meter ref
 	tariffSlot          time.Time                     // last persisted tariff slot
 	forecastArchiveSlot time.Time                     // last solar forecast lead-time archive slot
-	controlSlot         time.Time                     // last persisted control_slots slot (ADR-011)
-	controlSlotBaseline api.BatteryMode               // AppliedMode sampled for the current control_slot row (ADR-011/F3)
+	controlSlot         time.Time                     // last persisted control_slots slot
+	controlSlotBaseline api.BatteryMode               // AppliedMode sampled for the current control_slot row
 	controlSlotChanged  bool                          // AppliedMode has already been flagged as having diverged from controlSlotBaseline this slot
 
 	// cached measurement state, guarded by RWMutex
@@ -144,7 +144,7 @@ type Site struct {
 	// optimizerSuggestedMode is what the optimizer derived this run,
 	// independent of any veto or damping (see optimizerDecision.suggestedMode
 	// / setOptimizerBatteryMode) - what persistControlSlot's SuggestedMode
-	// records (ADR-011/F4). Unlike optimizerBatteryMode, this can be
+	// records. Unlike optimizerBatteryMode, this can be
 	// api.BatteryCharge while chargeVetoed is true: that pairing is the
 	// whole point of persisting both.
 	optimizerSuggestedMode api.BatteryMode
@@ -159,7 +159,7 @@ type Site struct {
 	optimizerMu      sync.Mutex                     // guards optimizer runs
 	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu
 	optimizerClient  *optimizer.ClientWithResponses // cached api client for connection reuse, guarded by optimizerMu
-	optimizerRunSlot time.Time                      // last persisted optimizer_runs slot (ADR-011), guarded by optimizerMu
+	optimizerRunSlot time.Time                      // last persisted optimizer_runs slot, guarded by optimizerMu
 
 	solarScaleCached       func() (float64, error)             // util.Cached wrapper around querySolarScale
 	solarScaleByLeadCached func() (map[int]float64, error)     // util.Cached wrapper around querySolarScaleByLead
@@ -950,8 +950,8 @@ func (site *Site) updateBatteryMeters() {
 		// batterySocLimits.Decorator only declines when both are zero), so a battery with
 		// maxsoc: 95 and no minsoc reports (0, 95); persisting that 0 would hand the
 		// ledger a floor of 0 % labelled "configured minimum SoC, device-reported" and
-		// let the counterfactual battery run the pack flat. On this site's own reference
-		// window that is worth EUR 0.38 on the Control contribution, and flips its sign.
+		// let the counterfactual battery run the pack flat - enough, on a short window,
+		// to flip the sign of the Control contribution.
 		if bsl, ok := api.Cap[api.BatterySocLimiter](dev.Instance()); ok {
 			if minSoc, _ := bsl.GetSocLimits(); minSoc > 0 {
 				if err := c.SetMinSoc(minSoc / 100); err != nil {
@@ -1393,7 +1393,7 @@ func (site *Site) update(lp updater) {
 	site.updateBatteryMode(batteryGridChargeActive, rate)
 
 	// record what was decided and what was actually applied, once per
-	// completed slot (ADR-011) - after updateBatteryMode so GetBatteryMode()
+	// completed slot - after updateBatteryMode so GetBatteryMode()
 	// reflects this cycle's applied decision, not the previous one. Gated on
 	// the same authorization/enablement check optimizerUpdateAsync itself
 	// gates on: control_slots exists to describe optimizer decisions, and

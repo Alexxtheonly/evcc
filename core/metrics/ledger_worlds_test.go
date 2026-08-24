@@ -120,7 +120,7 @@ func TestDeriveBatteryPhysicsRefusesWithoutEnoughHistory(t *testing.T) {
 	require.ErrorIs(t, err, ErrBatteryPhysicsUnavailable)
 }
 
-// TestPercentileIgnoresSingleOutlier covers the Priority-4 fix directly: a single
+// TestPercentileIgnoresSingleOutlier: a single
 // glitched slot must not become the p99 rate ceiling the way it would a raw max().
 func TestPercentileIgnoresSingleOutlier(t *testing.T) {
 	values := make([]float64, 0, 100)
@@ -163,7 +163,7 @@ func TestDeriveBatteryPhysicsRateLimitIgnoresOutlier(t *testing.T) {
 	require.Less(t, phys.MaxChargeKWh, 5.0, "one glitched 40kWh slot must not become the rate ceiling")
 }
 
-// TestDeriveBatteryPhysicsPrefersPersistedCapacity covers the Priority-2 decision: a
+// TestDeriveBatteryPhysicsPrefersPersistedCapacity: a
 // device-reported capacity (persisted via Collector.SetCapacity, mirroring what
 // core/site.go does with api.BatteryCapacity) must win over derivation, even when the
 // battery's history alone would derive a different number - a hardware fact evcc
@@ -374,9 +374,9 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	})
 }
 
-// TestComputeW2DoesNotResetAtCalendarBoundary is the narrowest test of the N1 fix's
-// first half: a calendar-day boundary is not a measurement event, so crossing midnight
-// must not reset the simulated SoC to whatever the real battery happened to hold.
+// TestComputeW2DoesNotResetAtCalendarBoundary: a calendar-day boundary is not a
+// measurement event, so crossing midnight must not reset the simulated SoC to whatever
+// the real battery happened to hold.
 //
 // Both slots are contiguous (23:45 -> 00:00), so the only thing that could reset the
 // simulation here is the calendar. Day 1 charges the counterfactual to 9.5kWh; the
@@ -411,8 +411,8 @@ func TestComputeW2DoesNotResetAtCalendarBoundary(t *testing.T) {
 	require.Zero(t, drift.CarriedKWh)
 }
 
-// TestComputeW2CarriesMeasuredMovementAcrossGap is the N1 fix's second half: at a gap
-// the counterfactual is handed the measured pack's OWN movement across the unmeasured
+// TestComputeW2CarriesMeasuredMovementAcrossGap: at a gap the counterfactual is handed
+// the measured pack's OWN movement across the unpriced
 // stretch - not the measured pack's SoC. Those slots are excluded from W3 too, but W3 is
 // a meter reading and so receives that energy anyway (its post-gap import is lower
 // because the real pack was charged during hours nobody priced); giving W2 the same
@@ -502,7 +502,7 @@ func TestComputeW2RefusesOnMissingSoc(t *testing.T) {
 	require.ErrorIs(t, err, ErrSocGap)
 }
 
-// TestChainContributionsSumToWhole is ADR-011's central defence: no matter how the
+// TestChainContributionsSumToWhole is the chain's central invariant: no matter how the
 // chain is decomposed, the parts must sum to the whole under both settlement modes.
 func TestChainContributionsSumToWhole(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
@@ -674,8 +674,8 @@ func TestChainOraclePerSlotEuros(t *testing.T) {
 	require.NotEqual(t, 0.0, chain.Contributions[1].Settled.PerSlot, `"Battery" contribution must not be zero - a zero here means W2 collapsed to W1`)
 }
 
-// TestFloorFracSensitivityIsLabelled covers the adversarial finding behind B20:
-// FloorFrac is "the lowest observed SoC anywhere in this battery's history" (see
+// TestFloorFracSensitivityIsLabelled: FloorFrac falls back to "the lowest observed SoC
+// anywhere in this battery's history" (see
 // deriveBatteryPhysicsUncached), an arbitrary statistic that directly throttles how
 // much the W2 counterfactual battery is allowed to discharge - one extra low-SoC row,
 // with nothing else about the period changed, can materially move (and even flip the
@@ -754,8 +754,8 @@ func TestComputeW0W1IncludeLoadpointLoad(t *testing.T) {
 	require.InDelta(t, 0, w1[0].ExportKWh, 1e-9)
 }
 
-// TestChainAccountsForEVChargingAgainstControlAndPV reproduces, at unit scale, the
-// bug behind ADR-011's Priority-1 rework: EV charging landed in W3 (the real grid
+// TestChainAccountsForEVChargingAgainstControlAndPV reproduces, at unit scale, a bug
+// this arrangement is there to prevent: EV charging landed in W3 (the real grid
 // meter) but nowhere in W0-W2, so the "Control" contribution absorbed the EV's own
 // grid cost as if the controller had wastefully bought energy the household never
 // needed, and any PV that actually charged the car was booked in W1 as export revenue
@@ -831,8 +831,8 @@ func TestChainAttributesPVToEVChargingNotPhantomExport(t *testing.T) {
 	require.InDelta(t, 0.0, control.Settled.PerSlot, 1e-9)
 }
 
-// TestBuildLedgerSlotsRefusesLoadpointWithoutChargeMeter covers ADR-011 rule 4 as
-// applied to the Priority-1 fix: a loadpoint entity that exists (core/loadpoint.go
+// TestBuildLedgerSlotsRefusesLoadpointWithoutChargeMeter: refuse rather than
+// fabricate. A loadpoint entity that exists (core/loadpoint.go
 // always registers one) but has never written a single meters row is indistinguishable
 // from "this loadpoint has no charge meter configured" (lp.chargeEnergy stays nil, so
 // AddEnergy is never called at all - not even a zero-energy row). Modelling the
@@ -911,7 +911,7 @@ func TestChainControlSplitIdentities(t *testing.T) {
 		"Routing + Timing must reconstitute Full exactly - Timing is defined as Full - Routing")
 }
 
-// TestChainReportsLossWithoutClamp covers ADR-011 rule 1: a period that performed
+// TestChainReportsLossWithoutClamp: no clamping - a period that performed
 // worse than the baseline reports a negative contribution, not zero.
 func TestChainReportsLossWithoutClamp(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
@@ -949,7 +949,7 @@ func TestChainReportsLossWithoutClamp(t *testing.T) {
 // TestChainNotesFeedInStaticFallback: an imputed feed-in price must never be
 // indistinguishable from an observed one. The coverage figure beside it depends on the
 // substitution, so the payload has to say how many slots it applied to and why it was
-// allowed (ADR-011 rule 7).
+// allowed.
 func TestChainNotesFeedInStaticFallback(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -986,7 +986,7 @@ func TestChainNotesFeedInStaticFallback(t *testing.T) {
 	require.NotEmpty(t, found, "notes must disclose the substituted feed-in price, got %v", chain.Notes)
 }
 
-// TestBatteryFloorPrefersConfiguredMinimum is the N3 fix: the counterfactual battery's
+// TestBatteryFloorPrefersConfiguredMinimum: the counterfactual battery's
 // discharge floor must come from the installation's own configured minimum SoC
 // (api.BatterySocLimiter, persisted by Collector.SetMinSoc) rather than from the lowest
 // SoC the audited controller ever ran the pack down to.

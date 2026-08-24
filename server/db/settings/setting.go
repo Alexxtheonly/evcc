@@ -75,8 +75,7 @@ func init() {
 
 // historyKeys are the setting keys whose changes settings_history records:
 // user-facing configuration that changes what the controller does, or how a
-// later replay must price what it did (ADR-011). Everything else is not
-// recorded.
+// later replay must price what it did. Everything else is not recorded.
 //
 // This is deliberately an allowlist and not a list of secret-looking names.
 // The settings table is a single flat key space shared by configuration and
@@ -155,7 +154,7 @@ func persistHistory(h settingHistory) {
 // currently core/settings.ConfigSettings, which persists database-configured
 // loadpoints through the configs table (conf.Update) rather than through
 // SetString, and would otherwise be entirely invisible to the audit trail
-// this table exists for (ADR-011). Callers own their own dedup check; unlike
+// this table exists for. Callers own their own dedup check; unlike
 // SetString, every call here writes a row for any recordable key, with no
 // change check of its own.
 func RecordHistory(key string, old *string, val string) {
@@ -163,9 +162,7 @@ func RecordHistory(key string, old *string, val string) {
 }
 
 // DeleteHistory removes the settings_history rows in [from,to). Both bounds
-// are required, a full wipe is /api/db/reset. F9 (ADR-011): the manual-
-// delete endpoints only ever covered energy and tariffs before this - this
-// closes that gap for settings_history.
+// are required, a full wipe is /api/db/reset.
 func DeleteHistory(from, to time.Time) (int64, error) {
 	if from.IsZero() || to.IsZero() {
 		return 0, errors.New("missing from/to")

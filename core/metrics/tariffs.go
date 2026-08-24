@@ -77,12 +77,11 @@ func DeleteTariffs(from, to time.Time, usage string) (int64, error) {
 // PersistTariffs stores the tariff values at the given 15min boundary, nil values omitted.
 //
 // A slot already on record is not skipped: each column is filled only where it is
-// still NULL, and a value already recorded is never overwritten. Skipping the row
-// entirely (the previous clause.OnConflict{DoNothing}) made a gap permanent - a usage
-// whose tariff happened to be unavailable when the slot was first written stayed NULL
-// forever, even once the tariff came back. That is how this site accumulated 86
-// feed-in-less slots across a single UI config edit, and every one of them dropped out
-// of the savings ledger's coverage (see core/metrics/ledger_slots.go).
+// still NULL, and a value already recorded is never overwritten. Do not simplify this
+// back to clause.OnConflict{DoNothing} - skipping the row makes a gap permanent: a
+// usage whose tariff happened to be unavailable when the slot was first written stays
+// NULL forever, even once the tariff comes back, and those slots drop out of the
+// savings ledger's coverage (see core/metrics/ledger_slots.go).
 func PersistTariffs(ts time.Time, grid, feedin, co2, temperature *float64) error {
 	if grid == nil && feedin == nil && co2 == nil && temperature == nil {
 		return nil

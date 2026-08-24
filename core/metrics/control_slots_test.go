@@ -58,7 +58,7 @@ func TestPersistControlSlot(t *testing.T) {
 	require.NoError(t, db.Instance.Where("ts = ?", slot.Unix()).First(&res).Error)
 	require.Equal(t, "charge", res.AppliedMode)
 
-	// N4: no run produced a suggestion for this slot - nil, not the "unknown" token
+	// no run produced a suggestion for this slot - nil, not the "unknown" token
 	// that clearSuggestions() and a battery-less site both also write.
 	fourth := third.Add(15 * time.Minute)
 	require.NoError(t, PersistControlSlot(fourth, "normal", nil, "", true, nil))
@@ -68,8 +68,8 @@ func TestPersistControlSlot(t *testing.T) {
 	require.Nil(t, res4.SuggestedMode)
 }
 
-// TestDeleteControlSlots covers F9: a manual-delete endpoint for
-// control_slots, matching the existing energy/tariffs ones.
+// TestDeleteControlSlots: the manual-delete endpoint for control_slots, matching the
+// existing energy/tariffs ones.
 func TestDeleteControlSlots(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, db.Instance.AutoMigrate(new(controlSlot)))

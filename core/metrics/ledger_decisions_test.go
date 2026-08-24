@@ -76,7 +76,7 @@ func TestDecisionDeltasHindsight(t *testing.T) {
 	require.Nil(t, rows[1].SlotFlowDeltaEUR)
 }
 
-// TestDecisionDeltasCarriesModeChanged covers the Priority-5 finding: AppliedMode is
+// TestDecisionDeltasCarriesModeChanged: AppliedMode is
 // a single point sample taken seconds into the slot (controlSlot's own doc comment),
 // and ModeChanged flags when it's known to not have held for the whole 15 minutes -
 // DecisionDeltas simulates the full slot under AppliedMode regardless, so dropping
@@ -130,7 +130,7 @@ func TestDecisionDeltasWithoutBatteryPhysics(t *testing.T) {
 // here; instead this field reports -0.135 ("veto vindicated") because it never prices
 // slot 2 at all. This is documented, not silently left as a surprise: the field is
 // named for what it actually is, and chain.Notes carries the caveat in the payload
-// (ADR-011 rule 7) rather than only in a code comment.
+// rather than only in a code comment.
 func TestSlotFlowDeltaIsSlotLocalNotForwardHindsight(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -189,12 +189,11 @@ func TestSlotFlowDeltaIsSlotLocalNotForwardHindsight(t *testing.T) {
 	require.True(t, found, "chain.Notes must disclose that the per-decision delta only prices the vetoed slot itself, not any later slot the decision would have affected")
 }
 
-// TestDecisionDeltasFoldsUnknownAgainstNormal covers the F3 finding: the 11 rows the
-// live database had at the time carried applied "unknown" against suggested "normal"
-// - two spellings of "evcc held no override", not a veto - and the raw string
-// comparison priced every one of them as a veto worth EUR 0.00. Absence must not
-// serialise as a figure (ADR-011 rule 3), and every consumer of /api/savingsledger
-// sees this field, not only the one Vue component that knew to fold the modes itself.
+// TestDecisionDeltasFoldsUnknownAgainstNormal: a row carrying applied "unknown"
+// against suggested "normal" is two spellings of "evcc held no override", not a veto,
+// and a raw string comparison prices every such row as a veto worth EUR 0.00. Absence
+// must not serialise as a figure, and every consumer of /api/savingsledger sees this
+// field, not only a UI component that knows to fold the modes itself.
 func TestDecisionDeltasFoldsUnknownAgainstNormal(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -249,15 +248,12 @@ func TestDecisionDeltasFoldsUnknownAgainstNormal(t *testing.T) {
 	require.NotNil(t, rows[2].SlotFlowDeltaEUR)
 }
 
-// TestDecisionDeltasDecodesLegacyUnknownSuggestion is the N4 fix carried through to the
-// rows already on disk: the sibling Price field carries a careful doc comment about why
-// absence must never be a sentinel, and SuggestedMode stored api.BatteryUnknown's
+// TestDecisionDeltasDecodesLegacyUnknownSuggestion covers the rows already on disk:
+// before the column became nullable, SuggestedMode stored api.BatteryUnknown's
 // "unknown" spelling - the same token clearSuggestions() writes after a failed run and
-// the same one a battery-less site produces. Making the column nullable fixed that for
-// rows written afterwards; every earlier row was still served verbatim, and a caller
-// still could not tell a deliberate decision from silence. Decoded on read, both spellings
-// of absence must now read as absence, and neither may price a rejected alternative that
-// was never suggested.
+// the same one a battery-less site produces - so a caller could not tell a deliberate
+// decision from silence. Decoded on read, both spellings of absence must read as
+// absence, and neither may price a rejected alternative that was never suggested.
 func TestDecisionDeltasDecodesLegacyUnknownSuggestion(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -311,7 +307,7 @@ func TestDecisionDeltasDecodesLegacyUnknownSuggestion(t *testing.T) {
 // Two different unrecognised modes therefore produced identical flows and a delta of
 // exactly EUR 0.00 - a confident figure asserting the veto was free, on a decision
 // nothing in the package can model. A fifth api.BatteryMode, or a typo on the write
-// path, would land here on a live site. ADR-011 rule 3: absence is never a sentinel.
+// path, would land here on a live site. Absence is never a sentinel.
 func TestDecisionDeltasRefusesUnmodelledModes(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())

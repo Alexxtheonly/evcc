@@ -1,8 +1,8 @@
 package metrics
 
-// Savings ledger settlement (ADR-011 items 1 and 3): pricing a measured or simulated
-// energy series both ways, and the realised-grid-cost figure everything else in the
-// ledger hangs off. See ledger_slots.go for the honesty rules this file shares.
+// Savings ledger settlement: pricing a measured or simulated energy series both ways,
+// and the realised-grid-cost figure everything else in the ledger hangs off. See
+// ledger_slots.go for the honesty rules this file shares.
 
 import (
 	"context"
@@ -15,8 +15,8 @@ type worldFlow struct {
 	ImportKWh, ExportKWh float64
 }
 
-// Settled prices the same energy series twice, per ADR-011's settlement section.
-// PerSlot is each slot at its own realised price - the headline wherever a smart
+// Settled prices the same energy series twice. PerSlot is each slot at its own
+// realised price - the headline wherever a smart
 // meter settles per-slot. PeriodAverage is the whole period's import/export volumes
 // priced at the mean of the period's realised prices - the conservative default, and
 // what a profile-settled contract actually bills. Settlement is a user-declared
@@ -68,26 +68,28 @@ func actualFlows(slots []slotData) []worldFlow {
 	return out
 }
 
-// RealisedCost is item 1: the one measured number everything else in the ledger
+// RealisedCost is the one measured number everything else in the ledger
 // hangs off - Σ import(s)*p_grid(s) - export(s)*p_feedin(s), joining the grid meter
-// to the tariffs table. ADR-011 rule 2 (non-negotiable, see ledger_slots.go): reads
-// ONLY the grid meter and the tariffs table - no PV, no battery, no control_slots,
-// and never greenShare/effectivePrice/sessions.Price/sessions.PricePerKWh.
+// to the tariffs table. Non-negotiable: reads ONLY the grid meter and the tariffs
+// table - no PV, no battery, no control_slots, and never
+// greenShare/effectivePrice/sessions.Price/sessions.PricePerKWh.
 type RealisedCost struct {
 	Settled  Settled  `json:"settled"`
 	Coverage Coverage `json:"coverage"`
-	// Note states the invoice-comparability caveat (ADR-011 rule 7) in the payload
-	// itself: this is the one figure the ledger exists to compare against a real
-	// invoice, and it only ever prices the grid tariff rate. When THIS figure's slot
-	// set took the static feed-in fallback it also carries that disclosure, appended -
-	// the chain's own note counts the chain's slots, which is a different, smaller set
-	// (see ComputeRealisedCost), so quoting the chain's number here would understate
-	// how much of the headline rests on an imputed price. One string rather than a
-	// list because the UI reads a single realised.note.
+	// Note carries the invoice-comparability caveat in the payload itself, next to
+	// the figure rather than in a footnote: this is the one figure the ledger exists
+	// to compare against a real invoice, and it only ever prices the grid tariff
+	// rate. When THIS figure's slot set took the static feed-in fallback it also
+	// carries that disclosure, appended - the chain's own note counts the chain's
+	// slots, which is a different, smaller set (see ComputeRealisedCost), so quoting
+	// the chain's number here would understate how much of the headline rests on an
+	// imputed price. One string rather than a list because the UI reads a single
+	// realised.note.
 	Note string `json:"note"`
 }
 
-// ComputeRealisedCost computes item 1 for [from,to). Returns *ErrBeforeTariffStart if
+// ComputeRealisedCost computes the realised cost for [from,to). Returns
+// *ErrBeforeTariffStart if
 // from precedes the earliest priced tariff slot. Deliberately independent of
 // ComputeChain, so a caller can get the realised figure even when the battery-physics
 // derivation ComputeChain needs for W2 fails, or the site has no battery at all.

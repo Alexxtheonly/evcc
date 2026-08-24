@@ -1,20 +1,20 @@
 package metrics
 
-// Savings ledger world chain (ADR-011 item 2): W0..W2, the counterfactual worlds
-// priced (via ledger_settlement.go's settleFlows) on top of the shared slot series
-// from ledger_slots.go. See ledger_slots.go for the honesty rules this and every
-// other ledger file share.
+// Savings ledger world chain: W0..W2, the counterfactual worlds priced (via
+// ledger_settlement.go's settleFlows) on top of the shared slot series from
+// ledger_slots.go. See ledger_slots.go for the honesty rules this and every other
+// ledger file share.
 //
 // W0/W1/W2 all price slotData.modelledLoadKWh() (household residual + every
 // loadpoint's EV charging), not HomeKWh alone. HomeKWh is a derived residual that
 // core/site.go's updatePower already has loadpoint charge power subtracted out of, so
-// pricing HomeKWh by itself modelled a household with no cars while W3 (the real grid
+// pricing HomeKWh by itself models a household with no cars while W3 (the real grid
 // meter, priced via GridImportKWh/GridExportKWh) paid for every EV kWh - the
-// counterfactuals were then compared against a world that never happened. Worked
-// example from one real August month, before this fix: reported Control contribution
-// was -EUR 38 (the truth is a small positive), and the PV contribution was
-// simultaneously overstated because W1 booked EV charging energy that actually went
-// into a car as if it had been exported for feed-in revenue.
+// counterfactuals would then be compared against a world that never happened. On a
+// site that charges a car the error is worth tens of euros a month: the Control
+// contribution goes deeply negative while the PV contribution is simultaneously
+// overstated, because W1 books EV charging energy that actually went into a car as if
+// it had been exported for feed-in revenue.
 
 import (
 	"context"
@@ -80,19 +80,17 @@ func computeW1(slots []slotData) []worldFlow {
 }
 
 // batteryPhysics bundles the assumptions the W2 counterfactual battery and the
-// per-slot decision replay (item 4) share, so both use the same efficiency, capacity
-// and rate ceiling rather than silently drifting apart.
+// per-slot decision replay share, so both use the same efficiency, capacity and rate
+// ceiling rather than silently drifting apart.
 //
 // Deriving BOTH round-trip efficiency and capacity independently from matched
 // ΔSoC/ΔEnergy windows isn't defensible - two unknowns, one equation per window. This
 // instead treats BatteryEta as known (see its doc comment) and derives CapacityKWh
-// from data using it, which the ADR explicitly allows ("otherwise use the existing
-// constant and say which"). Every field carries a Source string precisely so a caller
-// can render "derived from N slots" vs "no data, defaulted" rather than hiding which
-// one happened. Fields are camelCase-tagged to match every other payload type in this
-// package (Settled, Coverage, ...) - without tags this serialised as PascalCase amid
-// lowerCamel siblings, the one field in the whole /api/savingsledger response that
-// looked like it came from a different API.
+// from data using it. Every field carries a Source string precisely so a caller can
+// render "derived from N slots" vs "no data, defaulted" rather than hiding which one
+// happened. Fields are camelCase-tagged to match every other payload type in this
+// package (Settled, Coverage, ...); without tags they serialise as PascalCase amid
+// lowerCamel siblings.
 type batteryPhysics struct {
 	CapacityKWh    float64 `json:"capacityKWh"`
 	CapacitySource string  `json:"capacitySource"`
@@ -131,7 +129,7 @@ type batteryPhysics struct {
 }
 
 // rateCeilingNote renders MaxChargeKWh/MaxDischargeKWh and their provenance into the
-// chain's Notes (ADR-011 rule 7) - the ceiling silently throttles or unlocks the W2
+// chain's Notes - the ceiling silently throttles or unlocks the W2
 // counterfactual battery, so a reader comparing two periods needs to see it, not just
 // the number it produced.
 func (p batteryPhysics) rateCeilingNote() string {
@@ -139,8 +137,8 @@ func (p batteryPhysics) rateCeilingNote() string {
 		p.MaxChargeKWh, p.MaxDischargeKWh, rateLimitPercentile*100)
 }
 
-// floorNote renders FloorFrac and its provenance into the chain's Notes (ADR-011
-// rule 7). The floor directly throttles how much the W2 counterfactual battery is
+// floorNote renders FloorFrac and its provenance into the chain's Notes. The floor
+// directly throttles how much the W2 counterfactual battery is
 // allowed to discharge, and moving it is enough to flip the sign of Control (see
 // TestFloorFracSensitivityIsLabelled) - so which of the two sources produced it belongs
 // in Notes, the one field every caller already renders unconditionally, rather than
@@ -200,8 +198,8 @@ const minCapacityEvidenceFrac = 0.20
 // ErrBatteryPhysicsUnavailable means neither a persisted device capacity nor the
 // battery's history (enough clean, single-direction SoC movement, agreeing across
 // charge and discharge) is available to establish a capacity - the counterfactual
-// battery (W2) and the decision replay (item 4) both refuse rather than guess a number
-// with no basis (ADR-011 rule 4).
+// battery (W2) and the decision replay both refuse rather than guess a number with no
+// basis.
 var ErrBatteryPhysicsUnavailable = errors.New("not enough battery history to derive capacity")
 
 // capacityDisagreementFrac is the largest fractional difference between the
@@ -219,10 +217,9 @@ const capacityDisagreementFrac = 0.15
 // times a year, so a few minutes of staleness costs nothing a caller would notice.
 //
 // Errors are NOT held for this long: util.Cached retries a failed getter on its own
-// exponential back-off (5s and up). The hand-rolled cache this replaces stored the
-// error like any other value, so a site that had just gained a battery - or whose
-// history had just crossed the evidence threshold - stayed refused for a full five
-// minutes with no way to invalidate it.
+// exponential back-off (5s and up). Caching the error like any other value would leave
+// a site that had just gained a battery - or whose history had just crossed the
+// evidence threshold - refused for the whole TTL with no way to invalidate it.
 const batteryPhysicsCacheTTL = 5 * time.Minute
 
 var (
@@ -250,8 +247,7 @@ func deriveBatteryPhysics(ctx context.Context) (batteryPhysics, error) {
 
 	// util.Cached has no cache key, so the db.Instance a value was derived from has
 	// to be tracked here: a test opening a fresh :memory: database must not be served
-	// the previous test's battery. Same reason the hand-rolled cache this replaces
-	// carried a *gorm.DB field.
+	// the previous test's battery.
 	if batteryPhysicsDB != db.Instance {
 		batteryPhysicsDB = db.Instance
 		batteryPhysicsCache.Reset()
@@ -401,9 +397,9 @@ func persistedBatteryFloorFrac(ctx context.Context, ids []int) (frac float64, ok
 // has this pack ever been run" is a behaviour of the very controller the ledger audits,
 // so a controller that never discharges deeply gives its own counterfactual a high floor,
 // which makes the counterfactual expensive, which flatters the controller. The magnitude
-// is not academic: on this site's database an observed 4.1% floor against the configured
-// 5% moves the Control contribution by EUR 0.17 on a window whose entire realised grid
-// cost is EUR 3.97, and a 10% floor flips its sign.
+// is not academic: the observed and the configured floor typically differ by a fraction
+// of a percentage point, and that alone moves the Control contribution measurably
+// against a short window's total - a floor a few points higher flips its sign outright.
 //
 // So the observed minimum stands in only for a battery that reports no limit, and it is
 // labelled as one: FloorSource is the provenance string floorNote renders, and it must
@@ -562,15 +558,13 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 // it has no consumer that the new SoC does not already give (it is the SoC delta over
 // EtaC / EtaD). Its caller is the per-slot decision replay in ledger_decisions.go,
 // which reads both modes out of the control_slots table and so cannot know they are
-// valid. Code that already holds a mode as a compile-time
-// fact calls that mode's function directly - computeW2 calls simulateNormalStep - so
-// the runtime dispatch, and the ok it has to return, exist only where a mode is really
-// unvalidated input.
+// valid. Code that already holds a mode as a compile-time fact calls that mode's
+// function directly - computeW2 calls simulateNormalStep - so the runtime dispatch,
+// and the ok it has to return, exist only where a mode is really unvalidated input.
 //
 // Mode semantics modeled here (inferred from the mode names and how
-// core/site_battery.go uses them, not re-derived from inverter docs - stated
-// plainly, not hidden, since this is exactly the kind of assumption ADR-011 rule 7
-// asks to be labelled rather than buried):
+// core/site_battery.go uses them, not re-derived from inverter docs - stated plainly
+// rather than buried, since it is an assumption the euro figures rest on):
 //   - hold: no charge, no discharge.
 //   - normal: charge from surplus only, discharge to cover a deficit only - the "dumb
 //     rule" W2 is defined as.
@@ -585,7 +579,7 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 // silently replayed as normal would produce a confident euro figure for a decision
 // this model does not understand - and two DIFFERENT unrecognised modes would both
 // fall through to the same branch and report exactly EUR 0.00, rendering "we cannot
-// price this" as "this cost nothing" (ADR-011 rule 3, see DecisionRow's doc comment).
+// price this" as "this cost nothing" (see DecisionRow's doc comment).
 // Callers that fold "" / "unknown" into normal must do so before calling (see
 // effectiveMode); this function only understands the four real modes.
 func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow, ok bool) {
@@ -665,12 +659,9 @@ var ErrBatteryRateCeilingUnavailable = errors.New("no observed charge or dischar
 // worlds comparable across a hole in the record.
 //
 // A gap is a stretch this ledger could not COMPUTE over, which is not the same thing as
-// a stretch nobody measured - and the note below used to say "unmeasured", which on this
-// site was simply untrue. The longest gap the reference window ever showed (25 hours)
-// has 94 battery rows and 87 grid/home rows behind it; it was dropped for want of a
-// feed-in price, and supplying the site's static feed-in price makes it disappear
-// entirely. The pack's movement across a gap is measured either way; what a gap lacks is
-// a price.
+// a stretch nobody measured: a long gap is typically backed by a full set of meter rows
+// and was dropped only for want of a price. Do not label it "unmeasured" - the pack's
+// movement across a gap is measured either way; what a gap lacks is a price.
 type W2Drift struct {
 	// Gaps is the number of breaks in the otherwise-15-minute-contiguous slot series.
 	Gaps int `json:"gaps"`
@@ -688,7 +679,7 @@ type W2Drift struct {
 	FinalKWh float64 `json:"finalKWh"`
 }
 
-// note renders W2Drift into the chain's Notes (ADR-011 rule 7) - the numbers are
+// note renders W2Drift into the chain's Notes - the numbers are
 // in the payload either way, but the note is the field every caller already renders.
 func (d W2Drift) note() string {
 	return fmt.Sprintf("counterfactual battery: anchored to the measured charge once, at the period's first slot, then simulated - across %d gap(s) in the record it was handed the %+.2fkWh the real pack itself moved during the slots this ledger could not price (unpriced in this world exactly as it is in what you paid), and it ends the period %+.2fkWh from the real pack, energy neither cost figure values",
@@ -699,35 +690,26 @@ func (d W2Drift) note() string {
 // house load only, never from grid) across slots.
 //
 // The simulated SoC is anchored to the measured SoC exactly once, at the first slot,
-// and free-runs from there. It used to be re-anchored at every calendar-day boundary
-// and at every gap in the otherwise-15-minute-contiguous run, on the argument that a
-// free-running simulation is not evidence (ADR-011 rule 5). That argument is real but
-// the cure was worse: each re-anchor is an unpriced energy injection. Whatever the real
-// battery had accumulated while the ledger was not looking - and, worse, whatever the
-// audited controller had achieved that the dumb rule had not - was credited to the
-// counterfactual for free, and every free kWh is a kWh W2 never has to buy.
+// and free-runs from there. Do NOT re-anchor it periodically - at calendar-day
+// boundaries, or at every gap - on the argument that a free-running simulation is not
+// evidence. Each re-anchor is an unpriced energy injection: whatever the real battery
+// accumulated while the ledger was not looking, and worse, whatever the audited
+// controller achieved that the dumb rule had not, is credited to the counterfactual for
+// free, and every free kWh is a kWh W2 never has to buy. On a multi-day window that
+// injection reached a sixth of the period's whole load and flipped the sign of the
+// Control contribution - the same period reads as the controller saving money or losing
+// money on this choice alone. A calendar-day reset has no defence at all: midnight is
+// not a measurement event.
 //
-// Measured on this site's own database over the reference window (2026-08-21 12:45 to
-// 2026-08-24 10:45), UNDER THE CONFIGURATION THE ENDPOINT ACTUALLY RUNS: the site's
-// feed-in tariff is static, so server/http_savings_ledger_handler.go's staticFeedInPrice
-// hands ComputeLedger a EUR 0.00 feed-in price and 252 of the window's 280 slots are
-// priceable (90 %), not the 166 (59 %) a run without it sees. On those 252 slots the
-// re-anchors injected 9.963kWh - 17 % of the period's 58.8kWh load - and moved the
-// Control contribution from +EUR 0.24 to -EUR 0.95. That is a sign flip, not a shading:
-// the same period reads as the controller saving money or as it losing a euro, on this
-// choice alone. A calendar-day reset in particular has no defence at all: midnight is
-// not a measurement event, and those three resets alone were worth EUR 0.036.
-//
-// The half of the old behaviour that WAS defensible is kept, in isolation: at a gap,
-// the measured pack's own state change across the stretch the ledger could not price is
+// The half of that behaviour which IS defensible is kept, in isolation: at a gap, the
+// measured pack's own state change across the stretch the ledger could not price is
 // carried onto the simulated SoC. Those slots are excluded from every world, including
 // W3 - but W3 is a meter reading, so it receives that energy anyway: its post-gap import
 // is lower because the real pack was charged during hours nobody priced. Free-running W2
 // would receive none of it, which penalises the counterfactual and flatters the
-// controller by exactly that amount (on the same 252 slots: 4.263kWh, moving Control to
-// +EUR 0.60). Carrying the delta - rather than resetting to the measured level - gives
-// W2 the same movement W3 got while preserving the simulation's own divergence, which is
-// the counterfactual's entire point.
+// controller by exactly that amount. Carrying the delta - rather than resetting to the
+// measured level - gives W2 the same movement W3 got while preserving the simulation's
+// own divergence, which is the counterfactual's entire point.
 //
 // soc_temp is recorded at SLOT START (see meter.SocTemp), so the pack's measured state
 // at the END of the last slot before a gap is that slot's start SoC plus its own
@@ -781,16 +763,16 @@ type WorldCost struct {
 }
 
 // Contribution is one measure's share of the total savings: Cost(previous world) -
-// Cost(this world). ADR-011's central defence: summing every Contribution in a Chain
-// must equal Cost(W0) - Cost(actual) - see TestChainContributionsSumToWhole.
+// Cost(this world). Central invariant: summing every Contribution in a Chain must
+// equal Cost(W0) - Cost(actual) - see TestChainContributionsSumToWhole.
 type Contribution struct {
 	Label   string  `json:"label"`
 	Settled Settled `json:"settled"`
 }
 
 // ControlSplit divides the W2->W3 contribution (the software's contribution, on top
-// of the hardware) into routing and timing, per ADR-011 item 2's requirement that the
-// two be distinguishable on a site where both are non-zero.
+// of the hardware) into routing and timing, so the two stay distinguishable on a site
+// where both are non-zero.
 //
 // Full is the headline: Cost(W2) - Cost(actual) at per-slot settlement.
 // Routing is the same difference at period-average settlement - flattening every
@@ -802,7 +784,7 @@ type Contribution struct {
 // Timing only reflects real money under per-slot settlement (see the Settled doc
 // comment) - it is a genuine diagnostic under period-average settlement, not a
 // currency figure that period-average billing actually pays, and callers must label
-// it as such (ADR-011 rule 7).
+// it as such.
 type ControlSplit struct {
 	Full    float64 `json:"full"`
 	Routing float64 `json:"routing"`
@@ -818,16 +800,16 @@ type Chain struct {
 	Coverage       Coverage        `json:"coverage"`
 	BatteryPhysics *batteryPhysics `json:"batteryPhysics,omitempty"`
 	Control        *ControlSplit   `json:"control,omitempty"`
-	// MeterResidual is the A1 diagnostic (ledger_slots.go): the noise floor under
-	// every euro figure above, published rather than left implicit - see its own doc
-	// comment for why it is not expected to be zero.
+	// MeterResidual (ledger_slots.go) is the noise floor under every euro figure
+	// above, published rather than left implicit - see its own doc comment for why it
+	// is not expected to be zero.
 	MeterResidual MeterResidual `json:"meterResidual"`
 	// W2Drift is the counterfactual battery's energy bookkeeping - nil when the site
 	// has no battery and W2 collapses to W1, where there is no simulation to account
 	// for. See its own doc comment.
 	W2Drift *W2Drift `json:"w2Drift,omitempty"`
-	// Notes are caveats ADR-011 rule 7 says must be labelled in the payload, not left
-	// to a code comment or an unwritten UI convention - which settlement figures a
+	// Notes are caveats that must be labelled in the payload itself, not left to a
+	// code comment or an unwritten UI convention - which settlement figures a
 	// PeriodAverage price actually reflects, what Routing/Timing do and don't include,
 	// and what the euro figures do and don't cover against a real invoice.
 	Notes []string `json:"notes,omitempty"`
@@ -862,10 +844,9 @@ const noteSlotFlowDeltaIsSlotLocal = "decisions[].slotFlowDeltaEur prices only t
 // take slotData.modelledLoadKWh() - household plus every loadpoint's EV charging -
 // at its REALISED timestamp, so shifting when a car charges (a smartCostLimit plan,
 // a cheap-overnight window) produces exactly EUR 0 of attributed value in every
-// contribution, no matter how much the timing actually saved. Arithmetically correct
-// (ADR-011 rule 7 doesn't ask this package to invent a measure it can't honestly
-// attribute) but silent about it without this note - see
-// TestChainNotesEVTimingUnattributed.
+// contribution, no matter how much the timing actually saved. Arithmetically correct -
+// a measure that cannot be honestly attributed is named, not invented - but silent
+// about it without this note; see TestChainNotesEVTimingUnattributed.
 const noteEVTimingUnattributed = "EV charge timing is not attributed to any measure - PV/Battery/Control all price a loadpoint's energy at when it was actually drawn, so shifting a charge to a cheaper slot shows EUR 0 of value here even when it saved money"
 
 // noteFeedInZero, present whenever every slot in the period has PriceFeedIn == 0:
@@ -882,9 +863,8 @@ const noteFeedInZero = "feed-in price is EUR 0.00 for every slot in this period,
 // slots/price must come from the SAME slot set as the figure the note is attached to.
 // The chain and the realised cost build different sets (ComputeRealisedCost excludes
 // the battery and loadpoint requirements, so it keeps slots the chain drops) and so
-// have different fallback counts - on this site's own database, 416 imputed slots
-// behind the realised figure against 86 behind the chain. Quoting one set's count
-// beside the other's euros understates the imputation by 5x.
+// have different fallback counts, routinely by several times over. Quoting one set's
+// count beside the other's euros understates the imputation.
 func noteFeedInStaticFallback(slots int, price float64) string {
 	return fmt.Sprintf("no feed-in price was recorded for %d of the slots behind this figure; they were priced at the site's currently configured static feed-in rate of EUR %.4f/kWh - accepted only because that tariff declares its price time-invariant AND every feed-in price ever recorded by this site equals it, and those slots would have been excluded outright had any recorded price differed", slots, price)
 }
@@ -915,7 +895,7 @@ func notePeriodAverageCoverage(c Coverage) string {
 	return fmt.Sprintf("periodAverage prices are the mean over the %d valid slots only (%.1f%% coverage) - excluded slots are not assumed to average out evenly", c.ValidSlots, c.Fraction*100)
 }
 
-// ComputeChain runs the full ADR-011 world chain for [from,to). See buildLedgerSlots
+// ComputeChain runs the full world chain for [from,to). See buildLedgerSlots
 // for what counts as a valid slot and ErrBeforeTariffStart/ErrSocGap for the two ways
 // this refuses rather than fabricates.
 func ComputeChain(ctx context.Context, from, to time.Time, feedInStatic *float64) (*Chain, error) {

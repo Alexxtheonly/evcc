@@ -1,9 +1,9 @@
 package metrics
 
-// Savings ledger (ADR-011): the merged per-slot view the whole ledger computes from.
+// Savings ledger: the merged per-slot view the whole ledger computes from.
 //
-// ADR-011 rule 2 (non-negotiable): this file and everything built on top of it reads
-// ONLY the meters and tariffs tables. It must never import or reference greenShare,
+// Non-negotiable: this file and everything built on top of it reads ONLY the meters
+// and tariffs tables. It must never import or reference greenShare,
 // effectivePrice, sessions.Price or sessions.PricePerKWh - those are the lineage the
 // ledger exists to replace, not to depend on. If a future change needs a number from
 // that lineage, that is a sign it belongs somewhere other than the ledger.
@@ -37,16 +37,14 @@ var ErrLedgerRangeTooLarge = fmt.Errorf("requested range exceeds the %d-day maxi
 // walks from `from` in fixed 15-minute steps (see the loop below) - an unaligned from
 // (e.g. ?from=2026-08-01T00:07:00Z) matches zero rows at every step even when the
 // period is full of data, silently returning a confident-looking "computed over 0 of N
-// slots, EUR 0.00" instead of visibly failing. Reject rather than fabricate (ADR-011
-// rule 4).
+// slots, EUR 0.00" instead of visibly failing. Reject rather than fabricate.
 var ErrLedgerRangeUnaligned = errors.New("from/to must be aligned to a tariff slot boundary")
 
 // ErrLedgerRangeInverted means to does not come after from - a reversed or identical
 // period (e.g. ?from=2026-08-23&to=2026-08-22, or from==to). A malformed request, not
 // a server fault, so it needs a sentinel here rather than a plain errors.New: the
 // handler's mapping (savingsLedgerErrorStatus) only recognises specific errors and
-// falls back to 500 for anything else - the exact failure mode ErrLoadpointNoChargeMeter
-// had before it got its own case.
+// falls back to 500 for anything else.
 var ErrLedgerRangeInverted = errors.New("invalid period: to must be after from")
 
 // ErrNoGridMeter and ErrNoHomeMeter mean the site has no meter of that group at all -
@@ -58,8 +56,8 @@ var (
 )
 
 // ErrBeforeTariffStart is returned when the requested period starts before the
-// earliest slot the tariffs table has a price for. ADR-011 honesty rule 4: refuse
-// rather than fabricate a price for a period the site has no record of.
+// earliest slot the tariffs table has a price for: refuse rather than fabricate a
+// price for a period the site has no record of.
 type ErrBeforeTariffStart struct {
 	Earliest time.Time // zero if the tariffs table has no priced slot at all
 }
@@ -76,10 +74,9 @@ func (e *ErrBeforeTariffStart) Error() string {
 // feed-in price: this bound exists to refuse a window the site has no price record
 // for at all, and a missing feed-in price is a per-slot condition buildLedgerSlots
 // already handles slot by slot (either from the static fallback, see feedInFallback,
-// or by dropping the slot). Requiring both here refused whole windows outright - on
-// this site's own database it made the 3.7 days between the first recorded grid price
-// and the first recorded feed-in price unqueryable, even though every one of those
-// slots had a grid price and a grid meter reading.
+// or by dropping the slot). Requiring both here refuses whole windows outright: the
+// gap between the first recorded grid price and the first recorded feed-in price can
+// be days wide, and every slot in it has a grid price and a grid meter reading.
 func EarliestTariffSlot(ctx context.Context) (time.Time, error) {
 	var ts sql.NullInt64
 	if err := db.Instance.WithContext(ctx).Model(new(tariffValue)).
@@ -100,13 +97,13 @@ func EarliestTariffSlot(ctx context.Context) (time.Time, error) {
 // battery additionally needs a non-NULL soc_temp).
 //
 // It exists because EarliestTariffSlot is NOT that bound, and a caller that treats it as
-// one publishes a wrong number rather than a missing one. On this site's own database the
-// tariffs table starts 2026-08-17 20:30 while the battery was commissioned on 2026-08-21,
-// so a default 7-day window is accepted, computes the realised figure over 584 slots
-// (EUR 34.69) and the chain over 254 (W3 = EUR 4.60), and every figure the card draws
-// comes from the chain - telling a reader they paid a seventh of what they paid. The
-// divergence is legitimate arithmetic; the fix is for the default window to land where
-// the chain can actually be drawn, which needs this bound published.
+// one publishes a wrong number rather than a missing one: the tariffs table can start
+// long before the battery was commissioned, so a default window is accepted, the
+// realised figure is computed over all of it while the chain covers a fraction - and
+// every figure the card draws comes from the chain, telling the reader they paid a
+// fraction of what they paid. The divergence is legitimate arithmetic; the fix is for
+// the default window to land where the chain can actually be drawn, which needs this
+// bound published.
 //
 // Returns the zero time - meaning "nowhere, don't narrow to it" - when the tariffs table
 // has no priced slot, or when a configured group has no rows at all (the chain cannot
@@ -203,7 +200,7 @@ func (s slotData) modelledLoadKWh() float64 {
 	return s.HomeKWh + s.LoadpointKWh
 }
 
-// MeterResidual is the A1 diagnostic: how far each valid slot's measured sources
+// MeterResidual is a diagnostic: how far each valid slot's measured sources
 // (grid import, PV, battery discharge) fall short of or exceed its measured sinks
 // (grid export, home, loadpoint, battery charge). It is NOT an identity that must
 // equal zero, even though HomeKWh is itself defined as this same residual at the
@@ -224,22 +221,19 @@ type MeterResidual struct {
 	Slots     int     `json:"slots"`
 	// EurBand is AbsSumKWh priced at the period's mean grid rate: the same noise
 	// floor, in the unit every other figure in this payload is denominated in, so a
-	// caller can actually compare the two. Publishing the residual in kWh beside euro
-	// contributions and calling it "the noise floor under every euro figure" left the
-	// comparison to be done by eye and it never was: on this site's own database a
-	// 1.345kWh residual sat under a -EUR 0.0664 Control figure the card rendered, in
-	// the danger colour, as "the controller cost you money" - an assertion 7x smaller
-	// than its own uncertainty.
+	// caller can actually compare the two. Publishing the residual only in kWh beside
+	// euro contributions leaves that comparison to be made by eye, and it never is: a
+	// residual can be several times larger than the contribution rendered next to it,
+	// which turns measurement noise into a confident "the controller cost you money".
 	//
 	// It is a WORST-CASE UPPER BOUND, not an error bar, and deliberately so. Summing
 	// the unsigned per-slot residuals counts every slot's mismatch as if it pushed the
 	// contribution the same way; an error bar for INDEPENDENT per-slot errors would
-	// instead grow like sqrt(N)*sigma, which on the reference window (252 slots) is
-	// EUR 0.08 against this bound's EUR 1.26 - about 16x narrower. The independence
-	// that would justify it is not what this site's residuals show: their net drift is
-	// 0.776kWh where independent slots of the same size would average 0.231kWh, 3.4x
-	// smaller - they carry a systematic component, and the sqrt(N) band (EUR 0.08) is
-	// narrower than the drift already measured (EUR 0.27). Between a band that can
+	// instead grow like sqrt(N)*sigma, which comes out around an order of magnitude
+	// narrower. That independence does not hold in practice: measured residuals drift
+	// far less than independent slots of the same size would, so they carry a
+	// systematic component, and the sqrt(N) band lands narrower than the drift already
+	// measured - it would understate the uncertainty. Between a band that can
 	// withhold a true overspend claim and one that can manufacture a false one, this
 	// ledger takes the first: a false "the controller cost you money" is the most
 	// expensive wrong answer it can give. Callers must present it as what it is - a
@@ -275,8 +269,8 @@ func computeMeterResidual(slots []slotData) MeterResidual {
 }
 
 // Coverage reports what fraction of a period's slots the ledger could actually
-// compute over. ADR-011 honesty rule 3: excluded slots (recovered, incomplete, or
-// missing an input entirely) are dropped and reported, never scaled up to compensate.
+// compute over. Excluded slots (recovered, incomplete, or missing an input entirely)
+// are dropped and reported, never scaled up to compensate.
 // Coverage.Fraction is 0 both when the period had zero possible slots (TotalSlots==0,
 // undefined) and when it had slots but none were valid (TotalSlots>0, ValidSlots==0,
 // a genuine zero) - Fraction alone can't tell those apart. A caller that needs to
@@ -416,7 +410,7 @@ const minFeedInWitnessSlots = 96
 // static is the site's currently configured feed-in price, and is non-nil only when
 // that tariff declares itself api.TariffTypePriceStatic - a declaration that the
 // price does not vary with time, which makes reading it a lookup rather than an
-// interpolation across a gap (ADR-011 rule 3).
+// interpolation across a gap.
 //
 // The declaration alone is not enough, because the configs table keeps no history:
 // applying today's configured value to a past slot asserts that it also held then,
@@ -464,8 +458,7 @@ func feedInFallback(ctx context.Context, static *float64) (*float64, error) {
 // zero-energy row every cycle even while nothing is plugged in, so "never any row" is
 // not "not charging this period"). Modelling W0-W2's load from the home meter alone in
 // this case would silently describe a car-free household while W3 (the real grid
-// meter) still paid for every kWh that loadpoint drew - refuse instead of guessing
-// (ADR-011 rule 4).
+// meter) still paid for every kWh that loadpoint drew - refuse instead of guessing.
 var ErrLoadpointNoChargeMeter = errors.New("a configured loadpoint has no charge-meter energy history; refusing to model a car-free household")
 
 // groupEntityIDs returns the entity ids for every entity configured in the group. An
@@ -499,13 +492,13 @@ func verifyLoadpointChargeMeters(ctx context.Context, ids []int) error {
 // computation runs on. A slot is included only if the grid meter, the home meter, the
 // tariff (both prices), and - when the site has them configured - PV and the battery
 // (including its SoC) all have a usable, non-excluded reading for that slot. Anything
-// less and the slot is dropped, never interpolated (ADR-011 rules 3 and 5).
+// less and the slot is dropped, never interpolated and never scaled up to compensate.
 //
 // includeLoadpoint and includeBattery each gate one computation's worth of extra
-// requirements, so a caller that doesn't need a signal isn't filtered by it - one
-// shared filter previously served every computation, so a week of BYD SoC read
-// failures deleted a week from ComputeRealisedCost even though its own doc comment
-// says it's independent of the battery entirely (ADR-011 Priority-4 finding).
+// requirements, so a caller that doesn't need a signal isn't filtered by it. Do not
+// collapse them back into one shared filter: a run of failed battery SoC reads would
+// then delete the same period from ComputeRealisedCost, which is independent of the
+// battery entirely.
 //
 //   - includeLoadpoint gates the loadpoint-charge-meter refusal
 //     (ErrLoadpointNoChargeMeter) and LoadpointKWh's inclusion in the returned slots.

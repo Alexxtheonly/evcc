@@ -771,7 +771,7 @@ func TestBlendMeasured(t *testing.T) {
 	assert.Equal(t, []float32{200, 175}, short)
 }
 
-// TestBlendScaleByLead covers B31: a flat ratio applied to every slot in the decay
+// TestBlendScaleByLead: a flat ratio applied to every slot in the decay
 // window mixes two different scales for every slot but the one whose lead happens to
 // match the scale the ratio's denominator used. Fixture: 4 slots at leads 0, 15, 30,
 // 45min, each forecast 2000Wh raw. scaleAt(0)=0.8 (the nowcast - matches what
@@ -868,7 +868,7 @@ func TestSurplusCharge(t *testing.T) {
 }
 
 func TestCurrentSlotSuggestion(t *testing.T) {
-	// BYD-sized battery well between its SoC bounds
+	// a ~19kWh home battery well between its SoC bounds
 	midSocConfig := optimizer.BatteryConfig{SCapacity: 19320, SMin: 966, SMax: 18354, SInitial: 10000}
 
 	// slotHours 1 makes the per-slot Wh values map 1:1 to W
@@ -1106,7 +1106,7 @@ func TestApplyOptimizerResultEmptyMeansActuallyEmpty(t *testing.T) {
 	assert.False(t, got[0].Empty.IsZero(), "a soc of 0 must be reported empty")
 }
 
-// TestPersistControlSlotGate exercises the ADR-011 control_slots slot gate:
+// TestPersistControlSlotGate exercises the control_slots slot gate:
 // the same partial-boot-slot skip and repeat-tick dedup as persistTariffs.
 // Advancing "last persisted" backwards in place of sleeping avoids waiting on
 // wall-clock time to cross a real 15min boundary.
@@ -1186,8 +1186,8 @@ func TestPersistControlSlotPriceAbsentWhenNotCharging(t *testing.T) {
 // the real path (setOptimizerBatteryMode -> persistControlSlot) a payback
 // veto takes in production, confirming the tuple
 // (applied_mode="normal", suggested_mode="charge", veto_reason="payback")
-// is actually reachable (F4) - and that its price stays absent, since the
-// suggestion was never accepted (F4's price-gate correction).
+// is actually reachable - and that its price stays absent, since the
+// suggestion was never accepted.
 func TestPersistControlSlotPaybackVetoPreservesSuggestion(t *testing.T) {
 	// enableAutomatic must run after db.NewInstance: server/db/settings'
 	// migration reloads the in-memory settings cache from the (fresh, empty)
@@ -1224,7 +1224,7 @@ func TestPersistControlSlotPaybackVetoPreservesSuggestion(t *testing.T) {
 // counterpart to TestPersistControlSlotPaybackVetoPreservesSuggestion:
 // optimizerAutomatic is left off, so nothing is ever applied - but the
 // vetted suggestion the optimizer derived this run is real and worth
-// recording anyway. This site has no battery meter configured at all, which
+// recording anyway. The fixture has no battery meter configured at all, which
 // is the only case that still records applied_mode "unknown" (see
 // appliedBatteryMode and TestPersistControlSlotNoOverrideRecordsNormal for
 // the far more common advisory-with-a-battery case). Collecting that comparison
@@ -1263,10 +1263,10 @@ func TestPersistControlSlotAdvisoryModeRecordsSuggestion(t *testing.T) {
 	assert.InDelta(t, 0.12, *price, 0.001)
 }
 
-// TestPersistControlSlotNoOverrideRecordsNormal is the regression test for a
-// defect measured on the live database: 53 of 53 control_slots rows had
-// applied_mode "unknown", and the UI rendered "APPLIED unknown / SUGGESTED
-// INSTEAD Normal operation". site.batteryMode is only ever written by
+// TestPersistControlSlotNoOverrideRecordsNormal: without this, every row on a site
+// that never needs an override records applied_mode "unknown", which renders as
+// "APPLIED unknown / SUGGESTED INSTEAD Normal operation".
+// site.batteryMode is only ever written by
 // SetBatteryMode, which updateBatteryMode calls only when requiredBatteryMode
 // returns something other than api.BatteryUnknown, so a site that never needs
 // an override (advisory mode, no grid-charge limit, no smart-cost limit)
@@ -1298,19 +1298,17 @@ func TestPersistControlSlotNoOverrideRecordsNormal(t *testing.T) {
 	assert.Equal(t, api.BatteryNormal.String(), suggestedMode)
 	assert.False(t, modeChanged)
 
-	// applied and suggested now agree, so DecisionDeltas has nothing to
-	// price - before the fix these differed as strings ("unknown" vs
-	// "normal") while simulating identically, producing a fabricated
-	// "the veto was worth EUR 0.00" on a slot where nothing was vetoed
+	// applied and suggested must agree, so DecisionDeltas has nothing to price -
+	// differing as strings ("unknown" vs "normal") while simulating identically
+	// fabricates "the veto was worth EUR 0.00" on a slot where nothing was vetoed
 	assert.Equal(t, appliedMode, suggestedMode)
 }
 
 // TestPersistControlSlotModeChangeIgnoresOverrideRelease asserts mode_changed
 // tracks the recorded mode, not the raw enum: releasing an override
 // (api.BatteryUnknown, "no change required") on a site already running normal
-// must not flag a change the recorded row cannot show. The live table has
-// SUM(mode_changed) = 0 over all rows, which is correct for a site nothing
-// ever overrides - a real hold/charge arriving mid-slot still flags it.
+// must not flag a change the recorded row cannot show - a site nothing ever overrides
+// records no changes at all, while a real hold/charge arriving mid-slot still flags it.
 func TestPersistControlSlotModeChangeIgnoresOverrideRelease(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, metrics.SetupSchema())
@@ -1342,11 +1340,11 @@ func TestPersistControlSlotModeChangeIgnoresOverrideRelease(t *testing.T) {
 	assert.True(t, modeChanged())
 }
 
-// TestPersistOptimizerRunGate exercises the ADR-011 optimizer_runs slot gate.
+// TestPersistOptimizerRunGate exercises the optimizer_runs slot gate.
 // Only the sampled Optimal/Feasible path is deduped to one row per slot, the
 // same partial-boot-slot skip and repeat-tick dedup as persistTariffs -
 // that's the happy path, and one representative sample per slot is enough.
-// Every other status bypasses the gate and is always recorded (F2): a solver
+// Every other status bypasses the gate and is always recorded: a solver
 // going Infeasible after an already-sampled Optimal run in the same slot
 // must still leave a row, or the exact failure this table exists to catch
 // (a solver going bad for minutes at a time) would vanish whenever the
@@ -1384,7 +1382,7 @@ func TestPersistOptimizerRunGate(t *testing.T) {
 	assert.Equal(t, int64(1), countRows(), "a later Optimal run in the same slot is not a fresh sample")
 
 	// an Infeasible run right after: not dropped as a "duplicate" of the
-	// slot - this is the F2 failure mode itself. A second, real-timestamped
+	// slot - this is the failure mode itself. A second, real-timestamped
 	// Infeasible run landing its own row (rather than colliding with the
 	// first) is covered at the mechanical layer by
 	// TestPersistOptimizerRunDistinctTimestamps, where the calls are given
