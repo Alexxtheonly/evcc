@@ -202,7 +202,6 @@ export function plotLevels(layout: WaterfallLayout): number[] {
   return layout.columns.map((c) => c.level - layout.origin);
 }
 
-// --- axis scale ---------------------------------------------------------------------
 
 /** Headroom above the tallest bar so its value label has somewhere to sit. Small on
  * purpose: rounding up to the next whole-euro tick below usually adds a good deal more.
@@ -256,7 +255,6 @@ export function waterfallAxis(layout: WaterfallLayout): WaterfallAxis {
   }
 }
 
-// --- minimum rendered bar height ------------------------------------------------------
 
 /** A bar smaller than this reads as a rule, not a bar - and once the "estimated" dashed
  * outline is drawn on it, as a dotted hairline with no fill at all. */
