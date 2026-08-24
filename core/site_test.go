@@ -113,13 +113,28 @@ func TestSitePowerBatteryBufferRelaxedByForecast(t *testing.T) {
 	})
 
 	t.Run("below threshold, confident refill forecast: both relaxed", func(t *testing.T) {
+		enableAutomatic(t)
+
 		site := newSite(70, 80)
 		res := site.sitePower(state(60, refillsToday), 0, 0)
 		assert.True(t, res.batteryBuffered, "bufferSoc is enabled, forecast confirms refill")
 		assert.True(t, res.batteryStart, "bufferStartSoc is enabled, forecast confirms refill")
 	})
 
+	// no enableAutomatic: the optimizer is enabled but only advising. Relaxing a buffer
+	// threshold is control - it changes what the loadpoints draw out of the battery - so it
+	// must not happen behind the back of someone who deliberately did not switch the
+	// optimizer to automatic.
+	t.Run("advisory mode: confident refill forecast relaxes nothing", func(t *testing.T) {
+		site := newSite(70, 80)
+		res := site.sitePower(state(60, refillsToday), 0, 0)
+		assert.False(t, res.batteryBuffered, "soc 60 is below bufferSoc 70 and the optimizer is not automatic")
+		assert.False(t, res.batteryStart)
+	})
+
 	t.Run("bufferStartSoc disabled: forecast never turns it on", func(t *testing.T) {
+		enableAutomatic(t)
+
 		site := newSite(70, 0)
 		res := site.sitePower(state(60, refillsToday), 0, 0)
 		assert.True(t, res.batteryBuffered)
@@ -131,6 +146,33 @@ func TestSitePowerBatteryBufferRelaxedByForecast(t *testing.T) {
 		res := site.sitePower(state(90, nil), 0, 0)
 		assert.True(t, res.batteryBuffered)
 		assert.True(t, res.batteryStart)
+	})
+
+	// The delta against upstream, which has a plain else where this fork has
+	// "else if soc >= prioritySoc". bufferSoc must be *below* prioritySoc and the soc
+	// strictly between them for the two to disagree at all - the existing 8%/bufferSoc 80
+	// case below is false under both, because 8 > 80 is false either way.
+	t.Run("bufferSoc below prioritySoc, soc between them, idle: not buffer-eligible", func(t *testing.T) {
+		site := &Site{
+			log:            util.NewLogger("foo"),
+			batteryMeters:  []config.Device[api.Meter]{config.NewStaticDevice(config.Named{}, api.Meter(meter))},
+			prioritySoc:    50,
+			bufferSoc:      20,
+			bufferStartSoc: 20,
+		}
+
+		// soc 30: above both buffer thresholds, below prioritySoc, battery idle (Power 0,
+		// so the "charging below prioritySoc" branch does not apply either). Upstream
+		// reports true for both here; this fork withholds the battery until prioritySoc.
+		res := site.sitePower(state(30, nil), 0, 0)
+		assert.False(t, res.batteryBuffered, "30% is below prioritySoc 50 - prioritySoc outranks bufferSoc 20")
+		assert.False(t, res.batteryStart, "30% is below prioritySoc 50 - prioritySoc outranks bufferStartSoc 20")
+
+		// control: the same thresholds at a soc above prioritySoc do report true, proving
+		// the assertions above are the prioritySoc gate and not a broken fixture
+		res = site.sitePower(state(55, nil), 0, 0)
+		assert.True(t, res.batteryBuffered, "55% clears prioritySoc 50 and bufferSoc 20")
+		assert.True(t, res.batteryStart, "55% clears prioritySoc 50 and bufferStartSoc 20")
 	})
 
 	// prioritySoc 50, bufferSoc 80, battery at 8% and idle: even with a confident

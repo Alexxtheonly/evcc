@@ -16,9 +16,10 @@ import (
 // false, so gate() returns nil regardless of a live, fresh suggestion - and surplusCharge(nil,
 // ...) is false, so updatePower's priority-adjustment gate never opens. This must keep holding
 // even though setBatteryForecast/applyOptimizerResult run unconditionally (no Automatic() gate
-// of their own) whenever the optimizer is enabled and sponsored - the request-shaping commits
-// still move a live control input via batteryWillRefillToday in advisory mode, but the surplus
-// gate specifically stays closed.
+// of their own) whenever the optimizer is enabled and sponsored: the forecast is still
+// computed in advisory mode, it just no longer reaches a control input - sitePower's
+// batteryWillRefillToday relaxation is Automatic()-gated too now, and the surplus gate here
+// stays closed regardless.
 func TestGateInertWithoutAutomatic(t *testing.T) {
 	c := clock.NewMock()
 	c.Set(time.Now())

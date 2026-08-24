@@ -1240,12 +1240,17 @@ func (site *Site) sitePower(state siteState, totalChargePower, flexiblePower flo
 			batteryPower = 0
 			excessDCPower = 0
 		} else if state.battery.Soc >= prioritySoc {
-			// buffer/refill relaxation only ever applies at or above prioritySoc - a
-			// battery below prioritySoc that merely isn't charging right now (idle,
-			// or even discharging) must not be treated as buffer-eligible just
-			// because it also fails the "charging below prioritySoc" branch above.
-			// batteryBuffered/batteryStart default to false for that case, same as
-			// the disabled-threshold case below.
+			// This condition is a deviation from upstream, which has a plain else
+			// here, and it is the one part of this block that can be *stricter* than
+			// the configured thresholds: a battery below prioritySoc that merely
+			// isn't charging right now (idle, or even discharging) must not be
+			// treated as buffer-eligible just because it also fails the "charging
+			// below prioritySoc" branch above. With bufferSoc < prioritySoc and a
+			// battery sitting between the two, upstream reports
+			// batteryBuffered/batteryStart true and this reports false - deliberately,
+			// since prioritySoc is what keeps a loadpoint off a nearly empty battery.
+			// Everything inside the branch only ever relaxes; the narrowing lives
+			// here, in the branch condition.
 
 			// if battery is above bufferSoc allow using it for charging
 			batteryBuffered = bufferSoc > 0 && state.battery.Soc > bufferSoc
@@ -1259,10 +1264,17 @@ func (site *Site) sitePower(state siteState, totalChargePower, flexiblePower flo
 			// costs today's charging, not tomorrow's buffer. A disabled threshold
 			// (0, "never buffer/start from battery") is never turned on by this -
 			// only a threshold the user did enable is relaxed, and only in the
-			// permissive direction: this can only make batteryBuffered/batteryStart
-			// true, never false, so no combination of forecast state ever produces a
-			// stricter answer than the static configuration on its own would.
-			if refills := batteryWillRefillToday(state.battery.Forecast, time.Now()); refills {
+			// permissive direction: the forecast can only make
+			// batteryBuffered/batteryStart true, never false, so no forecast state
+			// makes this branch answer more strictly than the static thresholds
+			// alone would. (The branch condition above is the separate, stricter
+			// deviation - do not read this sentence as covering it.)
+			//
+			// Gated on Automatic(): relaxing a buffer threshold changes how much a
+			// loadpoint actually draws out of the home battery, so it is control,
+			// not advice. Someone running the experimental optimizer for suggestions
+			// only keeps exactly the thresholds they configured.
+			if site.Automatic() && batteryWillRefillToday(state.battery.Forecast, time.Now()) {
 				if bufferSoc > 0 && !batteryBuffered {
 					site.log.DEBUG.Printf("battery buffer relaxed: forecast to refill by end of day")
 					batteryBuffered = true
