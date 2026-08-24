@@ -1223,7 +1223,7 @@
       "coverageChainDiverges": "The diagram is computed over {pct} of slots - fewer than the headline figures, because it also needs battery and vehicle data the grid-only figure doesn't.",
       "coverageChainDivergesShort": "diagram over {pct}",
       "coverageExcluded": "Excluded slots are dropped, never scaled up to cover the gap.",
-      "coverageShort": "computed over {pct} of slots ({valid} of {total})",
+      "coverageShort": "{pct} of slots ({valid} of {total})",
       "decisions": {
         "applied": "Applied",
         "delta": "Slot-local delta",
@@ -1261,7 +1261,7 @@
       },
       "estimated": "estimated",
       "estimatedCaption": "battery and control are estimated",
-      "evTimingShort": "Moving a car charge to a cheaper hour shows as nothing here - every measure prices energy at the moment it was drawn.",
+      "evTimingShort": "Moving a car charge to a cheaper hour counts as nothing here.",
       "headline": {
         "label": "Settlement",
         "periodAverage": "period average",

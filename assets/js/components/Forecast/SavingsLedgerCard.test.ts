@@ -162,7 +162,10 @@ describe("SavingsLedgerCard presentation", () => {
     // ADR-011 rules 3 and 7, in one line under the diagram
     const caption = wrapper.find('[data-testid="savings-ledger-caption"]').text();
     expect(caption).toContain("battery and control are estimated");
-    expect(caption).toContain("computed over 43.8% of slots (84 of 192)");
+    // the valid/total parenthetical stays: LedgerCoverage.fraction is 0 for two
+    // different reasons (no slots at all vs. no valid slots), and only the counts
+    // disambiguate them
+    expect(caption).toContain("43.8% of slots (84 of 192)");
   });
 
   test("names a loss a loss and never clamps it to zero", async () => {

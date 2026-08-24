@@ -497,8 +497,13 @@ describe("SavingsLedgerWaterfall chart option", () => {
     // and the fact that an overspend column is NOT drawn in its normal palette colour.
     const styles = option().series[1].data.map((d: any) => d.itemStyle);
     expect(styles[1].borderType).toBeUndefined(); // solar is measured
-    expect(styles[2].borderType).toBe("dashed");
-    expect(styles[3].borderType).toBe("dashed");
+    expect(styles[2].borderType).toBe("dashed"); // battery: EUR 2.52, tall enough
+    // Control is EUR 0.41 on an EUR 8 axis - about 7px tall. A 1px dash on all four
+    // sides leaves almost no fill, and the bar reads as a dotted rule rather than a
+    // bar (seen in the browser), so short estimated bars are drawn solid. The
+    // "estimated" marker is still on the axis label, which is what ADR-011 rule 7
+    // actually requires; the outline is the redundant second channel.
+    expect(styles[3].borderType).toBeUndefined();
     expect(styles[2].color).toBe(batteryColor(0));
     expect(styles[3].color).not.toBe(batteryColor(1)); // control cost money here
 
@@ -508,7 +513,11 @@ describe("SavingsLedgerWaterfall chart option", () => {
         c.label === "Control" ? { label: "Control" as const, settled: settled(1) } : c
       ),
     };
-    expect(option("periodAverage", saved).series[1].data[3].itemStyle.color).toBe(batteryColor(1));
+    const savedStyle = option("periodAverage", saved).series[1].data[3].itemStyle;
+    expect(savedStyle.color).toBe(batteryColor(1));
+    // EUR 1.00 clears the height threshold, so this one keeps its dashed outline -
+    // the gate is the bar's rendered height, not "control is never dashed"
+    expect(savedStyle.borderType).toBe("dashed");
   });
 
   it("shows the routing/timing split only under the per-slot headline", () => {

@@ -45,6 +45,9 @@ const GRID_BOTTOM = 48;
 const PLOT_HEIGHT = CHART_HEIGHT - GRID_TOP - GRID_BOTTOM;
 // wide viewports would otherwise draw five fat slabs
 const BAR_MAX_WIDTH = 64;
+// below this rendered height an "estimated" bar is drawn solid instead of dash-outlined -
+// see itemStyle() for why
+const DASHED_OUTLINE_MIN_PX = 14;
 
 // A contribution's effect on the bill, as a direction rather than a sign: the strip under
 // the chart says "saved EUR 6.06", so a bare "-EUR 5.88" on the bar 40px above it can be
@@ -177,7 +180,10 @@ export default defineComponent({
 						},
 						data: cols.map((c) => ({
 							value: plotSpan(c, floor),
-							itemStyle: this.itemStyle(c),
+							itemStyle: this.itemStyle(
+								c,
+								axis.max > 0 ? (plotSpan(c, floor) / axis.max) * PLOT_HEIGHT : 0
+							),
 							// per item, not per series: the label must never inherit the
 							// bar's own colour (a dim battery green on a dark card is
 							// barely legible), and an overspend keeps its danger colour.
@@ -263,17 +269,23 @@ export default defineComponent({
 			return colors.text || "currentColor";
 		},
 		// estimated bars carry a dashed outline as well as their axis label, so the
-		// distinction survives a greyscale filter and doesn't rest on colour alone. The
-		// outline is deliberately thin: at 1.5px it swallowed the whole fill of a small
-		// bar, which then read as a dotted hairline rather than a bar.
+		// distinction survives a greyscale filter and doesn't rest on colour alone.
 		// (itemStyle.decal is deliberately not used - the decal/aria machinery isn't
 		// registered in echarts.ts.)
-		itemStyle(column: WaterfallColumn): Record<string, unknown> {
+		//
+		// heightPx gates the outline: a 1px dash on all four sides of a short bar leaves
+		// almost no fill between them, and the bar reads as a dotted rule rather than a
+		// bar - observed in the browser on this site's real Control contribution (EUR 0.71
+		// on a EUR 15 axis, ~7px tall). Below the threshold the bar is drawn solid; ADR-011
+		// rule 7 is still satisfied because the "estimated" marker lives in the axis label,
+		// which is the rule's actual requirement - the outline is the redundant second
+		// channel, and a channel that destroys the bar is worse than no second channel.
+		itemStyle(column: WaterfallColumn, heightPx: number): Record<string, unknown> {
 			const style: Record<string, unknown> = {
 				color: this.columnColor(column),
 				borderRadius: 3,
 			};
-			if (column.estimated) {
+			if (column.estimated && heightPx >= DASHED_OUTLINE_MIN_PX) {
 				style["borderType"] = "dashed";
 				style["borderColor"] = colors.text || "";
 				style["borderWidth"] = 1;
