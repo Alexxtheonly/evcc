@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -262,9 +263,6 @@ func TestQueryTariffSlotsBindsFeedIn(t *testing.T) {
 	require.InDelta(t, 0.08, *got.FeedIn, 1e-9, "FeedIn must bind from the \"feedin\" column, not stay at its zero value")
 }
 
-// ptr is a local helper for the *float64 prices these tests deal in.
-func ptr(v float64) *float64 { return &v }
-
 // seedFeedInWitnesses records n feed-in-only tariff rows at price, placed after the
 // windows these tests query. feedInFallback corroborates against the whole tariffs
 // table (see minFeedInWitnessSlots), so a test that wants the fallback to engage has
@@ -302,13 +300,13 @@ func TestFeedInFallbackGuard(t *testing.T) {
 		{
 			desc:   "every recorded price equals the configured one: substitute",
 			seed:   func(t *testing.T) { seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots) },
-			static: ptr(0),
-			want:   ptr(0),
+			static: lo.ToPtr(0.0),
+			want:   lo.ToPtr(0.0),
 		},
 		{
 			desc:   "recorded price differs from the configured one: refuse",
 			seed:   func(t *testing.T) { seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots) },
-			static: ptr(0.0786),
+			static: lo.ToPtr(0.0786),
 			want:   nil,
 		},
 		{
@@ -317,19 +315,19 @@ func TestFeedInFallbackGuard(t *testing.T) {
 				seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots)
 				seedFeedInWitnesses(t, base.Add(48*time.Hour), 0.0786, 1)
 			},
-			static: ptr(0),
+			static: lo.ToPtr(0.0),
 			want:   nil,
 		},
 		{
 			desc:   "nothing recorded at all: nothing corroborates the value, refuse",
 			seed:   func(t *testing.T) {},
-			static: ptr(0),
+			static: lo.ToPtr(0.0),
 			want:   nil,
 		},
 		{
 			desc:   "a record too thin to be a history of the rate: refuse",
 			seed:   func(t *testing.T) { seedFeedInWitnesses(t, base, 0, minFeedInWitnessSlots-1) },
-			static: ptr(0),
+			static: lo.ToPtr(0.0),
 			want:   nil,
 		},
 	} {
@@ -385,7 +383,7 @@ func TestFeedInFallbackCorroboratesWholeHistory(t *testing.T) {
 	// outside the window, before it: the rate the site actually recorded back then
 	seedFeedInWitnesses(t, base.Add(-96*time.Hour), 0.0786, 1)
 
-	set, err := buildLedgerSlots(context.Background(), base, base.Add(30*time.Minute), false, false, ptr(f))
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(30*time.Minute), false, false, lo.ToPtr(f))
 	require.NoError(t, err)
 	require.Len(t, set.Slots, 1,
 		"a feed-in rate change anywhere in the record must refuse the substitution, not only one inside the requested window")
@@ -434,7 +432,7 @@ func TestBuildLedgerSlotsStaticFeedInFallback(t *testing.T) {
 
 	t.Run("static tariff matching the record: the unpriced slots are included", func(t *testing.T) {
 		base := seed(t)
-		set, err := buildLedgerSlots(context.Background(), base, base.Add(time.Hour), false, false, ptr(0))
+		set, err := buildLedgerSlots(context.Background(), base, base.Add(time.Hour), false, false, lo.ToPtr(0.0))
 		require.NoError(t, err)
 		require.Len(t, set.Slots, 4)
 		require.Equal(t, 2, set.FeedInFallbackSlots)
@@ -446,7 +444,7 @@ func TestBuildLedgerSlotsStaticFeedInFallback(t *testing.T) {
 
 	t.Run("static tariff differing from the record: still excluded", func(t *testing.T) {
 		base := seed(t)
-		set, err := buildLedgerSlots(context.Background(), base, base.Add(time.Hour), false, false, ptr(0.0786))
+		set, err := buildLedgerSlots(context.Background(), base, base.Add(time.Hour), false, false, lo.ToPtr(0.0786))
 		require.NoError(t, err)
 		require.Len(t, set.Slots, 2, "the configured rate changed since those slots were recorded - substituting it would reprice history")
 		require.Zero(t, set.FeedInFallbackSlots)
@@ -512,7 +510,7 @@ func TestFeedInFallbackCountExcludesDroppedSlots(t *testing.T) {
 	require.NoError(t, persist(pv, ts, 0.5, 0, nil, false, false))
 	require.NoError(t, PersistTariffs(ts, &g, nil, nil, nil))
 
-	set, err := buildLedgerSlots(context.Background(), base, base.Add(45*time.Minute), false, false, ptr(0))
+	set, err := buildLedgerSlots(context.Background(), base, base.Add(45*time.Minute), false, false, lo.ToPtr(0.0))
 	require.NoError(t, err)
 	require.Len(t, set.Slots, 2)
 	require.Equal(t, 1, set.FeedInFallbackSlots, "a slot dropped for an unrelated missing reading is not a slot the substitution produced")

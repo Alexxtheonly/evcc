@@ -14,7 +14,7 @@ import (
 
 // seedBatteryCalibration writes a clean charge-only run followed by a clean
 // discharge-only run, both at 1.0kWh AC per 15min slot, against a true capacity of
-// 10kWh and batteryEta (0.9). It exists purely so deriveBatteryPhysics has enough
+// 10kWh and BatteryEta (0.9). It exists purely so deriveBatteryPhysics has enough
 // single-direction SoC evidence to derive a capacity in tests, without depending on
 // the package's real accumulator/collector machinery.
 //
@@ -60,11 +60,46 @@ func TestDeriveBatteryPhysics(t *testing.T) {
 	require.NoError(t, err)
 
 	require.InDelta(t, 10.0, phys.CapacityKWh, 1e-6)
-	require.Equal(t, batteryEta, phys.EtaC)
-	require.Equal(t, batteryEta, phys.EtaD)
+	require.Equal(t, BatteryEta, phys.EtaC)
+	require.Equal(t, BatteryEta, phys.EtaD)
 	require.InDelta(t, 1.0, phys.MaxChargeKWh, 1e-9)
 	require.InDelta(t, 1.0, phys.MaxDischargeKWh, 1e-9)
 	require.NotEmpty(t, phys.CapacitySource)
+}
+
+// TestDeriveBatteryPhysicsCacheIsKeyedToTheDatabase covers the CACHED entry point -
+// every other test here calls deriveBatteryPhysicsUncached or happens to run first, so
+// the cache itself had no coverage at all. util.Cached has no cache key of its own, so
+// the db.Instance a value was derived from is tracked alongside it; without that, the
+// second site here would be served the first one's battery for five minutes.
+func TestDeriveBatteryPhysicsCacheIsKeyedToTheDatabase(t *testing.T) {
+	loc := time.Now().Location()
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	seedBatteryCalibration(t, mustCreateEntity(t, Battery, "bat1"), start)
+
+	first, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+	require.InDelta(t, 10.0, first.CapacityKWh, 1e-6)
+
+	// same database, immediately: served from the cache, same answer
+	again, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+
+	// a different database with a different battery, well inside the TTL
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	bat := mustCreateEntity(t, Battery, "bat1")
+	capacity := 42.0
+	require.NoError(t, db.Instance.Model(new(entity)).Where("id = ?", bat.Id).Update("capacity_kwh", capacity).Error)
+	seedBatteryCalibration(t, bat, start)
+
+	second, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+	require.InDelta(t, 42.0, second.CapacityKWh, 1e-6, "the previous database's battery must not be served to this one")
 }
 
 func TestDeriveBatteryPhysicsRefusesWithoutEnoughHistory(t *testing.T) {
@@ -94,9 +129,9 @@ func TestPercentileIgnoresSingleOutlier(t *testing.T) {
 	}
 	values = append(values, 40.0) // one glitched/grid-forced slot
 
-	require.InDelta(t, 2.0, percentile(values, rateLimitPercentile), 1e-9,
+	require.InDelta(t, 2.0, Percentile(values, rateLimitPercentile), 1e-9,
 		"the p99 ceiling must come from the 99 normal readings, not the single outlier")
-	require.InDelta(t, 40.0, percentile(values, 1.0), 1e-9, "p100 (the max) should still surface the outlier")
+	require.InDelta(t, 40.0, Percentile(values, 1.0), 1e-9, "p100 (the max) should still surface the outlier")
 }
 
 // TestDeriveBatteryPhysicsRateLimitIgnoresOutlier is the same fix at the
@@ -187,8 +222,8 @@ func TestDeriveBatteryCapacityFromHistoryRampThenStop(t *testing.T) {
 	// row1: 2.5kWh charge -> causes a 22.5pp rise by row2 (2.5*0.9/10)
 	// row2: stop, no further movement
 	soc0 := 0.20
-	soc1 := soc0 + 0.5*batteryEta/capacity
-	soc2 := soc1 + 2.5*batteryEta/capacity
+	soc1 := soc0 + 0.5*BatteryEta/capacity
+	soc2 := soc1 + 2.5*BatteryEta/capacity
 
 	base := time.Unix(1_700_000_000, 0)
 	rows := []batteryHistoryRow{
@@ -220,10 +255,10 @@ func TestDeriveBatteryCapacityFromHistoryRefusesOnDisagreement(t *testing.T) {
 	// direction, evidently the same battery, and yet an honest 2x disagreement.
 	soc := []float64{0.20}
 	for range 3 {
-		soc = append(soc, soc[len(soc)-1]+1.0*batteryEta/10.0)
+		soc = append(soc, soc[len(soc)-1]+1.0*BatteryEta/10.0)
 	}
 	for range 4 {
-		soc = append(soc, soc[len(soc)-1]-1.0/batteryEta/20.0)
+		soc = append(soc, soc[len(soc)-1]-1.0/BatteryEta/20.0)
 	}
 
 	rows := make([]batteryHistoryRow, len(soc))
@@ -244,35 +279,39 @@ func TestDeriveBatteryCapacityFromHistoryRefusesOnDisagreement(t *testing.T) {
 func TestSimulateSlotStepModes(t *testing.T) {
 	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0, MaxChargeKWh: 100, MaxDischargeKWh: 100}
 
+	// each subtest pins the new SoC and the grid flow, which is everything the ledger
+	// prices. The AC-side charge/discharge energy is not returned by design - it is
+	// the SoC delta over EtaC / EtaD, so asserting it separately restated the SoC
+	// assertion already in the same subtest.
 	t.Run("hold never moves energy", func(t *testing.T) {
-		soc, flow, charge, discharge := simulateSlotStep(batteryModeHold, 2, 5, 5, phys)
-		require.InDelta(t, 5, soc, 1e-9)
+		soc, flow, ok := simulateSlotStep(batteryModeHold, 2, 5, 5, phys)
+		require.True(t, ok)
+		require.InDelta(t, 5, soc, 1e-9) // unchanged: neither charged nor discharged
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
 		require.InDelta(t, 3, flow.ExportKWh, 1e-9) // 5-2 surplus goes straight to export
-		require.Zero(t, charge)
-		require.Zero(t, discharge)
 	})
 
 	t.Run("normal charges from surplus only", func(t *testing.T) {
-		soc, flow, charge, discharge := simulateSlotStep(batteryModeNormal, 1, 3, 5, phys)
+		soc, flow, ok := simulateSlotStep(batteryModeNormal, 1, 3, 5, phys)
+		require.True(t, ok)
 		require.InDelta(t, 5+2*0.9, soc, 1e-9) // 2kWh surplus, all absorbed (headroom is 5kWh)
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
 		require.InDelta(t, 0, flow.ExportKWh, 1e-9)
-		require.InDelta(t, 2, charge, 1e-9)
-		require.Zero(t, discharge)
 	})
 
 	t.Run("normal discharges to cover a deficit only", func(t *testing.T) {
-		soc, flow, charge, discharge := simulateSlotStep(batteryModeNormal, 4, 1, 5, phys)
-		// deficit 3kWh, available 5kWh*0.9=4.5kWh AC deliverable, so fully covered
+		soc, flow, ok := simulateSlotStep(batteryModeNormal, 4, 1, 5, phys)
+		require.True(t, ok)
+		// deficit 3kWh, available 5kWh*0.9=4.5kWh AC deliverable, so fully covered:
+		// the pack gives up 3/0.9kWh DC to deliver it
 		require.InDelta(t, 5-3/0.9, soc, 1e-9)
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
-		require.Zero(t, charge)
-		require.InDelta(t, 3, discharge, 1e-9)
+		require.InDelta(t, 0, flow.ExportKWh, 1e-9)
 	})
 
 	t.Run("charge forces grid import beyond surplus", func(t *testing.T) {
-		soc, flow, charge, discharge := simulateSlotStep(batteryModeCharge, 1, 0, 0, phys)
+		soc, flow, ok := simulateSlotStep(batteryModeCharge, 1, 0, 0, phys)
+		require.True(t, ok)
 		// no surplus at all, but charge mode still fills headroom (10kWh) from grid -
 		// the AC-side charge is headroom/eta so that, after eta, the DC store lands
 		// exactly at capacity; the 1kWh deficit is still bought separately
@@ -280,15 +319,58 @@ func TestSimulateSlotStepModes(t *testing.T) {
 		require.InDelta(t, 10.0, soc, 1e-9)
 		require.InDelta(t, 1+wantChargeAC, flow.ImportKWh, 1e-6)
 		require.InDelta(t, 0, flow.ExportKWh, 1e-9)
-		require.InDelta(t, wantChargeAC, charge, 1e-6)
-		require.Zero(t, discharge)
 	})
 
 	t.Run("holdcharge never draws from the grid", func(t *testing.T) {
-		_, flow, charge, discharge := simulateSlotStep(batteryModeHoldCharge, 1, 0, 0, phys)
+		soc, flow, ok := simulateSlotStep(batteryModeHoldCharge, 1, 0, 0, phys)
+		require.True(t, ok)
 		require.InDelta(t, 1, flow.ImportKWh, 1e-9) // the deficit is bought, nothing more
-		require.Zero(t, charge)
-		require.Zero(t, discharge)
+		require.InDelta(t, 0, soc, 1e-9)            // no surplus to absorb, and it never discharges
+	})
+
+	// the subtest above runs holdcharge with pv=0, so its charge half never executes -
+	// stubbing out the SoC update left the whole package green. holdcharge is the mode
+	// the optimizer actuates, so its absorbing half is pinned here with real surplus.
+	t.Run("holdcharge absorbs surplus without importing", func(t *testing.T) {
+		soc, flow, ok := simulateSlotStep(batteryModeHoldCharge, 1, 4, 5, phys)
+		require.True(t, ok)
+		require.InDelta(t, 7.7, soc, 1e-9)          // 3 kWh surplus absorbed at EtaC 0.9
+		require.InDelta(t, 0, flow.ImportKWh, 1e-9) // the surplus-only charge never buys
+		require.InDelta(t, 0, flow.ExportKWh, 1e-9) // and it took all of it
+	})
+
+	// an unrecognised mode used to land in the same branch as normal and be priced as
+	// if it were normal. Two DIFFERENT unrecognised modes therefore produced identical
+	// flows and a delta of exactly zero - "we do not understand this decision" rendered
+	// as "this decision cost nothing". Refusing is the only honest answer.
+	t.Run("an unmodelled mode is refused, not replayed as normal", func(t *testing.T) {
+		soc, flow, ok := simulateSlotStep("supercharge", 1, 3, 5, phys)
+		require.False(t, ok)
+		require.Zero(t, soc)
+		require.Equal(t, worldFlow{}, flow)
+
+		// and it must NOT coincide with what normal would have produced, which is
+		// exactly how the old default branch hid itself. An empty pack with a 4kWh
+		// deficit is the clearest separator: normal buys the deficit, the refusal
+		// returns a zero flow that must never reach settleFlows.
+		_, normalFlow, normalOk := simulateSlotStep(batteryModeNormal, 4, 0, 0, phys)
+		require.True(t, normalOk)
+		require.InDelta(t, 4, normalFlow.ImportKWh, 1e-9)
+
+		_, refusedFlow, refusedOk := simulateSlotStep("supercharge", 4, 0, 0, phys)
+		require.False(t, refusedOk)
+		require.NotEqual(t, normalFlow, refusedFlow)
+	})
+
+	// callers fold ""/"unknown" to normal before calling (see effectiveMode); this
+	// function itself models the four real modes and nothing else
+	t.Run("the absence spellings are the callers' job to fold, not this function's", func(t *testing.T) {
+		for _, mode := range []string{"", batteryModeUnknown} {
+			_, _, ok := simulateSlotStep(mode, 1, 3, 5, phys)
+			require.False(t, ok, mode)
+		}
+		require.Equal(t, batteryModeNormal, effectiveMode(""))
+		require.Equal(t, batteryModeNormal, effectiveMode(batteryModeUnknown))
 	})
 }
 
@@ -366,6 +448,47 @@ func TestComputeW2CarriesMeasuredMovementAcrossGap(t *testing.T) {
 	require.InDelta(t, 1.25, flows[1].ImportKWh, 1e-9)
 	require.Equal(t, 1, drift.Gaps)
 	require.InDelta(t, 2.0, drift.CarriedKWh, 1e-9, "exactly the measured pack's movement across the gap, nothing else")
+}
+
+// TestComputeW2BoundsCarriedStateToFloorAndCapacity pins the min(max(...)) on the
+// gap carry. It is the one part of the carry that can absorb energy silently: a carry
+// that would drive the simulated pack below its floor or above its capacity is clamped,
+// and whatever the clamp absorbs is what W2 never has to buy.
+//
+// The fixture needs THREE gaps because the first one's carry lands inside
+// [floor, capacity] and so pins nothing - gap two drives it below the floor
+// (simulated 1.22kWh, carry -2.17kWh) and gap three above capacity (0.5 + 9.6kWh), so
+// both directions are exercised. Unbounded, the three carries would be -2.583, -3.194
+// and +9.600 (sum +3.823); bounded at [0.5, 10] they are -2.583, -0.720 and +9.500.
+//
+// Ported verbatim from the LEDGER_DB harness's TestW2VariantMatchesProduction, which
+// asserted this against production computeW2 alongside a parameterised twin of it. The
+// twin and its sync test are gone; this half was real coverage and is kept.
+func TestComputeW2BoundsCarriedStateToFloorAndCapacity(t *testing.T) {
+	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0.05, MaxChargeKWh: 2, MaxDischargeKWh: 2}
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 4, 23, 30, 0, 0, loc)
+	socs := []float64{0.40, 0.55, 0.50, 0.20, 0.30, 0.02, 0.98}
+	starts := []time.Time{base, base.Add(15 * time.Minute), base.Add(30 * time.Minute), base.Add(90 * time.Minute), base.Add(105 * time.Minute), base.Add(165 * time.Minute), base.Add(225 * time.Minute)}
+	loads := []float64{0.5, 0, 1.5, 3.0, 0.2, 0, 0}
+	pvs := []float64{0, 2.5, 0, 0, 1.0, 0, 0}
+
+	slots := make([]slotData, len(socs))
+	for i := range socs {
+		soc := socs[i]
+		slots[i] = slotData{
+			Start: starts[i], HomeKWh: loads[i], PVKWh: pvs[i], BatterySocFrac: &soc,
+			BatteryChargeKWh: pvs[i] / 2, BatteryDischargeKWh: loads[i] / 4,
+			PriceGrid: 0.30, PriceFeedIn: 0.05,
+		}
+	}
+
+	_, drift, err := computeW2(slots, phys)
+	require.NoError(t, err)
+
+	require.Equal(t, 3, drift.Gaps)
+	require.InDelta(t, 6.197, drift.CarriedKWh, 1e-3, "unbounded this is +3.823 - the bound must still bind in both directions")
 }
 
 func TestComputeW2RefusesOnMissingSoc(t *testing.T) {
@@ -927,4 +1050,51 @@ func TestBatteryFloorFallsBackWhenOnlyOneBatteryReportsALimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, floorSourceConfigured, phys.FloorSource)
 	require.InDelta(t, 0.10, phys.FloorFrac, 1e-9)
+}
+
+// TestDeriveBatteryPhysicsDoesNotCacheACallersCancellation pins the one thing the
+// cache must not do: a client that disconnects mid-query produces a context error
+// that describes the CALLER, not the database. Caching it would serve that error to
+// every other caller for the whole back-off window.
+func TestDeriveBatteryPhysicsDoesNotCacheACallersCancellation(t *testing.T) {
+	loc := time.Now().Location()
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	seedBatteryCalibration(t, mustCreateEntity(t, Battery, "bat1"), start)
+
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := deriveBatteryPhysics(gone)
+	require.Error(t, err, "a cancelled caller must not be served a battery")
+
+	// a healthy caller, immediately afterwards and well inside the TTL
+	phys, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err, "the previous caller's cancellation must not have been cached")
+	require.InDelta(t, 10.0, phys.CapacityKWh, 1e-6)
+}
+
+// TestDeriveBatteryPhysicsStillCachesARealFailure is the other half of
+// TestDeriveBatteryPhysicsDoesNotCacheACallersCancellation. Only a CALLER's
+// cancellation is dropped; a genuine failure must still be cached, or util.Cached's
+// back-off is dead and every /api/savingsledger request re-runs a full history scan
+// against the single-connection SQLite instance. Widening the condition to a bare
+// `err != nil` passes every other test in this package - this one is the fence.
+func TestDeriveBatteryPhysicsStillCachesARealFailure(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	// no battery recorded yet: a real failure, nothing to do with any context
+	_, err := deriveBatteryPhysics(context.Background())
+	require.Error(t, err)
+
+	// give the same database a battery, without swapping db.Instance (which would
+	// legitimately reset the cache - see the keyed-to-the-database test above)
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, mustCreateEntity(t, Battery, "bat1"), time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	_, err = deriveBatteryPhysics(context.Background())
+	require.Error(t, err, "a real failure stays cached for the back-off window - only a caller's cancellation is dropped")
 }

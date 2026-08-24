@@ -23,8 +23,8 @@ import (
 //
 // SlotFlowDeltaEUR is nil - never 0 - when it isn't computable: no veto happened
 // (nothing to compare), the slot fell outside the ledger's valid slot set (see
-// Coverage), or the site has no battery to simulate against. ADR-011 rule 3: absence
-// is never a sentinel.
+// Coverage), the site has no battery to simulate against, or either mode on the row is
+// one simulateSlotStep does not model. ADR-011 rule 3: absence is never a sentinel.
 //
 // This field was named HindsightDeltaEUR and is not true hindsight: it simulates
 // applied vs. suggested for the ONE vetoed slot only, at that slot's own starting
@@ -132,22 +132,35 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 		// no suggestion recorded means there is no rejected alternative to price -
 		// distinct from a suggestion that happened to match what was applied, which
 		// folds to no delta below.
-		if phys != nil && suggested != nil && effectiveMode(r.AppliedMode) != effectiveMode(*suggested) {
-			if s, ok := bySlot[r.Timestamp]; ok && s.BatterySocFrac != nil {
+		//
+		// The comparison and the two simulations run on the SAME folded strings.
+		// They used to differ - gate on effectiveMode, simulate on the raw column -
+		// which only agreed because simulateSlotStep's old default branch happened to
+		// replay an unrecognised mode as normal, the exact silent pricing its ok
+		// return now refuses.
+		if phys != nil && suggested != nil {
+			applied, rejected := effectiveMode(r.AppliedMode), effectiveMode(*suggested)
+
+			if s, found := bySlot[r.Timestamp]; found && applied != rejected && s.BatterySocFrac != nil {
 				socKWh := *s.BatterySocFrac * phys.CapacityKWh
 				load := s.modelledLoadKWh()
 
-				_, appliedFlow, _, _ := simulateSlotStep(r.AppliedMode, load, s.PVKWh, socKWh, *phys)
-				_, rejectedFlow, _, _ := simulateSlotStep(*suggested, load, s.PVKWh, socKWh, *phys)
+				_, appliedFlow, appliedOk := simulateSlotStep(applied, load, s.PVKWh, socKWh, *phys)
+				_, rejectedFlow, rejectedOk := simulateSlotStep(rejected, load, s.PVKWh, socKWh, *phys)
 
-				appliedCost := appliedFlow.ImportKWh*s.PriceGrid - appliedFlow.ExportKWh*s.PriceFeedIn
-				rejectedCost := rejectedFlow.ImportKWh*s.PriceGrid - rejectedFlow.ExportKWh*s.PriceFeedIn
+				// a mode neither this replay nor anything else in the package
+				// models leaves SlotFlowDeltaEUR nil: "not understood" is an
+				// absence, and ADR-011 rule 3 forbids spelling it as a figure.
+				if appliedOk && rejectedOk {
+					appliedCost := appliedFlow.ImportKWh*s.PriceGrid - appliedFlow.ExportKWh*s.PriceFeedIn
+					rejectedCost := rejectedFlow.ImportKWh*s.PriceGrid - rejectedFlow.ExportKWh*s.PriceFeedIn
 
-				// positive: the applied mode cost more than the rejected
-				// alternative would have, WITHIN THIS SLOT ONLY - see
-				// SlotFlowDeltaEUR's doc comment for why this is not hindsight.
-				delta := appliedCost - rejectedCost
-				dr.SlotFlowDeltaEUR = &delta
+					// positive: the applied mode cost more than the rejected
+					// alternative would have, WITHIN THIS SLOT ONLY - see
+					// SlotFlowDeltaEUR's doc comment for why this is not hindsight.
+					delta := appliedCost - rejectedCost
+					dr.SlotFlowDeltaEUR = &delta
+				}
 			}
 		}
 

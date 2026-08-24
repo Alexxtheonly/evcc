@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"errors"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -45,15 +44,14 @@ type controlSlot struct {
 	// both: the suggestion that was rejected, and why.
 	//
 	// Nil when no run produced a suggestion at all - the same reason Price is a
-	// pointer, one field down. It used to be api.BatteryMode.String(), and
-	// api.BatteryUnknown stringifies to "unknown": the identical token written
-	// after clearSuggestions() fires on a failed run, and the one a site with no
-	// controllable battery produces. On this site's own database that made 35 of
-	// 57 rows (62%) indistinguishable from deliberate decisions, all with
-	// health_ok = 1. ADR-011 rule 3: absence is never a sentinel.
+	// pointer, one field down. A mode string can never carry that absence:
+	// api.BatteryUnknown stringifies to "unknown", the identical token
+	// clearSuggestions() writes after a failed run and the one a site with no
+	// controllable battery produces, so the spelling cannot distinguish a
+	// decision from silence. ADR-011 rule 3: absence is never a sentinel.
 	//
-	// Rows written before this was nullable still carry the literal "unknown"
-	// string; that legacy value is decoded back to nil on read (see
+	// Rows written while this column was not nullable still carry the literal
+	// "unknown" string; that legacy value is decoded back to nil on read (see
 	// decodeSuggestedMode) rather than migrated, so a historical row is never
 	// rewritten to say something it did not say.
 	SuggestedMode *string `gorm:"column:suggested_mode"`
@@ -119,10 +117,5 @@ func MarkControlSlotModeChanged(ts time.Time) error {
 // endpoints only ever covered energy and tariffs before this - this closes
 // that gap for control_slots.
 func DeleteControlSlots(from, to time.Time) (int64, error) {
-	if from.IsZero() || to.IsZero() {
-		return 0, errors.New("missing from/to")
-	}
-
-	res := db.Instance.Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Delete(new(controlSlot))
-	return res.RowsAffected, res.Error
+	return deleteRange[controlSlot](from, to)
 }

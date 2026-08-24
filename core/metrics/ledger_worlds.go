@@ -28,6 +28,7 @@ import (
 
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
+	"github.com/evcc-io/evcc/util"
 	"gorm.io/gorm"
 )
 
@@ -42,17 +43,15 @@ const (
 	batteryModeHoldCharge = "holdcharge"
 )
 
-// batteryEta is the round-trip-efficiency building block this package falls back to
+// BatteryEta is the round-trip-efficiency building block this package falls back to
 // when the data can't defensibly support a derived one (see deriveBatteryPhysics).
 // Used one-way (charge and discharge each apply it once), matching how
 // core/site_optimizer.go's own eta applies eta*eta for a round trip.
-const batteryEta = 0.9
-
-// BatteryEta is batteryEta, exported so core/site_optimizer.go's `eta` constant can be
-// defined as metrics.BatteryEta instead of an independently-typed 0.9 that could drift
-// from this one with nothing to catch it - core already imports core/metrics (the
-// reverse import would cycle), so this is a same-value const, not a duplicate.
-const BatteryEta = batteryEta
+//
+// Exported so core/site_optimizer.go's `eta` can be defined as metrics.BatteryEta
+// instead of an independently-typed 0.9 that could drift from this one with nothing to
+// catch it - core already imports core/metrics (the reverse import would cycle).
+const BatteryEta = 0.9
 
 // computeW0 is the no-PV, no-battery baseline: every kWh of load - household plus
 // every loadpoint's EV charging (see slotData.modelledLoadKWh) - is bought from the
@@ -86,7 +85,7 @@ func computeW1(slots []slotData) []worldFlow {
 //
 // Deriving BOTH round-trip efficiency and capacity independently from matched
 // ΔSoC/ΔEnergy windows isn't defensible - two unknowns, one equation per window. This
-// instead treats batteryEta as known (see its doc comment) and derives CapacityKWh
+// instead treats BatteryEta as known (see its doc comment) and derives CapacityKWh
 // from data using it, which the ADR explicitly allows ("otherwise use the existing
 // constant and say which"). Every field carries a Source string precisely so a caller
 // can render "derived from N slots" vs "no data, defaulted" rather than hiding which
@@ -119,7 +118,7 @@ type batteryPhysics struct {
 	MaxDischargeKWh float64 `json:"maxDischargeKWh"`
 
 	// HasChargeEvidence/HasDischargeEvidence are false when the corresponding sample
-	// list handed to percentile() was empty - percentile() returns 0 for an empty
+	// list handed to Percentile was empty - Percentile returns 0 for an empty
 	// slice, which is indistinguishable from "observed and genuinely tiny" once it's
 	// sitting in MaxChargeKWh/MaxDischargeKWh. A site the controller has been holding
 	// (or one that has simply never discharged) has an empty discharge sample list -
@@ -166,9 +165,17 @@ const floorSourceConfigured = "configured minimum SoC, device-reported"
 // doc comment for why a raw max() is the wrong statistic here.
 const rateLimitPercentile = 0.99
 
-// percentile returns the value at percentile p (0..1) of values, nearest-rank method.
-// Returns 0 for an empty slice. Does not mutate values.
-func percentile(values []float64, p float64) float64 {
+// Percentile returns the value at percentile p (0..1) of values by the nearest-rank
+// method (ordinal rank ceil(p*N), 1-based), clamped to the series. Returns 0 for an
+// empty slice - a caller that cannot tell that apart from an observed zero must check
+// len() itself, as batteryPhysics.HasChargeEvidence does.
+//
+// Exported because core had a second, DIFFERENT nearest-rank implementation
+// (site_tariffs.go's percentileOf, indexing int(p*(n-1))) that disagrees with this one
+// at the tails: on a 10-sample series a p99 lands on the largest sample here and on the
+// second-largest there. core already imports core/metrics, so one definition serves
+// both.
+func Percentile(values []float64, p float64) float64 {
 	if len(values) == 0 {
 		return 0
 	}
@@ -210,15 +217,23 @@ const capacityDisagreementFrac = 0.15
 // request against a database with a single connection (server/db/db.go's
 // SetMaxOpenConns(1)) - capacity, efficiency and rate ceilings change at most a few
 // times a year, so a few minutes of staleness costs nothing a caller would notice.
+//
+// Errors are NOT held for this long: util.Cached retries a failed getter on its own
+// exponential back-off (5s and up). The hand-rolled cache this replaces stored the
+// error like any other value, so a site that had just gained a battery - or whose
+// history had just crossed the evidence threshold - stayed refused for a full five
+// minutes with no way to invalidate it.
 const batteryPhysicsCacheTTL = 5 * time.Minute
 
-var batteryPhysicsCache struct {
-	sync.Mutex
-	db   *gorm.DB // keys the cache to the current db.Instance, so a test's fresh :memory: DB never sees another test's entry
-	at   time.Time
-	phys batteryPhysics
-	err  error
-}
+var (
+	batteryPhysicsMu  sync.Mutex
+	batteryPhysicsDB  *gorm.DB        // the db.Instance the cached value was derived from
+	batteryPhysicsCtx context.Context //nolint:containedctx // see deriveBatteryPhysics
+
+	batteryPhysicsCache = util.ResettableCached(func() (batteryPhysics, error) {
+		return deriveBatteryPhysicsUncached(batteryPhysicsCtx)
+	}, batteryPhysicsCacheTTL)
+)
 
 // deriveBatteryPhysics establishes the counterfactual battery's capacity, preferring
 // the device-reported capacity persisted via Collector.SetCapacity (core/site.go reads
@@ -230,28 +245,37 @@ var batteryPhysicsCache struct {
 // bounded to the last MaxLedgerRangeDays and cached for batteryPhysicsCacheTTL, see
 // batteryHistoryRows and this function's cache.
 func deriveBatteryPhysics(ctx context.Context) (batteryPhysics, error) {
-	batteryPhysicsCache.Lock()
-	if batteryPhysicsCache.db == db.Instance && !batteryPhysicsCache.at.IsZero() && time.Since(batteryPhysicsCache.at) < batteryPhysicsCacheTTL {
-		phys, err := batteryPhysicsCache.phys, batteryPhysicsCache.err
-		batteryPhysicsCache.Unlock()
-		return phys, err
+	batteryPhysicsMu.Lock()
+	defer batteryPhysicsMu.Unlock()
+
+	// util.Cached has no cache key, so the db.Instance a value was derived from has
+	// to be tracked here: a test opening a fresh :memory: database must not be served
+	// the previous test's battery. Same reason the hand-rolled cache this replaces
+	// carried a *gorm.DB field.
+	if batteryPhysicsDB != db.Instance {
+		batteryPhysicsDB = db.Instance
+		batteryPhysicsCache.Reset()
 	}
-	batteryPhysicsCache.Unlock()
 
-	phys, err := deriveBatteryPhysicsUncached(ctx)
+	// the getter takes no arguments, so the caller's ctx is handed over through a
+	// variable rather than a closure. Safe only because the getter runs synchronously
+	// inside Get() while this mutex is held - and faithful to what the cache always
+	// did, since a cache HIT never used the caller's ctx either.
+	batteryPhysicsCtx = ctx
 
-	batteryPhysicsCache.Lock()
-	batteryPhysicsCache.db = db.Instance
-	batteryPhysicsCache.at = time.Now()
-	batteryPhysicsCache.phys = phys
-	batteryPhysicsCache.err = err
-	batteryPhysicsCache.Unlock()
+	phys, err := batteryPhysicsCache.Get()
+	if err != nil && ctx.Err() != nil {
+		// this caller went away mid-query, so the error describes the caller, not the
+		// database. Caching it would serve "context canceled" to healthy callers for
+		// the whole back-off window - drop it instead.
+		batteryPhysicsCache.Reset()
+	}
 
 	return phys, err
 }
 
 func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
-	ids, err := batteryEntityIDs(ctx)
+	ids, err := groupEntityIDs(ctx, Battery)
 	if err != nil {
 		return batteryPhysics{}, err
 	}
@@ -281,8 +305,8 @@ func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
 			dischargeSamples = append(dischargeSamples, r.DischargeKWh)
 		}
 	}
-	maxChargeSlot := percentile(chargeSamples, rateLimitPercentile)
-	maxDischargeSlot := percentile(dischargeSamples, rateLimitPercentile)
+	maxChargeSlot := Percentile(chargeSamples, rateLimitPercentile)
+	maxDischargeSlot := Percentile(dischargeSamples, rateLimitPercentile)
 
 	capacityKWh, capacitySource, err := resolveBatteryCapacity(ctx, ids, rows)
 	if err != nil {
@@ -294,8 +318,8 @@ func deriveBatteryPhysicsUncached(ctx context.Context) (batteryPhysics, error) {
 	return batteryPhysics{
 		CapacityKWh:          capacityKWh,
 		CapacitySource:       capacitySource,
-		EtaC:                 batteryEta,
-		EtaD:                 batteryEta,
+		EtaC:                 BatteryEta,
+		EtaD:                 BatteryEta,
 		EtaSource:            "constant (0.9), not derived - shared with core/site_optimizer.go's eta, see BatteryEta",
 		FloorFrac:            floorFrac,
 		FloorSource:          floorSource,
@@ -370,19 +394,19 @@ func persistedBatteryFloorFrac(ctx context.Context, ids []int) (frac float64, ok
 // preferring the installation's own configured minimum SoC over the lowest SoC ever
 // observed.
 //
-// The observed minimum is what this used to use unconditionally, and it is unsound in
-// two ways. It is RETROACTIVE: it is taken over the whole retained history, so one new
-// low reading silently restates every figure the ledger has ever reported, and today's
-// low rows ageing past MaxLedgerRangeDays restates them again. And it is CIRCULAR: "how
-// deep has this pack ever been run" is a behaviour of the very controller the ledger
-// audits, so a controller that never discharges deeply gives its own counterfactual a
-// high floor, which makes the counterfactual expensive, which flatters the controller.
-// On this site's own database the difference was not academic - the observed 4.1% floor
-// against the configured 5% moved the Control contribution by EUR 0.17 on a window whose
-// entire realised grid cost was EUR 3.97, and a 10% floor flipped its sign.
+// The observed minimum is only ever a fallback, because on its own it is unsound in two
+// ways. It is RETROACTIVE: it is taken over the whole retained history, so one new low
+// reading silently restates every figure the ledger has ever reported, and today's low
+// rows ageing past MaxLedgerRangeDays restates them again. And it is CIRCULAR: "how deep
+// has this pack ever been run" is a behaviour of the very controller the ledger audits,
+// so a controller that never discharges deeply gives its own counterfactual a high floor,
+// which makes the counterfactual expensive, which flatters the controller. The magnitude
+// is not academic: on this site's database an observed 4.1% floor against the configured
+// 5% moves the Control contribution by EUR 0.17 on a window whose entire realised grid
+// cost is EUR 3.97, and a 10% floor flips its sign.
 //
-// The observed minimum stays as the fallback for a battery that reports no limit, but it
-// is labelled as one: FloorSource is the provenance string floorNote renders, and it must
+// So the observed minimum stands in only for a battery that reports no limit, and it is
+// labelled as one: FloorSource is the provenance string floorNote renders, and it must
 // always say which of the two produced the number.
 func resolveBatteryFloor(ctx context.Context, ids []int, observedMin float64, haveSoc bool) (float64, string) {
 	if frac, ok, err := persistedBatteryFloorFrac(ctx, ids); err == nil && ok {
@@ -410,7 +434,7 @@ func resolveBatteryCapacity(ctx context.Context, ids []int, rows []batteryHistor
 // contiguous, single-direction SoC windows from the site's own charge/discharge
 // history. Deriving BOTH round-trip efficiency and capacity independently from the
 // same ΔSoC/ΔEnergy windows isn't defensible (two unknowns, one equation per window),
-// so this treats batteryEta as known and solves for capacity using it.
+// so this treats BatteryEta as known and solves for capacity using it.
 func deriveBatteryCapacityFromHistory(rows []batteryHistoryRow) (float64, string, error) {
 	var chargeKWhSum, chargeSocSum float64
 	var dischargeKWhSum, dischargeSocSum float64
@@ -428,7 +452,7 @@ func deriveBatteryCapacityFromHistory(rows []batteryHistoryRow) (float64, string
 		// that then holds) can attribute an entire real charge to a slot that moved
 		// zero energy and drop the transition that actually caused the movement,
 		// fabricating a capacity off by a large, unpredictable factor.
-		if cur.Ts-prev.Ts != int64(quarterHourSeconds) || prev.SocFrac == nil || cur.SocFrac == nil {
+		if cur.Ts-prev.Ts != int64(tariff.SlotDuration.Seconds()) || prev.SocFrac == nil || cur.SocFrac == nil {
 			continue
 		}
 
@@ -449,10 +473,10 @@ func deriveBatteryCapacityFromHistory(rows []batteryHistoryRow) (float64, string
 	haveDischarge := dischargeSocSum >= minCapacityEvidenceFrac
 
 	if haveCharge {
-		capFromCharge = chargeKWhSum * batteryEta / chargeSocSum
+		capFromCharge = chargeKWhSum * BatteryEta / chargeSocSum
 	}
 	if haveDischarge {
-		capFromDischarge = dischargeKWhSum / batteryEta / dischargeSocSum
+		capFromDischarge = dischargeKWhSum / BatteryEta / dischargeSocSum
 	}
 
 	switch {
@@ -472,8 +496,6 @@ func deriveBatteryCapacityFromHistory(rows []batteryHistoryRow) (float64, string
 	}
 }
 
-const quarterHourSeconds = 15 * 60
-
 // batteryHistoryRow is one 15min slot's aggregated battery reading, across every
 // battery entity the site has, used only for capacity/rate derivation - unlike
 // slotData this deliberately covers the battery's ENTIRE recorded history, not just
@@ -482,13 +504,6 @@ type batteryHistoryRow struct {
 	Ts                      int64
 	ChargeKWh, DischargeKWh float64
 	SocFrac                 *float64
-}
-
-// batteryEntityIDs returns the entity ids for every configured battery.
-func batteryEntityIDs(ctx context.Context) ([]int, error) {
-	var ids []int
-	err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, Battery).Pluck("id", &ids).Error
-	return ids, err
 }
 
 // batteryHistoryRows aggregates the meters table by slot across the given battery
@@ -540,11 +555,17 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 	return out, nil
 }
 
-// simulateSlotStep applies one battery mode's rule to a single slot's home/PV
-// balance, returning the resulting grid flow and the battery's new state of charge
-// (in kWh). It is the one physics model shared by the W2 counterfactual (always
-// batteryModeNormal) and the per-slot decision replay in ledger_decisions.go (applied
-// vs. suggested mode), so both rest on the same capacity/efficiency/rate assumptions.
+// simulateSlotStep dispatches a caller-supplied battery mode STRING to its rule and
+// applies it to a single slot's home/PV balance, returning the resulting grid flow and
+// the battery's new state of charge (in kWh). Those two are everything the ledger
+// prices; the AC-side charge/discharge energy each mode moved is not returned, because
+// it has no consumer that the new SoC does not already give (it is the SoC delta over
+// EtaC / EtaD). Its caller is the per-slot decision replay in ledger_decisions.go,
+// which reads both modes out of the control_slots table and so cannot know they are
+// valid. Code that already holds a mode as a compile-time
+// fact calls that mode's function directly - computeW2 calls simulateNormalStep - so
+// the runtime dispatch, and the ok it has to return, exist only where a mode is really
+// unvalidated input.
 //
 // Mode semantics modeled here (inferred from the mode names and how
 // core/site_battery.go uses them, not re-derived from inverter docs - stated
@@ -557,39 +578,62 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 //     headroom, the grid. Never discharges.
 //   - holdcharge: hold's "never discharge" combined with charge's "still absorb
 //     surplus", but never draws from the grid - the charge half is surplus-only.
-func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow, chargeKWh, dischargeKWh float64) {
+//
+// ok is false when mode is not one of the four modeled above, in which case every
+// other return value is zero and MUST NOT be priced. There is no "close enough"
+// fallback here on purpose: a fifth api.BatteryMode, or a typo on the write path,
+// silently replayed as normal would produce a confident euro figure for a decision
+// this model does not understand - and two DIFFERENT unrecognised modes would both
+// fall through to the same branch and report exactly EUR 0.00, rendering "we cannot
+// price this" as "this cost nothing" (ADR-011 rule 3, see DecisionRow's doc comment).
+// Callers that fold "" / "unknown" into normal must do so before calling (see
+// effectiveMode); this function only understands the four real modes.
+func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow, ok bool) {
 	surplus := max(0, pvKWh-homeKWh)
 	deficit := max(0, homeKWh-pvKWh)
-	floorKWh := phys.FloorFrac * phys.CapacityKWh
 	headroomKWh := max(0, phys.CapacityKWh-socKWh)
-	availableKWh := max(0, socKWh-floorKWh)
 
 	switch mode {
 	case batteryModeHold:
-		return socKWh, worldFlow{ImportKWh: deficit, ExportKWh: surplus}, 0, 0
+		return socKWh, worldFlow{ImportKWh: deficit, ExportKWh: surplus}, true
 
 	case batteryModeCharge:
 		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC)
 		fromSurplus := min(chargeAC, surplus)
 		fromGrid := chargeAC - fromSurplus
 		newSoc := socKWh + chargeAC*phys.EtaC
-		return newSoc, worldFlow{ImportKWh: deficit + fromGrid, ExportKWh: max(0, surplus-fromSurplus)}, chargeAC, 0
+		return newSoc, worldFlow{ImportKWh: deficit + fromGrid, ExportKWh: max(0, surplus-fromSurplus)}, true
 
 	case batteryModeHoldCharge:
 		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
 		newSoc := socKWh + chargeAC*phys.EtaC
-		return newSoc, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, chargeAC, 0
+		return newSoc, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, true
 
-	default: // batteryModeNormal, and the fallback for any unrecognised mode string
-		if surplus > 0 {
-			chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
-			newSoc := socKWh + chargeAC*phys.EtaC
-			return newSoc, worldFlow{ExportKWh: surplus - chargeAC}, chargeAC, 0
-		}
-		dischargeAC := min(phys.MaxDischargeKWh, availableKWh*phys.EtaD, deficit)
-		newSoc := socKWh - dischargeAC/phys.EtaD
-		return newSoc, worldFlow{ImportKWh: deficit - dischargeAC}, 0, dischargeAC
+	case batteryModeNormal:
+		newSoc, flow := simulateNormalStep(homeKWh, pvKWh, socKWh, phys)
+		return newSoc, flow, true
+
+	default:
+		return 0, worldFlow{}, false
 	}
+}
+
+// simulateNormalStep applies the "dumb rule" - charge from surplus only, discharge to
+// cover a deficit only - to one slot. This is what W2 is defined as, and it is the one
+// mode with no failure case: there is no mode string to recognise, so there is no ok to
+// return and nothing for a caller to discard. simulateSlotStep's batteryModeNormal case
+// is a thin wrapper over it, so the replay and the counterfactual stay the same physics.
+func simulateNormalStep(homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow) {
+	if surplus := max(0, pvKWh-homeKWh); surplus > 0 {
+		headroomKWh := max(0, phys.CapacityKWh-socKWh)
+		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
+		return socKWh + chargeAC*phys.EtaC, worldFlow{ExportKWh: surplus - chargeAC}
+	}
+
+	deficit := max(0, homeKWh-pvKWh)
+	availableKWh := max(0, socKWh-phys.FloorFrac*phys.CapacityKWh)
+	dischargeAC := min(phys.MaxDischargeKWh, availableKWh*phys.EtaD, deficit)
+	return socKWh - dischargeAC/phys.EtaD, worldFlow{ImportKWh: deficit - dischargeAC}
 }
 
 // ErrSocGap means a slot in the requested period has no measured SoC, so the
@@ -716,7 +760,7 @@ func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, W2Drift, err
 			socKWh = carried
 		}
 
-		newSoc, flow, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
+		newSoc, flow := simulateNormalStep(s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
 		socKWh = newSoc
 		out[i] = flow
 		prevStart = s.Start
