@@ -311,12 +311,12 @@ describe("adaptivePlanMarkers", () => {
 });
 
 describe("shouldAnnotateOptimizerDecision", () => {
-  const now = t("2026-01-01T00:10:00Z");
+  const now = t("2026-01-01T00:03:00Z");
   const base: OptimizerDecision = {
     mode: BATTERY_MODE.CHARGE,
     chargeVetoed: false,
-    updated: "2026-01-01T00:00:00Z", // 10 min before now
-    validFor: 20 * 60 * 1000, // 20 min, mirrors optimizerBatteryModeValidity
+    updated: "2026-01-01T00:00:00Z", // 3 min before now
+    validFor: 6 * 60 * 1000, // 6 min, mirrors optimizerBatteryModeValidity
   };
 
   it("renders for a fresh decision while control is enabled", () => {
@@ -335,12 +335,12 @@ describe("shouldAnnotateOptimizerDecision", () => {
 
   it("does not render a decision older than its validity horizon", () => {
     const stale: OptimizerDecision = { ...base, updated: "2026-01-01T00:00:00Z" };
-    const later = t("2026-01-01T00:21:00Z"); // 21 min after updated, past validFor
+    const later = t("2026-01-01T00:07:00Z"); // 7 min after updated, past validFor
     expect(shouldAnnotateOptimizerDecision(stale, true, later)).toBe(false);
   });
 
   it("renders a decision exactly at its validity horizon", () => {
-    const edge = t("2026-01-01T00:20:00Z"); // exactly validFor after updated
+    const edge = t("2026-01-01T00:06:00Z"); // exactly validFor after updated
     expect(shouldAnnotateOptimizerDecision(base, true, edge)).toBe(true);
   });
 
