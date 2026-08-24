@@ -157,30 +157,26 @@ func backdatePending(site *Site) {
 	site.Unlock()
 }
 
-// TestOptimizerBatteryModeFlapping is a comparative test: the undamped legacy
-// behavior (apply whatever the last run derived) flaps the battery on every
-// run of a hold/normal alternation typical of a degenerate LP optimum on a
-// flat price plateau. setOptimizerBatteryMode's damping must not follow it.
+// TestOptimizerBatteryModeFlapping feeds setOptimizerBatteryMode a hold/normal
+// alternation - the shape a degenerate LP optimum produces on a flat price
+// plateau, where two schedules cost the same and the solver's tie-break can
+// pick either between runs - and asserts the damping does not follow it.
+//
+// It says nothing about how often an undamped controller would switch. An
+// earlier version of this test claimed to: it built the same alternating slice
+// and then counted the transitions in that slice, asserting 8 == 8. That is
+// arithmetic over a literal the test wrote itself, executing no evcc code, and
+// there is no undamped path left in the tree to compare against. The figure it
+// produced was quoted as evidence in an upstream review draft before anyone
+// opened the file. Do not reintroduce it: a comparison needs a second
+// implementation to run, not a hand-written expectation.
 func TestOptimizerBatteryModeFlapping(t *testing.T) {
 	enableAutomatic(t)
 
-	// hold/normal alternation on a flat price plateau. The undamped legacy
-	// behavior applies every derived mode — 8 switches in 8 runs. The damped
-	// logic must not follow the flap.
 	sequence := []api.BatteryMode{
 		api.BatteryHold, api.BatteryNormal, api.BatteryHold, api.BatteryNormal,
 		api.BatteryHold, api.BatteryNormal, api.BatteryHold, api.BatteryNormal,
 	}
-
-	legacySwitches := 0
-	legacyMode := api.BatteryUnknown
-	for _, m := range sequence {
-		if m != legacyMode {
-			legacySwitches++
-		}
-		legacyMode = m
-	}
-	assert.Equal(t, 8, legacySwitches, "legacy behavior flaps on every run")
 
 	site := &Site{log: util.NewLogger("foo")}
 
