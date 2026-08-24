@@ -188,8 +188,36 @@ describe("SavingsLedgerCard presentation", () => {
 
     expect(api.get).toHaveBeenCalledTimes(1);
     const emitted = wrapper.emitted("update:decisions");
-    expect(emitted).toHaveLength(1);
-    expect(emitted![0]![0]).toHaveLength(liveSample.decisions.length);
+    // null the moment the request starts, then the rows once it lands
+    expect(emitted).toHaveLength(2);
+    expect(emitted![0]![0]).toBeNull();
+    expect(emitted![1]![0]).toHaveLength(liveSample.decisions.length);
+  });
+
+  test("takes the decisions card down while the next period is still loading", async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ status: 200, data: liveSample })
+      // a distinct object, not the same reference: `ledger` is watched by identity, and
+      // handing back the very same payload would make the second response a no-op
+      .mockResolvedValueOnce({ status: 200, data: JSON.parse(JSON.stringify(liveSample)) });
+
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+    expect(wrapper.emitted("update:decisions")).toHaveLength(2);
+
+    // paging starts a new request: the card below must not go on showing the previous
+    // period's ticks and euro deltas under the new period's label
+    (wrapper.vm as any).page(-1);
+    await wrapper.vm.$nextTick();
+    const midFlight = wrapper.emitted("update:decisions")!;
+    expect(midFlight).toHaveLength(3);
+    expect(midFlight[2]![0]).toBeNull();
+    expect(wrapper.find('[data-testid="savings-ledger-loading"]').exists()).toBe(true);
+
+    await flushPromises();
+    const landed = wrapper.emitted("update:decisions")!;
+    expect(landed).toHaveLength(4);
+    expect(landed[3]![0]).toHaveLength(liveSample.decisions.length);
   });
 
   test("takes the decisions card down again when the period is refused", async () => {
@@ -203,9 +231,63 @@ describe("SavingsLedgerCard presentation", () => {
     await flushPromises();
 
     const emitted = wrapper.emitted("update:decisions");
-    expect(emitted).toHaveLength(2);
-    expect(emitted![1]![0]).toBeNull();
+    // loading-null, rows, loading-null, refusal-null
+    expect(emitted).toHaveLength(4);
+    expect(emitted![3]![0]).toBeNull();
     expect(wrapper.find('[data-testid="savings-ledger-refuse"]').exists()).toBe(true);
+  });
+
+  test("names a Control overspend under the chart even when the period headlines a saving", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    // the strip legitimately reads "saved EUR 6.06 (91 %)" on this payload while the
+    // Control step itself lost EUR 0.41 against its own baseline
+    expect(detail(wrapper, "saved").text()).toBe("€6.06 (91%)");
+    const clause = wrapper.find('[data-testid="savings-ledger-control-overspend"]');
+    expect(clause.exists()).toBe(true);
+    expect(clause.text()).toContain("control cost €0.41 against its baseline");
+    expect(clause.classes()).toContain("text-danger");
+  });
+
+  test("says nothing about Control when Control saved money", async () => {
+    const saved = JSON.parse(JSON.stringify(liveSample));
+    // W2 -> W3 now favours the real controller at both lenses
+    saved.chain.contributions[2].settled = { perSlot: 0.5, periodAverage: 0.5 };
+
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: saved });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="savings-ledger-control-overspend"]').exists()).toBe(false);
+  });
+
+  test("names the EV-charge-timing non-attribution under the chart, not only in the modal", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    const line = wrapper.find('[data-testid="savings-ledger-ev-timing"]');
+    expect(line.exists()).toBe(true);
+    expect(line.text()).toContain("cheaper hour");
+    // the API's own full sentence is still handed to the modal, never dropped
+    expect((wrapper.vm as any).notes).toContain(
+      liveSample.chain!.notes!.find((n) => n.startsWith("EV charge timing"))
+    );
+  });
+
+  test("drops the EV-timing line for a site whose payload never mentions it", async () => {
+    const noEv = JSON.parse(JSON.stringify(liveSample));
+    noEv.chain.notes = noEv.chain.notes.filter(
+      (n: string) => !n.startsWith("EV charge timing is not attributed")
+    );
+
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: noEv });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="savings-ledger-ev-timing"]').exists()).toBe(false);
   });
 
   test("offers the caveats behind an info control rather than dropping them", async () => {

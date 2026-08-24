@@ -6,23 +6,28 @@
 		     ("What the system did with your money") at 390px, even with nothing else in
 		     the header row. A plain heading in the body wraps normally instead. -->
 		<h3 class="ledger-title" data-testid="savings-ledger-title">
-			{{ $t("forecast.savingsLedger.title") }}
-			<!-- the diagram's caveats (what each step means, what is estimated and on what
-			     basis, every note the API sent) are one tap away rather than a wall of
-			     text under the chart. A modal, not a bootstrap tooltip: the content does
-			     not fit a hover tooltip on a phone. -->
-			<span
-				class="value-icon info-icon"
-				role="button"
-				tabindex="0"
-				:aria-label="$t('forecast.savingsLedger.info.title')"
-				data-testid="savings-ledger-info-icon"
-				@click="openInfo"
-				@keydown.enter.prevent="openInfo"
-				@keydown.space.prevent="openInfo"
-			>
-				<shopicon-regular-info size="s"></shopicon-regular-info>
-			</span>
+			{{
+				titleParts.head
+			}}<!-- the last word and the icon travel together: at 390px the title wraps,
+			     and left to itself the icon dropped onto a line of its own below it. --><span
+				class="title-tail"
+				>{{
+					titleParts.tail
+				}}<!-- the diagram's caveats (what each step means, what is estimated and
+				     on what basis, every note the API sent) are one tap away rather than a
+				     wall of text under the chart. A modal, not a bootstrap tooltip: the
+				     content does not fit a hover tooltip on a phone. --><span
+					class="info-icon"
+					role="button"
+					tabindex="0"
+					:aria-label="$t('forecast.savingsLedger.info.title')"
+					data-testid="savings-ledger-info-icon"
+					@click="openInfo"
+					@keydown.enter.prevent="openInfo"
+					@keydown.space.prevent="openInfo"
+				>
+					<shopicon-regular-info size="s"></shopicon-regular-info> </span
+			></span>
 		</h3>
 		<div class="toolbar" data-testid="savings-ledger-toolbar">
 			<div class="d-flex align-items-center gap-1" data-testid="savings-ledger-period-nav">
@@ -113,8 +118,29 @@
 			</div>
 
 			<!-- ADR-011 rule 3 (coverage visible without interaction) and rule 7 (the
-			     estimate marker is on the figures, not hidden behind a click) in one line. -->
-			<p class="caption text-gray" data-testid="savings-ledger-caption">{{ caption }}</p>
+			     estimate marker is on the figures, not hidden behind a click) in one line.
+			     The overspend clause is appended here rather than raised into a banner:
+			     the strip above can legitimately read "saved 91 %" while Control itself
+			     lost money, and nothing else on the card names that. -->
+			<p class="caption text-gray" data-testid="savings-ledger-caption">
+				{{ caption
+				}}<span
+					v-if="controlOverspendClause"
+					class="text-danger"
+					data-testid="savings-ledger-control-overspend"
+				>
+					· {{ controlOverspendClause }}</span
+				>
+			</p>
+			<!-- ADR-011 rule 7: a measure that cannot be honestly attributed is named in
+			     one line under the chart, not left to a modal. -->
+			<p
+				v-if="evTimingCaption"
+				class="caption caption-next text-gray"
+				data-testid="savings-ledger-ev-timing"
+			>
+				{{ evTimingCaption }}
+			</p>
 		</div>
 
 		<SavingsLedgerInfoModal
@@ -145,10 +171,19 @@ import {
 	pickSettled,
 	coverageDivergence,
 	clampWindowToEarliest,
+	isControlOverspend,
 	type LedgerWindow,
 	type SettlementHeadline,
 } from "./savingsLedgerChain";
 import { waterfallLayout, type WaterfallLayout } from "./savingsLedgerWaterfall";
+
+// The one chain note whose subject matter ADR-011 rule 7 puts under the chart rather than
+// behind the info control: a measure that exists but cannot be attributed. Matched on its
+// stable opening rather than rendered verbatim (core/metrics/ledger_worlds.go's
+// noteEVTimingUnattributed, emitted only when the site actually has a loadpoint) so the
+// line appears exactly when it applies and never claims something about a site with no EV.
+// The full note itself still renders in the modal, deduped with the rest.
+const EV_TIMING_NOTE_PREFIX = "EV charge timing is not attributed";
 
 // ?from=&to= (RFC3339) seeds/reseeds the period, deliberately NOT aligned or clamped
 // the way paging (page()/jumpToPresent()) always is - this is the sanctioned way to
@@ -220,6 +255,14 @@ export default defineComponent({
 		};
 	},
 	computed: {
+		// the title's last word, split off so it can carry the info icon on its own line
+		// without the icon ever being orphaned - see the template.
+		titleParts(): { head: string; tail: string } {
+			const title = this.$t("forecast.savingsLedger.title") as string;
+			const cut = title.lastIndexOf(" ");
+			if (cut < 0) return { head: "", tail: title };
+			return { head: title.slice(0, cut + 1), tail: title.slice(cut + 1) };
+		},
 		headlineOptions() {
 			return [
 				{
@@ -324,6 +367,30 @@ export default defineComponent({
 			}
 			return parts.join(" · ");
 		},
+		// ADR-011 rule 1, restated for the case the three-figure strip cannot express: on a
+		// period where solar and the battery saved a great deal, the strip legitimately
+		// reads "saved 91 %" while the Control step itself LOST money against its own
+		// baseline. Without this clause the only trace of that is the colour of one bar.
+		controlOverspendClause(): string {
+			const chain = this.ledger?.chain;
+			if (!chain || !isControlOverspend(chain, this.headline)) return "";
+			const control = chain.contributions.find((c) => c.label === "Control");
+			if (!control) return "";
+			const eur = pickSettled(control.settled, this.headline);
+			return this.$t("forecast.savingsLedger.controlOverspendShort", {
+				// magnitude: the direction is carried by the wording ("cost") and the
+				// danger colour, never by a bare minus sign
+				amount: this.fmtMoney(Math.abs(eur), this.currency, true, true),
+			}) as string;
+		},
+		// ADR-011 rule 7: rendered only when the API actually sent the EV-timing note (see
+		// EV_TIMING_NOTE_PREFIX), so a site without a loadpoint is not told about a
+		// non-attribution that cannot affect it.
+		evTimingCaption(): string {
+			const notes = this.ledger?.chain?.notes ?? [];
+			if (!notes.some((n) => n.startsWith(EV_TIMING_NOTE_PREFIX))) return "";
+			return this.$t("forecast.savingsLedger.evTimingShort") as string;
+		},
 		// ADR-011 rule 7: every caveat the API sends must be rendered, never dropped -
 		// realised.note is always present, chain.notes only when the chain computed.
 		// realised.note and chain.notes[0] are both noteInvoiceComparability
@@ -348,6 +415,17 @@ export default defineComponent({
 		// and takes the decisions card down with it.
 		ledger(value: SavingsLedger | null) {
 			this.$emit("update:decisions", value ? value.decisions : null);
+		},
+		// The `ledger` watcher above only fires once a response has landed, so between the
+		// click and that response the chart area showed "Loading…" under the NEW period's
+		// label while the decisions card below still showed the PREVIOUS period's ticks
+		// and euro deltas - with no period label of its own to contradict them. Taking it
+		// down for the duration of the fetch restores what the strip did when it still
+		// lived inside this card's v-else-if="ledger" block, and (because Forecast.vue
+		// mounts it under v-if) also resets SavingsLedgerDecisions' internal timeline/table
+		// toggle, which used to survive a period change.
+		loading(value: boolean) {
+			if (value) this.$emit("update:decisions", null);
 		},
 		// D2: a hash-fragment-only URL change (e.g. following a shared link, or
 		// browser back/forward over one) is a same-document navigation - the component
@@ -476,9 +554,15 @@ export default defineComponent({
 	color: inherit;
 	max-width: 10em;
 }
+.title-tail {
+	white-space: nowrap;
+}
 .caption {
 	font-size: 0.75rem;
 	margin: 0.5rem 0 0;
+}
+.caption-next {
+	margin-top: 0.125rem;
 }
 .chain-unavailable {
 	margin-top: 1rem;
