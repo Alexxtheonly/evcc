@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/evcc-io/evcc/core/keys"
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/util"
 	"github.com/samber/lo"
@@ -72,10 +73,64 @@ func init() {
 	})
 }
 
-// persistHistory writes one already-built settings_history row. A nil
-// db.Instance (unit tests exercising SetString/String in isolation, without a
-// database) is a silent no-op, matching the test guard used throughout this
-// codebase for optional persistence.
+// historyKeys are the setting keys whose changes settings_history records:
+// user-facing configuration that changes what the controller does, or how a
+// later replay must price what it did (ADR-011). Everything else is not
+// recorded.
+//
+// This is deliberately an allowlist and not a list of secret-looking names.
+// The settings table is a single flat key space shared by configuration and
+// by credentials, and the credential keys are largely NOT known in advance:
+// plugin/auth's OAuth tokens are stored under "<clientID>-<hash>" subjects
+// (plugin/auth/oauth.go), so no denylist written today can name the token
+// key of a vehicle or tariff integration added tomorrow. An allowlist
+// excludes every such dynamically-named key for free, along with the
+// statically-named secrets (sponsorToken, eebus - which carries the SHIP
+// private key and pairing secret -, adminPassword, jwtSecretKey, apiKey,
+// mqtt/influx/ocpp credentials). A denylist would have had to be right about
+// all of them, forever, and being wrong once writes a permanent cleartext
+// archive: the live settings table only ever holds the CURRENT token, while
+// settings_history is append-only and never pruned.
+//
+// The cost of the allowlist is the converse: a key added later is silently
+// not recorded until it is added here.
+var historyKeys = []string{
+	// site
+	keys.Currency, keys.TariffRefs,
+	keys.GridMeter, keys.PvMeters, keys.BatteryMeters, keys.AuxMeters, keys.ConsumerMeters, keys.ExtMeters,
+	keys.PrioritySoc, keys.BufferSoc, keys.BufferStartSoc, keys.ResidualPower, keys.GridExportLimit,
+	keys.BatteryDischargeControl, keys.BatteryGridChargeLimit, keys.BatteryGridDischarge,
+	keys.SolarAdjusted,
+	keys.Experimental, keys.Optimizer, keys.OptimizerAutomatic, keys.OptimizerChargingStrategy,
+
+	// loadpoint and vehicle, written namespaced ("lp1.", "vehicle.<name>.", "db:<id>.")
+	keys.Disabled, keys.Mode, keys.DefaultMode,
+	keys.Charger, keys.Meter, keys.Circuit, keys.DefaultVehicle,
+	keys.Priority, keys.PhasesConfigured, keys.MinCurrent, keys.MaxCurrent, keys.Thresholds,
+	keys.MinSoc, keys.LimitSoc, keys.LimitEnergy, keys.Soc,
+	keys.BatteryBoostLimit, keys.SmartCostLimit, keys.SmartFeedInPriorityLimit,
+	keys.PlanTime, keys.PlanEnergy, keys.PlanSoc, keys.PlanStrategy,
+	keys.RepeatingPlans, keys.AdaptivePlans, keys.AdaptivePlanLearning,
+}
+
+// recordable reports whether key belongs in settings_history. Device-scoped
+// keys arrive namespaced (dbSettings prefixes "lp1."/"vehicle.luna.",
+// ConfigSettings prefixes "db:3."), so only the segment after the last dot is
+// matched - the namespace itself carries no information the allowlist needs,
+// and enumerating every loadpoint and vehicle name up front is impossible.
+func recordable(key string) bool {
+	if i := strings.LastIndex(key, "."); i >= 0 {
+		key = key[i+1:]
+	}
+	return slices.Contains(historyKeys, key)
+}
+
+// persistHistory writes one already-built settings_history row for a
+// recordable key (see historyKeys - a credential must never reach this
+// append-only table). A nil db.Instance (unit tests exercising
+// SetString/String in isolation, without a database) is a silent no-op,
+// matching the test guard used throughout this codebase for optional
+// persistence.
 //
 // Must be called without mu held. SetString and Delete build the row while
 // mu is locked (so it reflects exactly the mutation that just happened, with
@@ -86,7 +141,7 @@ func init() {
 // other settings reader/writer in the process for as long as this write is
 // blocked, not just for the fraction of that time the insert itself needs.
 func persistHistory(h settingHistory) {
-	if db.Instance == nil {
+	if db.Instance == nil || !recordable(h.Key) {
 		return
 	}
 
@@ -101,7 +156,8 @@ func persistHistory(h settingHistory) {
 // loadpoints through the configs table (conf.Update) rather than through
 // SetString, and would otherwise be entirely invisible to the audit trail
 // this table exists for (ADR-011). Callers own their own dedup check; unlike
-// SetString, every call here writes a row unconditionally.
+// SetString, every call here writes a row for any recordable key, with no
+// change check of its own.
 func RecordHistory(key string, old *string, val string) {
 	persistHistory(settingHistory{Timestamp: time.Now().Unix(), Key: key, Old: old, New: val})
 }

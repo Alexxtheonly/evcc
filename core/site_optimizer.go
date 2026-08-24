@@ -645,6 +645,36 @@ func (site *Site) publishOptimizerDecision() {
 	site.publishOptimizerDecisionLocked()
 }
 
+// appliedBatteryMode is site.GetBatteryMode() translated into the mode the
+// battery was actually running in, for the ledger only. The two differ for
+// api.BatteryUnknown, which at site level does not mean "we don't know": it
+// is the control loop's word for "evcc holds no override", the state a site
+// stays in from boot until something first calls SetBatteryMode.
+// requiredBatteryMode returns it to mean "no change required" and
+// batteryModeModified() already classifies it together with
+// api.BatteryNormal; the UI (BatteryStatusCard.statusState) likewise never
+// renders it, falling through to the raw power reading exactly as it does
+// for normal, and simulateSlotStep's default branch already replays it with
+// normal physics. Recording the string "unknown" made every row of a site
+// that simply never needs an override - advisory mode, no grid-charge limit,
+// no smart-cost limit - read as if the ledger had failed to observe
+// something, and made AppliedMode differ from an identical SuggestedMode,
+// which DecisionDeltas then priced as a veto worth 0 EUR.
+//
+// Not a fabrication: with a battery present, "no override in effect" IS
+// normal operation, which is what every other consumer in the codebase
+// already takes it to be. With no battery configured at all there is no
+// mode to report and api.BatteryUnknown is kept - requiredBatteryMode's own
+// !batteryConfigured() branch returns exactly that. Deliberately confined to
+// this persistence path: site.batteryMode itself keeps meaning what the
+// control loop needs it to mean.
+func (site *Site) appliedBatteryMode() api.BatteryMode {
+	if mode := site.GetBatteryMode(); mode != api.BatteryUnknown || !site.batteryConfigured() {
+		return mode
+	}
+	return api.BatteryNormal
+}
+
 // persistControlSlot stores one completed 15min control decision (ADR-011):
 // the optimizer's vetted suggestion versus the battery mode actually applied,
 // and why they differ. Driven by the update loop like persistTariffs, with
@@ -674,7 +704,7 @@ func (site *Site) publishOptimizerDecision() {
 // a writer arriving between them.
 func (site *Site) persistControlSlot() {
 	slot := time.Now().Truncate(tariff.SlotDuration)
-	applied := site.GetBatteryMode()
+	applied := site.appliedBatteryMode()
 
 	if !slot.After(site.controlSlot) {
 		// still the already-recorded slot: only watch for AppliedMode having

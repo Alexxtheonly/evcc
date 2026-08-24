@@ -1401,9 +1401,12 @@ func TestPersistControlSlotPaybackVetoPreservesSuggestion(t *testing.T) {
 
 // TestPersistControlSlotAdvisoryModeRecordsSuggestion is the advisory-mode
 // counterpart to TestPersistControlSlotPaybackVetoPreservesSuggestion:
-// optimizerAutomatic is left off, so applied_mode is honestly "unknown" -
-// nothing is ever applied - but the vetted suggestion the optimizer derived
-// this run is real and worth recording anyway. Collecting that comparison
+// optimizerAutomatic is left off, so nothing is ever applied - but the
+// vetted suggestion the optimizer derived this run is real and worth
+// recording anyway. This site has no battery meter configured at all, which
+// is the only case that still records applied_mode "unknown" (see
+// appliedBatteryMode and TestPersistControlSlotNoOverrideRecordsNormal for
+// the far more common advisory-with-a-battery case). Collecting that comparison
 // before automatic mode is ever switched on is the whole point of the
 // ledger: it lets a later decision to enable automatic mode be based on data
 // gathered while advisory, at zero control risk.
@@ -1415,6 +1418,7 @@ func TestPersistControlSlotAdvisoryModeRecordsSuggestion(t *testing.T) {
 	// optimizerAutomatic is left false (the settings cache reloads empty from
 	// the fresh db above) - this is advisory mode
 	require.False(t, site.Automatic())
+	require.False(t, site.batteryConfigured(), "no battery: the one case that still records unknown")
 
 	site.setOptimizerBatteryMode(optimizerDecision{
 		mode:          api.BatteryCharge,
@@ -1436,6 +1440,85 @@ func TestPersistControlSlotAdvisoryModeRecordsSuggestion(t *testing.T) {
 	assert.Equal(t, api.BatteryCharge.String(), suggestedMode, "the vetted suggestion is recorded despite not being applied")
 	require.NotNil(t, price, "an accepted charge suggestion carries its price even though advisory mode never spent it")
 	assert.InDelta(t, 0.12, *price, 0.001)
+}
+
+// TestPersistControlSlotNoOverrideRecordsNormal is the regression test for a
+// defect measured on the live database: 53 of 53 control_slots rows had
+// applied_mode "unknown", and the UI rendered "APPLIED unknown / SUGGESTED
+// INSTEAD Normal operation". site.batteryMode is only ever written by
+// SetBatteryMode, which updateBatteryMode calls only when requiredBatteryMode
+// returns something other than api.BatteryUnknown, so a site that never needs
+// an override (advisory mode, no grid-charge limit, no smart-cost limit)
+// leaves it at its zero value for the whole process lifetime. "unknown" is
+// the control loop's word for "no change required", not for "unobserved" -
+// with a battery present it must be recorded as the normal operation it is.
+func TestPersistControlSlotNoOverrideRecordsNormal(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{
+		log:           util.NewLogger("foo"),
+		batteryMeters: []config.Device[api.Meter]{config.NewStaticDevice(config.Named{}, api.Meter(nil))},
+	}
+	site.optimizerSuggestedMode = api.BatteryNormal
+	require.Equal(t, api.BatteryUnknown, site.GetBatteryMode(), "nothing has ever set a mode")
+
+	site.persistControlSlot()
+	site.controlSlot = site.controlSlot.Add(-tariff.SlotDuration)
+	site.persistControlSlot()
+
+	var appliedMode, suggestedMode string
+	var modeChanged bool
+	require.NoError(t, db.Instance.Raw(
+		"SELECT applied_mode, suggested_mode, mode_changed FROM control_slots",
+	).Row().Scan(&appliedMode, &suggestedMode, &modeChanged))
+
+	assert.Equal(t, api.BatteryNormal.String(), appliedMode, "no override in effect is normal operation, not an unobserved mode")
+	assert.Equal(t, api.BatteryNormal.String(), suggestedMode)
+	assert.False(t, modeChanged)
+
+	// applied and suggested now agree, so DecisionDeltas has nothing to
+	// price - before the fix these differed as strings ("unknown" vs
+	// "normal") while simulating identically, producing a fabricated
+	// "the veto was worth EUR 0.00" on a slot where nothing was vetoed
+	assert.Equal(t, appliedMode, suggestedMode)
+}
+
+// TestPersistControlSlotModeChangeIgnoresOverrideRelease asserts mode_changed
+// tracks the recorded mode, not the raw enum: releasing an override
+// (api.BatteryUnknown, "no change required") on a site already running normal
+// must not flag a change the recorded row cannot show. The live table has
+// SUM(mode_changed) = 0 over all rows, which is correct for a site nothing
+// ever overrides - a real hold/charge arriving mid-slot still flags it.
+func TestPersistControlSlotModeChangeIgnoresOverrideRelease(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	site := &Site{
+		log:           util.NewLogger("foo"),
+		batteryMeters: []config.Device[api.Meter]{config.NewStaticDevice(config.Named{}, api.Meter(nil))},
+	}
+
+	site.persistControlSlot()
+	site.controlSlot = site.controlSlot.Add(-tariff.SlotDuration)
+	site.persistControlSlot()
+
+	modeChanged := func() bool {
+		var v bool
+		require.NoError(t, db.Instance.Raw("SELECT mode_changed FROM control_slots").Row().Scan(&v))
+		return v
+	}
+
+	// unknown -> normal is the control loop releasing an override; the
+	// battery's behaviour, and the recorded mode, are unchanged
+	site.batteryMode = api.BatteryNormal
+	site.persistControlSlot()
+	assert.False(t, modeChanged(), "releasing an override is not a mode change")
+
+	// an actual override arriving mid-slot is
+	site.batteryMode = api.BatteryHold
+	site.persistControlSlot()
+	assert.True(t, modeChanged())
 }
 
 // TestPersistOptimizerRunGate exercises the ADR-011 optimizer_runs slot gate.

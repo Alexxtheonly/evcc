@@ -17,11 +17,18 @@ import (
 type controlSlot struct {
 	Timestamp int64 `gorm:"column:ts;uniqueIndex"` // 15min slot boundary
 
-	// AppliedMode is site.GetBatteryMode() as observed shortly after the slot
-	// began (the first control-loop tick to cross the boundary) - a point
-	// sample taken seconds into the slot, not an end-of-slot summary. Same
-	// forward-looking convention as persistTariffs: Timestamp is the slot's
-	// start, not its end.
+	// AppliedMode is site.appliedBatteryMode() as observed shortly after the
+	// slot began (the first control-loop tick to cross the boundary) - a
+	// point sample taken seconds into the slot, not an end-of-slot summary.
+	// Same forward-looking convention as persistTariffs: Timestamp is the
+	// slot's start, not its end.
+	//
+	// "normal" therefore covers both an explicitly applied normal mode and a
+	// site running with no evcc override at all - see appliedBatteryMode for
+	// why those are the same fact. "unknown" here means only "this site has
+	// no battery configured". Rows written before that distinction existed
+	// (any row where a site with a battery recorded "unknown") predate it
+	// and mean "no override".
 	AppliedMode string `gorm:"column:applied_mode"`
 
 	// ModeChanged is true if AppliedMode was observed to differ from this
