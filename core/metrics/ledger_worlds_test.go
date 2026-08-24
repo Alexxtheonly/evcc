@@ -328,6 +328,17 @@ func TestSimulateSlotStepModes(t *testing.T) {
 		require.InDelta(t, 0, soc, 1e-9)            // no surplus to absorb, and it never discharges
 	})
 
+	// the subtest above runs holdcharge with pv=0, so its charge half never executes -
+	// stubbing out the SoC update left the whole package green. holdcharge is the mode
+	// the optimizer actuates, so its absorbing half is pinned here with real surplus.
+	t.Run("holdcharge absorbs surplus without importing", func(t *testing.T) {
+		soc, flow, ok := simulateSlotStep(batteryModeHoldCharge, 1, 4, 5, phys)
+		require.True(t, ok)
+		require.InDelta(t, 7.7, soc, 1e-9)          // 3 kWh surplus absorbed at EtaC 0.9
+		require.InDelta(t, 0, flow.ImportKWh, 1e-9) // the surplus-only charge never buys
+		require.InDelta(t, 0, flow.ExportKWh, 1e-9) // and it took all of it
+	})
+
 	// an unrecognised mode used to land in the same branch as normal and be priced as
 	// if it were normal. Two DIFFERENT unrecognised modes therefore produced identical
 	// flows and a delta of exactly zero - "we do not understand this decision" rendered
@@ -1063,4 +1074,27 @@ func TestDeriveBatteryPhysicsDoesNotCacheACallersCancellation(t *testing.T) {
 	phys, err := deriveBatteryPhysics(context.Background())
 	require.NoError(t, err, "the previous caller's cancellation must not have been cached")
 	require.InDelta(t, 10.0, phys.CapacityKWh, 1e-6)
+}
+
+// TestDeriveBatteryPhysicsStillCachesARealFailure is the other half of
+// TestDeriveBatteryPhysicsDoesNotCacheACallersCancellation. Only a CALLER's
+// cancellation is dropped; a genuine failure must still be cached, or util.Cached's
+// back-off is dead and every /api/savingsledger request re-runs a full history scan
+// against the single-connection SQLite instance. Widening the condition to a bare
+// `err != nil` passes every other test in this package - this one is the fence.
+func TestDeriveBatteryPhysicsStillCachesARealFailure(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	// no battery recorded yet: a real failure, nothing to do with any context
+	_, err := deriveBatteryPhysics(context.Background())
+	require.Error(t, err)
+
+	// give the same database a battery, without swapping db.Instance (which would
+	// legitimately reset the cache - see the keyed-to-the-database test above)
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, mustCreateEntity(t, Battery, "bat1"), time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	_, err = deriveBatteryPhysics(context.Background())
+	require.Error(t, err, "a real failure stays cached for the back-off window - only a caller's cancellation is dropped")
 }

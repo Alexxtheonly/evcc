@@ -560,9 +560,9 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 // the battery's new state of charge (in kWh). Those two are everything the ledger
 // prices; the AC-side charge/discharge energy each mode moved is not returned, because
 // it has no consumer that the new SoC does not already give (it is the SoC delta over
-// EtaC / EtaD). Its caller is the per-slot decision
-// replay in ledger_decisions.go, which reads both modes out of the control_slots table
-// and so cannot know they are valid. Code that already holds a mode as a compile-time
+// EtaC / EtaD). Its caller is the per-slot decision replay in ledger_decisions.go,
+// which reads both modes out of the control_slots table and so cannot know they are
+// valid. Code that already holds a mode as a compile-time
 // fact calls that mode's function directly - computeW2 calls simulateNormalStep - so
 // the runtime dispatch, and the ok it has to return, exist only where a mode is really
 // unvalidated input.
