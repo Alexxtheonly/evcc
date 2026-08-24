@@ -148,8 +148,8 @@ func EarliestChainSlot(ctx context.Context) (time.Time, error) {
 // group with no rows, which returns a zero time with configured true, exactly the
 // distinction queryGroupSlots' hasEntities exists to make.
 func earliestGroupSlot(ctx context.Context, group string, requireSoc bool) (time.Time, bool, error) {
-	var ids []int
-	if err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, group).Pluck("id", &ids).Error; err != nil {
+	ids, err := groupEntityIDs(ctx, group)
+	if err != nil {
 		return time.Time{}, false, err
 	}
 	if len(ids) == 0 {
@@ -331,23 +331,15 @@ type groupSlotRow struct {
 // valid" rather than "every slot excluded", which is why this is a distinct return
 // value instead of an empty map.
 func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (rows map[int64]groupSlotRow, hasEntities bool, err error) {
-	var ids []int
-	if err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, group).Pluck("id", &ids).Error; err != nil {
+	ids, err := groupEntityIDs(ctx, group)
+	if err != nil {
 		return nil, false, err
 	}
 	if len(ids) == 0 {
 		return nil, false, nil
 	}
 
-	type row struct {
-		Ts           int64
-		Energy       float64
-		ReturnEnergy float64
-		SocFrac      sql.NullFloat64
-		Excluded     bool
-	}
-
-	var res []row
+	var res []groupSlotRow
 	if err := db.Instance.WithContext(ctx).Table("meters").
 		// recovered/incomplete were added by AutoMigrate with no DEFAULT, so every
 		// pre-migration row has them NULL - COALESCE(...) = 0 treats NULL the same
@@ -364,7 +356,7 @@ func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (row
 
 	rows = make(map[int64]groupSlotRow, len(res))
 	for _, r := range res {
-		rows[r.Ts] = groupSlotRow{Ts: r.Ts, Energy: r.Energy, ReturnEnergy: r.ReturnEnergy, SocFrac: r.SocFrac, Excluded: r.Excluded}
+		rows[r.Ts] = r
 	}
 	return rows, true, nil
 }
@@ -476,10 +468,12 @@ func feedInFallback(ctx context.Context, static *float64) (*float64, error) {
 // (ADR-011 rule 4).
 var ErrLoadpointNoChargeMeter = errors.New("a configured loadpoint has no charge-meter energy history; refusing to model a car-free household")
 
-// loadpointEntityIDs returns the entity ids for every configured loadpoint.
-func loadpointEntityIDs(ctx context.Context) ([]int, error) {
+// groupEntityIDs returns the entity ids for every entity configured in the group. An
+// empty result means the site has no such entity at all - a fact several callers turn
+// into a distinct return value rather than treating it as "no data".
+func groupEntityIDs(ctx context.Context, group string) ([]int, error) {
 	var ids []int
-	err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, Loadpoint).Pluck("id", &ids).Error
+	err := db.Instance.WithContext(ctx).Model(new(entity)).Where(`"group" = ?`, group).Pluck("id", &ids).Error
 	return ids, err
 }
 
@@ -586,7 +580,7 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 	var lpRows map[int64]groupSlotRow
 	var hasLoadpoint bool
 	if includeLoadpoint {
-		lpIDs, err := loadpointEntityIDs(ctx)
+		lpIDs, err := groupEntityIDs(ctx, Loadpoint)
 		if err != nil {
 			return nil, err
 		}

@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"errors"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -119,10 +118,5 @@ func MarkControlSlotModeChanged(ts time.Time) error {
 // endpoints only ever covered energy and tariffs before this - this closes
 // that gap for control_slots.
 func DeleteControlSlots(from, to time.Time) (int64, error) {
-	if from.IsZero() || to.IsZero() {
-		return 0, errors.New("missing from/to")
-	}
-
-	res := db.Instance.Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Delete(new(controlSlot))
-	return res.RowsAffected, res.Error
+	return deleteRange[controlSlot](from, to)
 }

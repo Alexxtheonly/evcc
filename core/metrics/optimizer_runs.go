@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"errors"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -79,10 +78,5 @@ func PersistOptimizerRun(ts time.Time, status string, objectiveValue, gridImport
 // endpoints only ever covered energy and tariffs before this - this closes
 // that gap for optimizer_runs.
 func DeleteOptimizerRuns(from, to time.Time) (int64, error) {
-	if from.IsZero() || to.IsZero() {
-		return 0, errors.New("missing from/to")
-	}
-
-	res := db.Instance.Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Delete(new(optimizerRun))
-	return res.RowsAffected, res.Error
+	return deleteRange[optimizerRun](from, to)
 }

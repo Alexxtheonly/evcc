@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +32,7 @@ func TestComputeLedgerHappyPath(t *testing.T) {
 	require.NoError(t, persist(bat, base, 0, 0, &soc, false, false))
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
-	require.NoError(t, PersistControlSlot(base, batteryModeNormal, ptrMode(batteryModeNormal), "", true, nil))
+	require.NoError(t, PersistControlSlot(base, batteryModeNormal, lo.ToPtr(batteryModeNormal), "", true, nil))
 
 	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
@@ -117,7 +118,7 @@ func TestComputeLedgerDegradesOnBatteryPhysicsRefusal(t *testing.T) {
 
 // TestComputeLedgerDegradesOnRateCeilingRefusal covers the adversarial finding behind
 // ErrBatteryRateCeilingUnavailable: MaxChargeKWh/MaxDischargeKWh are the p99 of
-// OBSERVED per-slot energy (see rateLimitPercentile's doc comment), and percentile()
+// OBSERVED per-slot energy (see rateLimitPercentile's doc comment), and Percentile
 // returns 0 for an empty slice. On a site where the controller has been holding the
 // battery, or where it has simply never discharged, the discharge sample list is
 // empty - before this fix, computeW2 silently used a 0 rate ceiling, the dumb-rule

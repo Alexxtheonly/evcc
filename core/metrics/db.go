@@ -151,6 +151,18 @@ func SetupSchema() error {
 	return db.Instance.AutoMigrate(new(optimizerRun))
 }
 
+// deleteRange removes the rows of T whose ts falls in [from,to). Both bounds are
+// required - a full wipe is /api/db/reset, not an open-ended range that a zero time
+// would silently turn this into.
+func deleteRange[T any](from, to time.Time) (int64, error) {
+	if from.IsZero() || to.IsZero() {
+		return 0, errors.New("missing from/to")
+	}
+
+	res := db.Instance.Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Delete(new(T))
+	return res.RowsAffected, res.Error
+}
+
 // OnPersist, if set, is called with the slot start after a slot is written.
 var OnPersist func(slot time.Time)
 

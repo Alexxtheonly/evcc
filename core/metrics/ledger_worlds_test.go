@@ -14,7 +14,7 @@ import (
 
 // seedBatteryCalibration writes a clean charge-only run followed by a clean
 // discharge-only run, both at 1.0kWh AC per 15min slot, against a true capacity of
-// 10kWh and batteryEta (0.9). It exists purely so deriveBatteryPhysics has enough
+// 10kWh and BatteryEta (0.9). It exists purely so deriveBatteryPhysics has enough
 // single-direction SoC evidence to derive a capacity in tests, without depending on
 // the package's real accumulator/collector machinery.
 //
@@ -60,11 +60,46 @@ func TestDeriveBatteryPhysics(t *testing.T) {
 	require.NoError(t, err)
 
 	require.InDelta(t, 10.0, phys.CapacityKWh, 1e-6)
-	require.Equal(t, batteryEta, phys.EtaC)
-	require.Equal(t, batteryEta, phys.EtaD)
+	require.Equal(t, BatteryEta, phys.EtaC)
+	require.Equal(t, BatteryEta, phys.EtaD)
 	require.InDelta(t, 1.0, phys.MaxChargeKWh, 1e-9)
 	require.InDelta(t, 1.0, phys.MaxDischargeKWh, 1e-9)
 	require.NotEmpty(t, phys.CapacitySource)
+}
+
+// TestDeriveBatteryPhysicsCacheIsKeyedToTheDatabase covers the CACHED entry point -
+// every other test here calls deriveBatteryPhysicsUncached or happens to run first, so
+// the cache itself had no coverage at all. util.Cached has no cache key of its own, so
+// the db.Instance a value was derived from is tracked alongside it; without that, the
+// second site here would be served the first one's battery for five minutes.
+func TestDeriveBatteryPhysicsCacheIsKeyedToTheDatabase(t *testing.T) {
+	loc := time.Now().Location()
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	seedBatteryCalibration(t, mustCreateEntity(t, Battery, "bat1"), start)
+
+	first, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+	require.InDelta(t, 10.0, first.CapacityKWh, 1e-6)
+
+	// same database, immediately: served from the cache, same answer
+	again, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+
+	// a different database with a different battery, well inside the TTL
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	bat := mustCreateEntity(t, Battery, "bat1")
+	capacity := 42.0
+	require.NoError(t, db.Instance.Model(new(entity)).Where("id = ?", bat.Id).Update("capacity_kwh", capacity).Error)
+	seedBatteryCalibration(t, bat, start)
+
+	second, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+	require.InDelta(t, 42.0, second.CapacityKWh, 1e-6, "the previous database's battery must not be served to this one")
 }
 
 func TestDeriveBatteryPhysicsRefusesWithoutEnoughHistory(t *testing.T) {
@@ -94,9 +129,9 @@ func TestPercentileIgnoresSingleOutlier(t *testing.T) {
 	}
 	values = append(values, 40.0) // one glitched/grid-forced slot
 
-	require.InDelta(t, 2.0, percentile(values, rateLimitPercentile), 1e-9,
+	require.InDelta(t, 2.0, Percentile(values, rateLimitPercentile), 1e-9,
 		"the p99 ceiling must come from the 99 normal readings, not the single outlier")
-	require.InDelta(t, 40.0, percentile(values, 1.0), 1e-9, "p100 (the max) should still surface the outlier")
+	require.InDelta(t, 40.0, Percentile(values, 1.0), 1e-9, "p100 (the max) should still surface the outlier")
 }
 
 // TestDeriveBatteryPhysicsRateLimitIgnoresOutlier is the same fix at the
@@ -187,8 +222,8 @@ func TestDeriveBatteryCapacityFromHistoryRampThenStop(t *testing.T) {
 	// row1: 2.5kWh charge -> causes a 22.5pp rise by row2 (2.5*0.9/10)
 	// row2: stop, no further movement
 	soc0 := 0.20
-	soc1 := soc0 + 0.5*batteryEta/capacity
-	soc2 := soc1 + 2.5*batteryEta/capacity
+	soc1 := soc0 + 0.5*BatteryEta/capacity
+	soc2 := soc1 + 2.5*BatteryEta/capacity
 
 	base := time.Unix(1_700_000_000, 0)
 	rows := []batteryHistoryRow{
@@ -220,10 +255,10 @@ func TestDeriveBatteryCapacityFromHistoryRefusesOnDisagreement(t *testing.T) {
 	// direction, evidently the same battery, and yet an honest 2x disagreement.
 	soc := []float64{0.20}
 	for range 3 {
-		soc = append(soc, soc[len(soc)-1]+1.0*batteryEta/10.0)
+		soc = append(soc, soc[len(soc)-1]+1.0*BatteryEta/10.0)
 	}
 	for range 4 {
-		soc = append(soc, soc[len(soc)-1]-1.0/batteryEta/20.0)
+		soc = append(soc, soc[len(soc)-1]-1.0/BatteryEta/20.0)
 	}
 
 	rows := make([]batteryHistoryRow, len(soc))
@@ -407,6 +442,47 @@ func TestComputeW2CarriesMeasuredMovementAcrossGap(t *testing.T) {
 	require.InDelta(t, 1.25, flows[1].ImportKWh, 1e-9)
 	require.Equal(t, 1, drift.Gaps)
 	require.InDelta(t, 2.0, drift.CarriedKWh, 1e-9, "exactly the measured pack's movement across the gap, nothing else")
+}
+
+// TestComputeW2BoundsCarriedStateToFloorAndCapacity pins the min(max(...)) on the
+// gap carry. It is the one part of the carry that can absorb energy silently: a carry
+// that would drive the simulated pack below its floor or above its capacity is clamped,
+// and whatever the clamp absorbs is what W2 never has to buy.
+//
+// The fixture needs THREE gaps because the first one's carry lands inside
+// [floor, capacity] and so pins nothing - gap two drives it below the floor
+// (simulated 1.22kWh, carry -2.17kWh) and gap three above capacity (0.5 + 9.6kWh), so
+// both directions are exercised. Unbounded, the three carries would be -2.583, -3.194
+// and +9.600 (sum +3.823); bounded at [0.5, 10] they are -2.583, -0.720 and +9.500.
+//
+// Ported verbatim from the LEDGER_DB harness's TestW2VariantMatchesProduction, which
+// asserted this against production computeW2 alongside a parameterised twin of it. The
+// twin and its sync test are gone; this half was real coverage and is kept.
+func TestComputeW2BoundsCarriedStateToFloorAndCapacity(t *testing.T) {
+	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0.05, MaxChargeKWh: 2, MaxDischargeKWh: 2}
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 4, 23, 30, 0, 0, loc)
+	socs := []float64{0.40, 0.55, 0.50, 0.20, 0.30, 0.02, 0.98}
+	starts := []time.Time{base, base.Add(15 * time.Minute), base.Add(30 * time.Minute), base.Add(90 * time.Minute), base.Add(105 * time.Minute), base.Add(165 * time.Minute), base.Add(225 * time.Minute)}
+	loads := []float64{0.5, 0, 1.5, 3.0, 0.2, 0, 0}
+	pvs := []float64{0, 2.5, 0, 0, 1.0, 0, 0}
+
+	slots := make([]slotData, len(socs))
+	for i := range socs {
+		soc := socs[i]
+		slots[i] = slotData{
+			Start: starts[i], HomeKWh: loads[i], PVKWh: pvs[i], BatterySocFrac: &soc,
+			BatteryChargeKWh: pvs[i] / 2, BatteryDischargeKWh: loads[i] / 4,
+			PriceGrid: 0.30, PriceFeedIn: 0.05,
+		}
+	}
+
+	_, drift, err := computeW2(slots, phys)
+	require.NoError(t, err)
+
+	require.Equal(t, 3, drift.Gaps)
+	require.InDelta(t, 6.197, drift.CarriedKWh, 1e-3, "unbounded this is +3.823 - the bound must still bind in both directions")
 }
 
 func TestComputeW2RefusesOnMissingSoc(t *testing.T) {
