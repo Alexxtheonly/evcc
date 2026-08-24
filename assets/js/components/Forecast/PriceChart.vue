@@ -112,8 +112,6 @@ export default defineComponent({
 			};
 		},
 
-		// --- optimizer schedule overlay (Phase 2.1) ---
-
 		batteryChargeWindows(): TimeWindow[] {
 			return batteryChargeWindows(this.evopt);
 		},
@@ -166,8 +164,6 @@ export default defineComponent({
 			};
 		},
 
-		// --- battery SoC trajectory (Phase 2.2) ---
-
 		batteryDetails() {
 			return this.evopt?.details?.batteryDetails || [];
 		},
@@ -186,8 +182,6 @@ export default defineComponent({
 			return this.socSeries.some((s) => s.points.length > 0);
 		},
 
-		// --- adaptive plan markers (Phase 2.3) ---
-
 		planMarkers() {
 			return adaptivePlanMarkers(
 				this.vehicles,
@@ -195,8 +189,6 @@ export default defineComponent({
 				this.endDate.getTime()
 			);
 		},
-
-		// --- slot-0 decision annotation (Phase 2.4) ---
 
 		optimizerDecisionLabel(): string | undefined {
 			const d = this.optimizerDecision;

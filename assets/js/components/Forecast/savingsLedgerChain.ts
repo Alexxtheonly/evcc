@@ -81,7 +81,6 @@ export function coverageDivergence(
 export const EV_TIMING_NOTE =
   "EV charge timing is not attributed to any measure - PV/Battery/Control all price a loadpoint's energy at when it was actually drawn, so shifting a charge to a cheaper slot shows EUR 0 of value here even when it saved money";
 
-
 export const DEFAULT_WINDOW_DAYS = 7;
 
 /** Truncate to the current 15-minute slot start, in local wall-clock time. Safe against
