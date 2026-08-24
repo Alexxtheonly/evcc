@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vite-plus/test";
 import {
   coverageDivergence,
-  isControlOverspend,
   EV_TIMING_NOTE,
   alignToSlotStart,
   ceilToSlotStart,
@@ -11,34 +10,10 @@ import {
   isWindowAtPresent,
   clampWindowToEarliest,
   pickSettled,
-  ZERO_EPSILON_EUR,
 } from "./savingsLedgerChain";
-import type { LedgerChain, LedgerCoverage } from "./savingsLedger.types";
+import type { LedgerCoverage } from "./savingsLedger.types";
 
 const settled = (perSlot: number, periodAverage = perSlot) => ({ perSlot, periodAverage });
-
-// Sign convention (ledger_worlds.go's Contribution doc comment, confirmed against
-// TestChainOraclePerSlotEuros): Contribution = Cost(previous world) - Cost(this world).
-// Costs (Worlds[].Settled) are positive money paid; a measure that reduced cost is a
-// POSITIVE contribution (savings), one that made things worse is NEGATIVE (overspend).
-function baseChain(overrides: Partial<LedgerChain> = {}): LedgerChain {
-  return {
-    worlds: [
-      { label: "W0", settled: settled(44.24) },
-      { label: "W1", settled: settled(13.91) },
-      { label: "W2", settled: settled(6.25) },
-      { label: "W3", settled: settled(2.83) },
-    ],
-    contributions: [
-      { label: "PV", settled: settled(30.33) }, // W0-W1: savings
-      { label: "Battery", settled: settled(7.66) }, // W1-W2: savings
-      { label: "Control", settled: settled(3.42, 0.32) }, // W2-W3: savings (real controller beat the dumb rule)
-    ],
-    coverage: { validSlots: 651, totalSlots: 672, fraction: 651 / 672 },
-    meterResidual: { sumKWh: 0.1, absSumKWh: 4.2, slots: 651, eurBand: 0 },
-    ...overrides,
-  };
-}
 
 // The UI recognises one backend note by its text (EV_TIMING_NOTE's doc comment says why
 // it has to). This is the tie that makes that coupling loud: it reads the Go source and
@@ -51,44 +26,6 @@ describe("EV_TIMING_NOTE", () => {
     const match = go.match(/const noteEVTimingUnattributed = "((?:[^"\\]|\\.)*)"/);
     expect(match, "noteEVTimingUnattributed not found - was it renamed or moved?").not.toBeNull();
     expect(match![1]).toBe(EV_TIMING_NOTE);
-  });
-});
-
-describe("isControlOverspend", () => {
-  it("is false when Control is positive (savings) or absent", () => {
-    expect(isControlOverspend(baseChain(), "perSlot")).toBe(false);
-    expect(
-      isControlOverspend(
-        baseChain({ contributions: [{ label: "PV", settled: settled(1) }] }),
-        "perSlot"
-      )
-    ).toBe(false);
-  });
-
-  it("is true when Control is a genuine negative contribution at the given headline", () => {
-    const chain = baseChain({
-      contributions: [
-        { label: "PV", settled: settled(30.33) },
-        { label: "Battery", settled: settled(7.66) },
-        { label: "Control", settled: settled(-0.95, -0.15) },
-      ],
-    });
-    expect(isControlOverspend(chain, "perSlot")).toBe(true);
-    expect(isControlOverspend(chain, "periodAverage")).toBe(true);
-  });
-
-  it("does not call a sub-epsilon negative an overspend - that is rounding, not a loss", () => {
-    const chain = baseChain({
-      contributions: [{ label: "Control", settled: settled(-(ZERO_EPSILON_EUR / 2)) }],
-    });
-    expect(isControlOverspend(chain, "perSlot")).toBe(false);
-    // one cent, comfortably clear of the epsilon, is a loss
-    expect(
-      isControlOverspend(
-        baseChain({ contributions: [{ label: "Control", settled: settled(-0.01) }] }),
-        "perSlot"
-      )
-    ).toBe(true);
   });
 });
 

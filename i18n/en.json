@@ -1232,6 +1232,10 @@
         "deltaUnknown": "Not computable for this slot.",
         "empty": "No control decisions recorded in this period.",
         "health": "Recorded while the optimizer was unhealthy",
+        "legend": {
+          "deltaCost": "Δ > 0",
+          "deltaSaved": "Δ ≤ 0"
+        },
         "modeChanged": "The applied mode changed again later in this slot - the point above is only a sample taken at its start.",
         "noVeto": "Nothing was vetoed in this slot.",
         "outcome": {

@@ -6,7 +6,7 @@
 		class="waterfall"
 		role="img"
 		:aria-label="ariaLabel"
-		:style="{ height: `${chartHeight}px` }"
+		:style="{ height: `${CHART_HEIGHT}px` }"
 		data-testid="savings-ledger-waterfall"
 	></div>
 </template>
@@ -23,7 +23,7 @@ import formatter from "@/mixins/formatter";
 import echartsChart from "@/mixins/echartsChart";
 import type { CURRENCY } from "@/types/evcc";
 import type { LedgerChain } from "./savingsLedger.types";
-import { contributionBand, ZERO_EPSILON_EUR, type SettlementHeadline } from "./savingsLedgerChain";
+import { ZERO_EPSILON_EUR, type SettlementHeadline } from "./savingsLedgerChain";
 import {
 	waterfallLayout,
 	waterfallAxis,
@@ -68,17 +68,13 @@ export default defineComponent({
 		},
 		currency: { type: String as PropType<CURRENCY> },
 	},
+	data() {
+		// exposed to the template so the drawn height and PLOT_HEIGHT come from one number
+		return { CHART_HEIGHT };
+	},
 	computed: {
-		chartHeight(): number {
-			return CHART_HEIGHT;
-		},
 		layout(): WaterfallLayout {
 			return waterfallLayout(this.chain, this.headline);
-		},
-		// the period's own measurement noise floor, in euro - what a contribution's
-		// magnitude has to clear before its sign is evidence (savingsLedgerChain.ts).
-		band(): number {
-			return contributionBand(this.chain);
 		},
 		ariaLabel(): string {
 			const money = (v: number) => this.fmtMoney(v, this.currency, true, true);
@@ -232,14 +228,11 @@ export default defineComponent({
 		},
 	},
 	methods: {
-		column(key: string): WaterfallColumn | undefined {
-			return this.layout.columns.find((c) => c.key === key);
-		},
 		// ADR-011 rule 7: the estimate marker lives IN the axis label, not in a footnote.
 		axisLabel(key: string): string {
 			const name = this.$t(`forecast.savingsLedger.axis.${key}`) as string;
 			const line = `{n|${name}}`;
-			if (!this.column(key)?.estimated) return line;
+			if (!this.layout.columns.find((c) => c.key === key)?.estimated) return line;
 			return `${line}\n{e|${this.$t("forecast.savingsLedger.estimated")}}`;
 		},
 		// Money as an effect on the bill. A contribution is POSITIVE when it SAVED money
@@ -354,7 +347,7 @@ export default defineComponent({
 					2,
 					0,
 					`<div class="fw-normal">${t("forecast.savingsLedger.insideNoise", {
-						band: this.fmtMoney(this.band, this.currency, true, true),
+						band: this.fmtMoney(this.layout.band, this.currency, true, true),
 					})}</div>`
 				);
 			}

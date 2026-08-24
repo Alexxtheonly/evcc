@@ -1217,6 +1217,10 @@
         "deltaUnknown": "Für dieses Zeitfenster nicht berechenbar.",
         "empty": "In diesem Zeitraum wurden keine Steuerungsentscheidungen aufgezeichnet.",
         "health": "Aufgezeichnet, während der Optimizer nicht gesund war",
+        "legend": {
+          "deltaCost": "Δ > 0",
+          "deltaSaved": "Δ ≤ 0"
+        },
         "modeChanged": "Der angewendete Modus hat sich später in diesem Zeitfenster nochmals geändert - der Punkt darüber ist nur eine Stichprobe zu seinem Beginn.",
         "noVeto": "In diesem Zeitfenster wurde nichts verworfen.",
         "outcome": {

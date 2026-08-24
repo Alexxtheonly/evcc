@@ -1,5 +1,5 @@
 import { shallowMount, config } from "@vue/test-utils";
-import { describe, it, expect } from "vite-plus/test";
+import { describe, it, expect, afterEach } from "vite-plus/test";
 import en from "../../../../i18n/en.json";
 import SavingsLedgerWaterfall, { PLOT_HEIGHT } from "./SavingsLedgerWaterfall.vue";
 import colors, { batteryColor } from "@/colors";
@@ -12,8 +12,8 @@ import {
   minSpan,
   AXIS_HEADROOM,
   BAR_MIN_PX,
-  WATERFALL_KEYS,
 } from "./savingsLedgerWaterfall";
+import { ZERO_EPSILON_EUR, contributionBand } from "./savingsLedgerChain";
 import type { LedgerChain } from "./savingsLedger.types";
 // A real GET /api/savingsledger response from the owner's site (2 days, 2026-08-22..24).
 // Kept as a fixture rather than hand-written numbers because it carries a negative
@@ -69,7 +69,13 @@ function baseChain(overrides: Partial<LedgerChain> = {}): LedgerChain {
 describe("waterfallLayout", () => {
   it("always emits the five columns in causal order", () => {
     const layout = waterfallLayout(baseChain(), "perSlot");
-    expect(layout.columns.map((c) => c.key)).toEqual(WATERFALL_KEYS);
+    expect(layout.columns.map((c) => c.key)).toEqual([
+      "baseline",
+      "pv",
+      "battery",
+      "control",
+      "paid",
+    ]);
   });
 
   it("telescopes exactly: every level is that world's cost and the chain ends at W3", () => {
@@ -81,7 +87,7 @@ describe("waterfallLayout", () => {
     expect(level("pv")).toBeCloseTo(13.91, 12); // W1
     expect(level("battery")).toBeCloseTo(6.25, 12); // W2
     expect(level("control")).toBeCloseTo(2.83, 12); // W3
-    expect(layout.endLevel).toBeCloseTo(layout.paid, 12);
+    expect(layout.columns[3]!.level).toBeCloseTo(layout.paid, 12);
     expect(layout.saved).toBeCloseTo(44.24 - 2.83, 12);
     expect(layout.savedFraction).toBeCloseTo((44.24 - 2.83) / 44.24, 12);
   });
@@ -94,7 +100,7 @@ describe("waterfallLayout", () => {
       expect(layout.paid).toBe(w(3));
       expect(layout.columns[1]!.level).toBeCloseTo(w(1), 12);
       expect(layout.columns[2]!.level).toBeCloseTo(w(2), 12);
-      expect(layout.endLevel).toBeCloseTo(w(3), 12);
+      expect(layout.columns[3]!.level).toBeCloseTo(w(3), 12);
       // every middle bar spans exactly |contribution|
       for (const c of layout.columns.filter((x) => !x.total)) {
         expect(c.span).toBeCloseTo(Math.abs(c.eur), 12);
@@ -184,14 +190,20 @@ describe("waterfallLayout", () => {
       batteryPhysics: undefined,
     });
     const layout = waterfallLayout(chain, "perSlot");
-    expect(layout.columns.map((c) => c.key)).toEqual(WATERFALL_KEYS);
+    expect(layout.columns.map((c) => c.key)).toEqual([
+      "baseline",
+      "pv",
+      "battery",
+      "control",
+      "paid",
+    ]);
     for (const key of ["battery", "control"]) {
       const col = layout.columns.find((c) => c.key === key)!;
       expect(col.eur).toBe(0);
       expect(col.zero).toBe(true);
       expect(col.span).toBe(0);
     }
-    expect(layout.endLevel).toBeCloseTo(4, 12);
+    expect(layout.columns[3]!.level).toBeCloseTo(4, 12);
   });
 
   it("marks nothing as estimated when batteryPhysics is absent", () => {
@@ -243,15 +255,78 @@ describe("waterfallLayout", () => {
   });
 });
 
+// The card's "control cost you money" / "too small to call" clauses and the Control bar's
+// own colour used to be derived from two separate implementations of the same two
+// predicates. They are the layout's now, so a change to the noise band cannot make the
+// sentence and the bar directly above it disagree.
+describe("waterfallLayout Control verdict", () => {
+  it("publishes the period's noise band the verdicts are measured against", () => {
+    const chain = baseChain({
+      meterResidual: { sumKWh: 0.1, absSumKWh: 4.2, slots: 651, eurBand: 0.42 },
+    });
+    expect(waterfallLayout(chain, "perSlot").band).toBe(0.42);
+    expect(waterfallLayout(chain, "perSlot").band).toBe(contributionBand(chain));
+    // never below the drawing threshold, even on a period with a perfect residual
+    expect(waterfallLayout(baseChain(), "perSlot").band).toBe(ZERO_EPSILON_EUR);
+  });
+
+  it("reports no verdict at all for a chain that carries no Control contribution", () => {
+    const layout = waterfallLayout(
+      baseChain({ contributions: [{ label: "PV", settled: settled(1) }] }),
+      "perSlot"
+    );
+    expect(layout.control).toBeNull();
+    // the column itself is still drawn, and its own insideNoise flag is true because an
+    // absent measure is a zero-magnitude one - which is exactly why the card must read
+    // layout.control and not that column. A site that never ran a controller is not a
+    // site whose controller was "too small to call".
+    const column = layout.columns.find((c) => c.key === "control")!;
+    expect(column.insideNoise).toBe(true);
+    expect(column.overspend).toBe(false);
+  });
+
+  it("calls a Control saving neither an overspend nor a loss", () => {
+    const layout = waterfallLayout(baseChain(), "perSlot");
+    expect(layout.control!.overspend).toBe(false);
+    expect(layout.control!.insideNoise).toBe(false);
+  });
+
+  it("calls a genuine negative Control an overspend at either headline", () => {
+    const chain = baseChain({
+      contributions: [
+        { label: "PV", settled: settled(30.33) },
+        { label: "Battery", settled: settled(7.66) },
+        { label: "Control", settled: settled(-0.95, -0.15) },
+      ],
+    });
+    expect(waterfallLayout(chain, "perSlot").control!.overspend).toBe(true);
+    expect(waterfallLayout(chain, "periodAverage").control!.overspend).toBe(true);
+  });
+
+  it("does not call a sub-epsilon negative an overspend - that is rounding, not a loss", () => {
+    const rounding = baseChain({
+      contributions: [{ label: "Control", settled: settled(-(ZERO_EPSILON_EUR / 2)) }],
+    });
+    expect(waterfallLayout(rounding, "perSlot").control!.overspend).toBe(false);
+    // one cent, comfortably clear of the epsilon, is a loss
+    const cent = baseChain({ contributions: [{ label: "Control", settled: settled(-0.01) }] });
+    expect(waterfallLayout(cent, "perSlot").control!.overspend).toBe(true);
+  });
+});
+
 describe("plotLevels", () => {
   it("emits one connector height per column, in the shifted plotting system", () => {
     const layout = waterfallLayout(live, "periodAverage");
+    // the live payload's periodAverage worlds, in order: W0, W1, W2, W3, W3 again
     const levels = plotLevels(layout);
-    expect(levels).toHaveLength(layout.columns.length);
-    levels.forEach((v, i) => expect(v).toBeCloseTo(layout.columns[i]!.level - layout.origin, 12));
+    expect(levels).toHaveLength(5);
+    expect(levels[0]).toBeCloseTo(6.6656, 4);
+    expect(levels[1]).toBeCloseTo(2.7166, 4);
+    expect(levels[2]).toBeCloseTo(0.1927, 4);
     // the last two are the same level by construction (control's level IS what was paid),
     // so the step from the control bar to the "you paid" bar is a flat connector
-    expect(levels[3]).toBeCloseTo(levels[4]!, 12);
+    expect(levels[3]).toBeCloseTo(0.6019, 4);
+    expect(levels[4]).toBeCloseTo(0.6019, 4);
   });
 
   it("stays non-negative through the origin shift on a net-credit period", () => {
@@ -314,8 +389,9 @@ describe("waterfallAxis", () => {
 
 describe("plotSpan / minSpan", () => {
   it("floors a small-but-nonzero bar at the pixel minimum", () => {
+    // 4px of a 144px plot area, on an 8 EUR axis
     const floor = minSpan(8, 144);
-    expect(floor).toBeCloseTo((BAR_MIN_PX / 144) * 8, 12);
+    expect(floor).toBeCloseTo(0.2222, 4);
 
     // 6 cents against an 8 EUR axis is a two-pixel sliver - above ZERO_EPSILON_EUR, so a
     // real figure, but unreadable once the "estimated" dashed outline is drawn on it
@@ -393,6 +469,13 @@ config.global.mocks["$t"] = (key: string, params?: Record<string, unknown>) => {
 };
 config.global.mocks["$i18n"] = { locale: "en-US" };
 
+// colors.* are CSS-variable-backed and read back as "" under happy-dom, so several
+// assertions below have to stub them. Restored after EVERY test in this file, including
+// one that throws: a `finally` inside a single test does not cover an assertion that
+// throws outside its try, which would leak the fake palette into every later test.
+const paletteBefore = { ...colors };
+afterEach(() => Object.assign(colors, paletteBefore));
+
 function option(
   headline: "perSlot" | "periodAverage" = "periodAverage",
   chain: LedgerChain = live
@@ -427,8 +510,15 @@ describe("SavingsLedgerWaterfall chart option", () => {
     // behind the bar that caused it
     expect(connector.z).toBeLessThan(o.series[0].z);
     expect(connector.z).toBeLessThan(o.series[1].z);
-    // same shifted plotting system as the bars
-    expect(connector.data).toEqual(plotLevels(waterfallLayout(live, "periodAverage")));
+    // same shifted plotting system as the bars: the live payload's four world costs,
+    // with W3 repeated for the flat step onto the "you paid" bar
+    expect(connector.data.map((v: number) => v.toFixed(4))).toEqual([
+      "6.6656",
+      "2.7166",
+      "0.1927",
+      "0.6019",
+      "0.6019",
+    ]);
   });
 
   it("caps the bar width and keeps the pedestal in step with it", () => {
@@ -507,14 +597,14 @@ describe("SavingsLedgerWaterfall chart option", () => {
   });
 
   it("gives every bar label full contrast, and an overspend label the danger colour", () => {
-    // colors.* read back as "" under happy-dom, so this asserts on the distinction the
-    // code makes rather than on the resolved hex: the overspend label is coloured
-    // separately from the rest, and no label is ever left to inherit the bar's colour.
+    colors.text = "#text";
+    colors.danger = "#danger";
+    // no label is ever left to inherit the bar's own colour, and the overspend label is
+    // the one that differs
     const labels = option("periodAverage", liveOverspend).series[1].data.map(
       (d: any) => d.label.color
     );
-    expect(labels).toHaveLength(5);
-    for (const c of labels) expect(typeof c).toBe("string");
+    expect(labels).toEqual(["#text", "#text", "#text", "#danger", "#text"]);
     const saved: LedgerChain = {
       ...liveOverspend,
       contributions: live.contributions.map((c) =>
@@ -569,10 +659,9 @@ describe("SavingsLedgerWaterfall chart option", () => {
   it("drops the semantic colour from a contribution inside the noise band, either way", () => {
     // colors.* read back as "" under happy-dom, which cannot tell muted from danger -
     // set both to distinguishable values for this assertion and restore afterwards.
-    const [mutedBefore, dangerBefore] = [colors.muted, colors.danger];
     colors.muted = "#muted";
     colors.danger = "#danger";
-    try {
+    {
       // live's Control is -EUR 0.326 against an eurBand of EUR 0.625: a loss too small
       // to call, which must not be drawn as one - and was not
       const lossInside = option("perSlot", live).series[1].data[3].itemStyle;
@@ -600,8 +689,6 @@ describe("SavingsLedgerWaterfall chart option", () => {
       expect(option("perSlot", gainOutside).series[1].data[3].itemStyle.color).toBe(
         batteryColor(1)
       );
-    } finally {
-      [colors.muted, colors.danger] = [mutedBefore, dangerBefore];
     }
   });
 
