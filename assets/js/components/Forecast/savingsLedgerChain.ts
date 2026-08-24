@@ -66,6 +66,21 @@ export function coverageDivergence(
   return { headlineFraction: headline.fraction, chainFraction: chain.fraction };
 }
 
+/** core/metrics/ledger_worlds.go's noteEVTimingUnattributed, verbatim.
+ *
+ * The one chain note whose subject matter ADR-011 rule 7 puts under the chart rather than
+ * behind the info control (SavingsLedgerCard.vue's evTimingCaption). The API has no note
+ * IDs, so recognising it means comparing prose - a coupling that cannot be removed from
+ * this side, only made loud: savingsLedgerChain.test.ts reads that Go file and fails the
+ * build the moment the string is reworded, so the caption can never silently stop
+ * rendering. Match it whole, never by a prefix: a half-recognised note is a note whose
+ * meaning may already have moved.
+ *
+ * The note itself is never lost either way - it renders verbatim in the info modal like
+ * every other one; only the summary line under the chart depends on this match. */
+export const EV_TIMING_NOTE =
+  "EV charge timing is not attributed to any measure - PV/Battery/Control all price a loadpoint's energy at when it was actually drawn, so shifting a charge to a cheaper slot shows EUR 0 of value here even when it saved money";
+
 // --- period window -----------------------------------------------------------------
 
 export const DEFAULT_WINDOW_DAYS = 7;

@@ -204,18 +204,11 @@ import {
 	contributionBand,
 	isControlInsideNoise,
 	isControlOverspend,
+	EV_TIMING_NOTE,
 	type LedgerWindow,
 	type SettlementHeadline,
 } from "./savingsLedgerChain";
 import { waterfallLayout, type WaterfallLayout } from "./savingsLedgerWaterfall";
-
-// The one chain note whose subject matter ADR-011 rule 7 puts under the chart rather than
-// behind the info control: a measure that exists but cannot be attributed. Matched on its
-// stable opening rather than rendered verbatim (core/metrics/ledger_worlds.go's
-// noteEVTimingUnattributed, emitted only when the site actually has a loadpoint) so the
-// line appears exactly when it applies and never claims something about a site with no EV.
-// The full note itself still renders in the modal, deduped with the rest.
-const EV_TIMING_NOTE_PREFIX = "EV charge timing is not attributed";
 
 // ?from=&to= (RFC3339) seeds/reseeds the period, deliberately NOT aligned or clamped
 // the way paging (page()/jumpToPresent()) always is - this is the sanctioned way to
@@ -490,11 +483,11 @@ export default defineComponent({
 			}) as string;
 		},
 		// ADR-011 rule 7: rendered only when the API actually sent the EV-timing note (see
-		// EV_TIMING_NOTE_PREFIX), so a site without a loadpoint is not told about a
+		// EV_TIMING_NOTE), so a site without a loadpoint is not told about a
 		// non-attribution that cannot affect it.
 		evTimingCaption(): string {
 			const notes = this.ledger?.chain?.notes ?? [];
-			if (!notes.some((n) => n.startsWith(EV_TIMING_NOTE_PREFIX))) return "";
+			if (!notes.includes(EV_TIMING_NOTE)) return "";
 			return this.$t("forecast.savingsLedger.evTimingShort") as string;
 		},
 		// ADR-011 rule 7: every caveat the API sends must be rendered, never dropped -
@@ -502,17 +495,17 @@ export default defineComponent({
 		// OPEN with noteInvoiceComparability (core/metrics/ledger_worlds.go /
 		// ledger_settlement.go), but realised.note appends its own static-feed-in
 		// disclosure to it, so the two stopped being string-equal and a Set-based dedupe
-		// let the invoice sentence render twice. Deduped on the leading sentence instead:
-		// whichever form arrives first is kept whole, and a later note that merely repeats
-		// that opening is dropped. Nothing is ever lost - the longer form is the one the
-		// backend sends first (realised.note leads the list).
+		// let the invoice sentence render twice. Deduped by containment instead: a note
+		// that is a prefix of one already kept adds nothing the longer form doesn't say.
+		// Nothing is ever lost - realised.note leads the list, so the longer form is the
+		// one kept whole. Deliberately no separator or sentence splitting: that made the
+		// backend's punctuation load-bearing for whether a caveat rendered.
 		notes(): string[] {
 			if (!this.ledger) return [];
 			const all = [this.ledger.realised.note, ...(this.ledger.chain?.notes ?? [])];
 			const kept: string[] = [];
 			for (const note of all) {
-				const head = note.split(";")[0] ?? note;
-				if (kept.some((k) => k.startsWith(head))) continue;
+				if (kept.some((k) => k.startsWith(note))) continue;
 				kept.push(note);
 			}
 			return kept;

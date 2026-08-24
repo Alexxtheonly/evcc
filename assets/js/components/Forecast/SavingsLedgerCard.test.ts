@@ -15,6 +15,8 @@ import api from "@/api";
 import SavingsLedgerCard from "./SavingsLedgerCard.vue";
 // eslint-disable-next-line import/first
 import liveSample from "./__fixtures__/ledgerLiveSample";
+// eslint-disable-next-line import/first
+import { EV_TIMING_NOTE } from "./savingsLedgerChain";
 
 // minimal $t/$te that walk en.json so tests assert on real English text, matching the
 // pattern in Vehicles/Status.test.ts and Optimize/OptimizeHeader.test.ts. Also expands
@@ -440,16 +442,12 @@ describe("SavingsLedgerCard presentation", () => {
     expect(line.exists()).toBe(true);
     expect(line.text()).toContain("cheaper hour");
     // the API's own full sentence is still handed to the modal, never dropped
-    expect((wrapper.vm as any).notes).toContain(
-      liveSample.chain!.notes!.find((n) => n.startsWith("EV charge timing"))
-    );
+    expect((wrapper.vm as any).notes).toContain(EV_TIMING_NOTE);
   });
 
   test("drops the EV-timing line for a site whose payload never mentions it", async () => {
     const noEv = JSON.parse(JSON.stringify(liveSample));
-    noEv.chain.notes = noEv.chain.notes.filter(
-      (n: string) => !n.startsWith("EV charge timing is not attributed")
-    );
+    noEv.chain.notes = noEv.chain.notes.filter((n: string) => n !== EV_TIMING_NOTE);
 
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: noEv });
     const wrapper = mountCard(PRESENT_WINDOW);

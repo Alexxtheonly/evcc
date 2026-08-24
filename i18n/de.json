@@ -1166,6 +1166,113 @@
       "range": "Bereich"
     },
     "priceZoom": "vergrößern",
+    "savingsLedger": {
+      "axis": {
+        "baseline": "Basis",
+        "battery": "Batterie",
+        "control": "Steuerung",
+        "paid": "gezahlt",
+        "pv": "Sonne"
+      },
+      "chain": {
+        "baseline": {
+          "label": "Ohne Sonne, Batterie und Steuerung",
+          "sub": "jede kWh, die das Haus verbraucht hat, zum Netztarif des Zeitfensters, in dem sie verbraucht wurde"
+        },
+        "battery": {
+          "label": "Batterie, einfache Regel",
+          "sub": "aus Überschuss laden, in den Hausverbrauch entladen, nie aus dem Netz"
+        },
+        "control": {
+          "label": "Steuerung",
+          "sub": "die reale Steuerung gegen die einfache Regel als Vorgabe"
+        },
+        "paid": {
+          "label": "Du hast gezahlt",
+          "sub": "Netzbezug zum abgerechneten Preis - die einzige Zahl, die deine Rechnung bestätigen kann"
+        },
+        "pv": {
+          "label": "Sonne, direkt genutzt und eingespeist",
+          "sub": "Eigenverbrauch zum Preis des jeweiligen Zeitfensters, Einspeisung zur realen Einspeisevergütung"
+        },
+        "routing": {
+          "label": "Verteilung"
+        },
+        "timing": {
+          "label": "Zeitpunkt"
+        }
+      },
+      "chainUnavailable": "Der Vergleich zwischen Batterie und Basis ist für diesen Zeitraum nicht verfügbar: {reason}",
+      "chartAria": "Wasserfalldiagramm: {start} ohne Sonne, Batterie und Steuerung, schrittweise abwärts durch das, was jede Maßnahme bewirkt hat, bis zu {end} tatsächlich gezahlt.",
+      "controlInsideNoiseShort": "Steuerung bewegte {amount}, innerhalb der Messunsicherheit dieses Zeitraums von {band} - zu klein für eine Aussage in beide Richtungen",
+      "controlOverspendShort": "Steuerung kostete {amount} gegenüber ihrer Basis",
+      "coverageChainDiverges": "Das Diagramm wird über {pct} der Zeitfenster berechnet - weniger als die Kennzahlen darüber, weil es zusätzlich Batterie- und Fahrzeugdaten braucht, die der reine Netzwert nicht benötigt.",
+      "coverageDiagramShort": "Diagramm über {pct} der Zeitfenster ({valid} von {total})",
+      "coverageExcluded": "Ausgeschlossene Zeitfenster werden verworfen, nie hochgerechnet, um die Lücke zu füllen.",
+      "coverageShort": "{pct} der Zeitfenster ({valid} von {total})",
+      "decisions": {
+        "applied": "Angewendet",
+        "delta": "Delta im Zeitfenster",
+        "deltaNote": "Bewertet nur dieses eine Zeitfenster gegen seinen eigenen Anfangsladestand, nicht das, was danach passiert ist - keine Rückschau. Eine Entscheidung, die sich erst später auszahlt, kann hier das falsche Vorzeichen haben.",
+        "deltaUnknown": "Für dieses Zeitfenster nicht berechenbar.",
+        "empty": "In diesem Zeitraum wurden keine Steuerungsentscheidungen aufgezeichnet.",
+        "health": "Aufgezeichnet, während der Optimizer nicht gesund war",
+        "modeChanged": "Der angewendete Modus hat sich später in diesem Zeitfenster nochmals geändert - der Punkt darüber ist nur eine Stichprobe zu seinem Beginn.",
+        "noVeto": "In diesem Zeitfenster wurde nichts verworfen.",
+        "outcome": {
+          "noSuggestion": "kein Vorschlag aufgezeichnet",
+          "steady": "unverändert, nichts verworfen",
+          "vetoedCost": "verworfen, kostete {delta}",
+          "vetoedSaved": "verworfen, sparte {delta}",
+          "vetoedUnknown": "verworfen, Delta nicht berechenbar"
+        },
+        "reason": "Warum es abweicht",
+        "recordedSpan": "Aufgezeichnete Zeitfenster: {from} – {to}",
+        "suggested": "Stattdessen vorgeschlagen",
+        "table": {
+          "applied": "Angewendet",
+          "basis": "Basis",
+          "delta": "Δ",
+          "suggested": "Verworfen",
+          "time": "Zeitfenster"
+        },
+        "tableToggle": "Tabellenansicht",
+        "timelineToggle": "Zeitleiste",
+        "title": "Entscheidungen je Zeitfenster",
+        "unhealthyCount": "{count} dieser verworfenen Vorschläge wurden aufgezeichnet, während der Optimizer nicht gesund war."
+      },
+      "details": {
+        "cost": "kostete dich",
+        "saved": "gespart",
+        "wouldHaveCost": "hätte gekostet",
+        "youPaid": "du hast gezahlt"
+      },
+      "diagramSubsetWarning": "Alle Werte darüber gelten für die {pct} der Zeitfenster, über die das Diagramm gezeichnet werden konnte. Im gesamten Zeitraum hast du {amount} gezahlt.",
+      "estimated": "geschätzt",
+      "estimatedCaption": "Batterie und Steuerung sind geschätzt",
+      "evTimingShort": "Eine Fahrzeugladung in eine günstigere Stunde zu verschieben zählt hier als null.",
+      "headline": {
+        "periodAverage": "Durchschnitt",
+        "perSlot": "je Zeitfenster"
+      },
+      "info": {
+        "end": "Der letzte Balken ist das, was tatsächlich ans Netz gezahlt wurde.",
+        "estimates": "Sonne ist gemessen. Batterie und Steuerung sind geschätzt: Sie simulieren, was eine einfache Batterie („aus Überschuss laden, ins Haus entladen“) über dieselbe gemessene Energie getan hätte, unter diesen Annahmen.",
+        "physicsCapacity": "Kapazität {value} - {source}.",
+        "physicsEta": "Wirkungsgrad je Richtung {charge} beim Laden, {discharge} beim Entladen - {source}.",
+        "physicsFloor": "Entladegrenze {value} - {source}.",
+        "start": "Der erste Balken ist das, was der Strom in diesem Zeitraum ohne Sonne, ohne Batterie und ohne Steuerung gekostet hätte: jede kWh, die das Haus verbraucht hat, zum Netztarif des Zeitfensters, in dem sie verbraucht wurde.",
+        "steps": "Jeder Schritt danach zieht ab, was eine Maßnahme gespart hat, der Balken sinkt also. Ein Schritt, der die Rechnung erhöht hat, wird nach oben gezeichnet und rot eingefärbt - gezeigt, nie auf null gekappt. Bei den drei mittleren Balken ist ↓ das, was die Maßnahme von der Rechnung genommen hat, und ↑ das, was sie hinzugefügt hat; der erste und der letzte Balken sind Summen und werden schlicht dargestellt.",
+        "title": "Wie das berechnet wird"
+      },
+      "insideNoise": "kleiner als die Messunsicherheit dieses Zeitraums ({band}) - der Betrag ist real, die Richtung nicht",
+      "loading": "Sparbilanz wird geladen…",
+      "measured": "gemessen",
+      "notesTitle": "Technische Hinweise",
+      "periodJumpToPresent": "Zu jetzt springen",
+      "refuseTitle": "Kein Wert für diesen Zeitraum",
+      "title": "Was das System mit deinem Geld gemacht hat"
+    },
     "showLine": "Linie anzeigen",
     "solar": {
       "dayAfterTomorrow": "Übermorgen",

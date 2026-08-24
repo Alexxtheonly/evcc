@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vite-plus/test";
 import {
   coverageDivergence,
   isControlOverspend,
+  EV_TIMING_NOTE,
   alignToSlotStart,
   ceilToSlotStart,
   defaultWindow,
@@ -37,6 +39,20 @@ function baseChain(overrides: Partial<LedgerChain> = {}): LedgerChain {
     ...overrides,
   };
 }
+
+// The UI recognises one backend note by its text (EV_TIMING_NOTE's doc comment says why
+// it has to). This is the tie that makes that coupling loud: it reads the Go source and
+// fails the moment noteEVTimingUnattributed is reworded, so the caption under the chart
+// cannot silently stop rendering on a site that has a loadpoint.
+describe("EV_TIMING_NOTE", () => {
+  it("is exactly core/metrics/ledger_worlds.go's noteEVTimingUnattributed", () => {
+    // relative to the repo root, which is where the test runner is started from
+    const go = readFileSync("core/metrics/ledger_worlds.go", "utf8");
+    const match = go.match(/const noteEVTimingUnattributed = "((?:[^"\\]|\\.)*)"/);
+    expect(match, "noteEVTimingUnattributed not found - was it renamed or moved?").not.toBeNull();
+    expect(match![1]).toBe(EV_TIMING_NOTE);
+  });
+});
 
 describe("isControlOverspend", () => {
   it("is false when Control is positive (savings) or absent", () => {

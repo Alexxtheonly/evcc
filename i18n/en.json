@@ -1267,7 +1267,6 @@
       "estimatedCaption": "battery and control are estimated",
       "evTimingShort": "Moving a car charge to a cheaper hour counts as nothing here.",
       "headline": {
-        "label": "Settlement",
         "periodAverage": "period average",
         "perSlot": "per-slot"
       },
