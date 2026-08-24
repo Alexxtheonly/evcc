@@ -1437,6 +1437,8 @@
   "main": {
     "chargingPlan": {
       "active": "Aktiv",
+      "adaptivePlanReadonly": "Aus bisherigen Ladevorgängen gelernt. Lege einen eigenen Plan an, um das Gelernte zu überschreiben.",
+      "adaptivePlanReadonlyLink": "Lerneinstellung ändern",
       "addRepeatingPlan": "Wiederholenden Plan hinzufügen",
       "day": "Tag",
       "goal": "Ladeziel",
@@ -1673,6 +1675,9 @@
       "vehicleSoc": "Ladestand"
     },
     "vehicleSettings": {
+      "adaptivePlanLearning": "Ladepläne lernen",
+      "adaptivePlanLearningDescription": "Lernt wiederholende Ladepläne aus den eigenen Ladevorgängen dieses Fahrzeugs, alle 6 Stunden neu berechnet. Ein selbst angelegter wiederholender Plan hat immer Vorrang.",
+      "adaptivePlanLearningNoHistory": "Noch nicht genügend Ladevorgänge.",
       "connectedTo": "verbunden mit {0}",
       "description": "Diese Standardwerte werden angewendet, wenn das Fahrzeug an einem Ladepunkt angeschlossen wird.",
       "editHint": "Fahrzeuge unter {0} hinzufügen oder bearbeiten.",
