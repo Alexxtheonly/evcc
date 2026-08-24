@@ -87,14 +87,23 @@ export function defaultWindow(now: Date): LedgerWindow {
 }
 
 /** Page the window by one period's worth of days. Positive dir pages forward but never
- * past the current slot boundary - the ledger has nothing to say about the future. */
+ * past the current slot boundary - the ledger has nothing to say about the future.
+ *
+ * Backwards is anchored on the window's own `from`, i.e. the period DISPLAYED, not on
+ * its `to`: clampWindowToEarliest can move `from` forward (the default window narrows
+ * itself to where the tariff history starts) while `to` stays where it was, so a step
+ * anchored on `to` landed a full period before the *unnarrowed* start and left every day
+ * in between unreachable. Forwards stays anchored on `to` - it is already bounded by now,
+ * so it can neither skip days nor produce a zero-length window. */
 export function shiftWindow(win: LedgerWindow, dir: 1 | -1, now: Date): LedgerWindow {
-  const ms = DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000 * dir;
+  const span = DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  if (dir === -1) {
+    return { from: new Date(win.from.getTime() - span), to: new Date(win.from.getTime()) };
+  }
   const nowAligned = alignToSlotStart(now);
-  let to = new Date(win.to.getTime() + ms);
+  let to = new Date(win.to.getTime() + span);
   if (to.getTime() > nowAligned.getTime()) to = nowAligned;
-  const from = new Date(to.getTime() - DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-  return { from, to };
+  return { from: new Date(to.getTime() - span), to };
 }
 
 export function isWindowAtPresent(win: LedgerWindow, now: Date): boolean {

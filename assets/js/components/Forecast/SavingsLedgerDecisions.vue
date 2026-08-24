@@ -3,6 +3,17 @@
 		<!-- no heading of its own: this strip is mounted as its own Card in
 		     views/Forecast.vue, whose header renders decisions.title. -->
 		<div class="section-head">
+			<!-- D3: the card above this one is headed with the requested PERIOD, but only
+			     slots with a recorded control decision appear here - typically the last
+			     few hours of a multi-day period. Naming the span the ticks actually cover
+			     is the honest alternative to padding the strip out with fabricated slots. -->
+			<p
+				v-if="recordedSpan"
+				class="span-note text-muted small mb-0"
+				data-testid="savings-ledger-decisions-span"
+			>
+				{{ recordedSpan }}
+			</p>
 			<button
 				v-if="slots.length"
 				type="button"
@@ -94,7 +105,10 @@
 						</div>
 					</div>
 
-					<template v-if="selected.row.appliedMode !== selected.row.suggestedMode">
+					<!-- D6: "did the controller override the suggestion" is the outcome, not
+					     a raw string comparison - a legacy row carrying "unknown" against
+					     "normal" is the same mode twice, not a veto worth a row of its own. -->
+					<template v-if="selected.outcome !== 'steady'">
 						<div class="dc-line">
 							<div class="dc-k">
 								{{ $t("forecast.savingsLedger.decisions.suggested") }}
@@ -120,7 +134,14 @@
 						{{ $t("forecast.savingsLedger.decisions.noVeto") }}
 					</div>
 
-					<div class="dc-line">
+					<!-- D6: the slot-local delta prices a veto against the suggestion it
+					     rejected, so on a steady slot there is nothing for it to measure.
+					     It used to render regardless, printing whatever the backend put in
+					     slotFlowDeltaEur - and while applied/suggested differed only as
+					     strings ("unknown" vs "normal") that was a fabricated "the veto was
+					     worth EUR 0.00" on every such slot. Shown only where a veto exists;
+					     absent-but-vetoed still says so, in its own words, below. -->
+					<div v-if="selected.outcome !== 'steady'" class="dc-line">
 						<div class="dc-k">{{ $t("forecast.savingsLedger.decisions.delta") }}</div>
 						<div class="dc-v" data-testid="savings-ledger-decision-delta">
 							<span
@@ -188,7 +209,7 @@
 							<td>{{ modeLabel(slot.row.appliedMode) }}</td>
 							<td>
 								{{
-									slot.row.appliedMode === slot.row.suggestedMode
+									slot.outcome === "steady"
 										? "—"
 										: modeLabel(slot.row.suggestedMode)
 								}}
@@ -220,6 +241,7 @@ import { defineComponent, type PropType } from "vue";
 import formatter from "@/mixins/formatter";
 import type { CURRENCY } from "@/types/evcc";
 import type { LedgerDecisionRow } from "./savingsLedger.types";
+import { SLOT_MINUTES } from "./savingsLedgerChain";
 import {
 	decisionSlots,
 	unhealthyVetoCount,
@@ -244,6 +266,17 @@ export default defineComponent({
 		},
 		unhealthyCount(): number {
 			return unhealthyVetoCount(this.decisions);
+		},
+		// D3: first slot start to last slot END (a row is a slot start, so the span runs
+		// one slot past it) - the real extent of the strip, not the card's period.
+		recordedSpan(): string {
+			if (!this.slots.length) return "";
+			const first = this.slots[0]!;
+			const last = this.slots[this.slots.length - 1]!;
+			return this.$t("forecast.savingsLedger.decisions.recordedSpan", {
+				from: this.fmtDayTime(new Date(first.tsMs)),
+				to: this.fmtDayTime(new Date(last.tsMs + SLOT_MINUTES * 60 * 1000)),
+			}) as string;
 		},
 		// defaults to the most recent slot so the detail panel is never empty when there
 		// is data to show
@@ -275,9 +308,13 @@ export default defineComponent({
 			const key = slot.outcome === "vetoed-cost" ? "vetoedCost" : "vetoedSaved";
 			return `${time}, ${this.$t(`forecast.savingsLedger.decisions.outcome.${key}`, { delta })}`;
 		},
-		modeLabel(mode: string): string {
-			const key = modeLabelKey(mode);
-			return key ? (this.$t(key) as string) : mode;
+		// D6: an absent/"unknown" mode is folded to normal by modeLabelKey's own
+		// normalizeMode - the wire word never reaches the screen. A genuinely
+		// unrecognised mode (one this UI predates) is still shown verbatim rather than
+		// disguised as something it isn't.
+		modeLabel(mode?: string): string {
+			const key = modeLabelKey(mode ?? "");
+			return key ? (this.$t(key) as string) : (mode ?? "");
 		},
 		reasonLabel(reason?: string): string {
 			const key = reasonLabelKey(reason);
@@ -290,9 +327,13 @@ export default defineComponent({
 <style scoped>
 .section-head {
 	display: flex;
-	justify-content: flex-end;
+	flex-wrap: wrap;
+	justify-content: space-between;
 	align-items: baseline;
 	gap: 0.5rem;
+}
+.span-note {
+	margin-right: auto;
 }
 
 .timeline-strip {
@@ -311,6 +352,15 @@ export default defineComponent({
 	border-radius: 1px;
 	background: var(--evcc-box-border);
 	cursor: pointer;
+}
+/* D1: "nothing was vetoed" is two thirds of a typical strip, and it used to inherit
+   .tick's --evcc-box-border - which in dark mode IS the card background (#151630) and in
+   light mode is the page grey on a white card. 35 of 52 slots therefore rendered as
+   nothing at all, and the legend's own swatch was blank too because no .tick--steady rule
+   existed anywhere. Plain grey, at a third of a vetoed bar's height: clearly present in
+   both themes, and subordinate to the green/red ones by both size and saturation. */
+.tick--steady {
+	background: var(--evcc-gray);
 }
 .tick--vetoed-saved {
 	height: 24px;

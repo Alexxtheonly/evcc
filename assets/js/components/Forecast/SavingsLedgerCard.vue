@@ -98,15 +98,19 @@
 				}}
 			</p>
 
+			<!-- D5: at 390px "would have cost" wraps to two lines while "you paid" and
+			     "saved" don't, and with the house <br/> markup that pushed the first
+			     column's figure a line below the other two - three parallel figures that
+			     no longer read as a row. Each column is a full-height flex column instead,
+			     its label allowed to grow, so the values sit on one line whatever wraps. -->
 			<div class="row gx-2 mt-1" data-testid="savings-ledger-details">
 				<div
 					v-for="detail in details"
 					:key="detail.key"
 					:class="[detail.colClass, `text-${detail.align}`]"
 				>
-					<small>
-						<span class="text-gray">{{ detail.label }}</span>
-						<br />
+					<small class="detail">
+						<span class="text-gray detail-label">{{ detail.label }}</span>
 						<span
 							class="fw-bold"
 							:class="detail.valueClass"
@@ -576,6 +580,14 @@ export default defineComponent({
 }
 .title-tail {
 	white-space: nowrap;
+}
+.detail {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+.detail-label {
+	flex: 1 1 auto;
 }
 .caption {
 	font-size: 0.75rem;

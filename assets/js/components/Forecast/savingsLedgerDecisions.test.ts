@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
-import { decisionOutcome, decisionSlots, unhealthyVetoCount } from "./savingsLedgerDecisions";
+import {
+  decisionOutcome,
+  decisionSlots,
+  modeLabelKey,
+  normalizeMode,
+  unhealthyVetoCount,
+} from "./savingsLedgerDecisions";
 import type { LedgerDecisionRow } from "./savingsLedger.types";
 
 function row(overrides: Partial<LedgerDecisionRow> = {}): LedgerDecisionRow {
@@ -16,6 +22,25 @@ function row(overrides: Partial<LedgerDecisionRow> = {}): LedgerDecisionRow {
 describe("decisionOutcome", () => {
   it("is steady when nothing was vetoed", () => {
     expect(decisionOutcome(row())).toBe("steady");
+  });
+
+  // D6: api.BatteryUnknown means "no override in effect", which is what BatteryNormal
+  // means. Rows written before the backend folded the two still carry "unknown" on one
+  // side and "normal" on the other - a difference of wire strings, not of behaviour, and
+  // never a veto.
+  it("is steady when one side says unknown and the other normal", () => {
+    expect(decisionOutcome(row({ appliedMode: "unknown", suggestedMode: "normal" }))).toBe(
+      "steady"
+    );
+    expect(decisionOutcome(row({ appliedMode: "unknown", suggestedMode: "unknown" }))).toBe(
+      "steady"
+    );
+  });
+
+  it("still reads a real veto against an unknown applied mode", () => {
+    expect(decisionOutcome(row({ appliedMode: "unknown", suggestedMode: "charge" }))).toBe(
+      "vetoed-unknown"
+    );
   });
 
   it("is vetoed-unknown when a veto happened but slotFlowDeltaEur is not computable", () => {
@@ -43,6 +68,20 @@ describe("decisionOutcome", () => {
   });
 });
 
+describe("normalizeMode", () => {
+  it("folds an absent or unknown mode onto normal, so the wire word never reaches a label", () => {
+    expect(normalizeMode("unknown")).toBe("normal");
+    expect(normalizeMode("")).toBe("normal");
+    expect(normalizeMode(undefined)).toBe("normal");
+    expect(modeLabelKey("unknown")).toBe("forecast.optimizer.modeNormal");
+  });
+
+  it("leaves a real mode alone", () => {
+    expect(normalizeMode("holdcharge")).toBe("holdcharge");
+    expect(modeLabelKey("hold")).toBe("forecast.optimizer.modeHold");
+  });
+});
+
 describe("decisionSlots", () => {
   it("sorts ascending by timestamp and tags each row's outcome", () => {
     const rows = [
@@ -66,6 +105,7 @@ describe("unhealthyVetoCount", () => {
     const rows = [
       row({ appliedMode: "hold", suggestedMode: "normal", healthOk: false }),
       row({ appliedMode: "normal", suggestedMode: "normal", healthOk: false }), // steady, not counted
+      row({ appliedMode: "unknown", suggestedMode: "normal", healthOk: false }), // same, not counted
       row({ appliedMode: "charge", suggestedMode: "normal", healthOk: true }), // healthy, not counted
     ];
     expect(unhealthyVetoCount(rows)).toBe(1);

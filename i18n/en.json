@@ -1240,6 +1240,7 @@
           "vetoedUnknown": "vetoed, delta not computable"
         },
         "reason": "Why it differs",
+        "recordedSpan": "Recorded slots: {from} – {to}",
         "suggested": "Suggested instead",
         "table": {
           "applied": "Applied",

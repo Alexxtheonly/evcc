@@ -123,6 +123,18 @@ describe("period window", () => {
     expect(prev.to.getTime()).toBe(win.from.getTime());
   });
 
+  // D2: the default window auto-narrows its `from` to where the tariff history starts
+  // (clampWindowToEarliest, below), so the window on screen is shorter than a period.
+  // Paging back must step from THAT start - anchoring on `to` skipped the days between.
+  it("shiftWindow(-1) steps from the displayed start of an auto-narrowed window", () => {
+    const now = new Date("2026-08-24T08:15:00.000Z");
+    const narrowed = clampWindowToEarliest(defaultWindow(now), "2026-08-21T10:30:00.000Z");
+    expect(narrowed).not.toBeNull();
+    const prev = shiftWindow(narrowed!, -1, now);
+    expect(prev.to.toISOString()).toBe("2026-08-21T10:30:00.000Z");
+    expect(prev.from.toISOString()).toBe("2026-08-14T10:30:00.000Z");
+  });
+
   it("shiftWindow(1) never pages the window's end past now", () => {
     const now = new Date("2026-08-23T00:00:00.000Z");
     const win = defaultWindow(now);
