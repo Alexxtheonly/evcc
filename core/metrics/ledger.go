@@ -1,13 +1,13 @@
 package metrics
 
-// Savings ledger (ADR-011): the "computation layer" entry points server/http exposes.
+// Savings ledger: the "computation layer" entry points server/http exposes.
 //
 // ObjectiveValue (core/metrics/optimizer_runs.go) never appears here in a currency
 // context, and nothing in this file precomputes euros into a table - the energy
 // inputs already persisted in meters/tariffs/control_slots are the source of truth,
-// and every figure below is recomputed from them on each request (ADR-011's
-// "Alternatives rejected" section - a ledger_slots table baking in today's
-// assumptions would make a later correction unauditable).
+// and every figure below is recomputed from them on each request. A precomputed
+// ledger_slots table would bake in today's assumptions and make a later correction
+// unauditable.
 
 import (
 	"context"
@@ -15,20 +15,17 @@ import (
 	"time"
 )
 
-// Ledger is the full ADR-011 savings ledger response for a period: the realised
-// cost (item 1, always present when the request itself is valid), the W0..W3 chain
-// (with the routing/timing split when a battery is configured), and the per-slot
-// decision replay.
+// Ledger is the full savings ledger response for a period: the realised cost (always
+// present when the request itself is valid), the W0..W3 chain (with the routing/timing
+// split when a battery is configured), and the per-slot decision replay.
 //
 // Chain is nil, with ChainUnavailable explaining why, when the chain specifically
 // couldn't be computed for a battery-physics reason (ErrBatteryPhysicsUnavailable,
 // ErrSocGap or ErrBatteryRateCeilingUnavailable) - Realised and Decisions (mode/veto
 // data, just without a SlotFlowDeltaEUR figure) are still returned in that case.
-// RealisedCost's own doc comment says it's
-// deliberately independent of the chain; a battery-physics refusal destroying it too
-// would contradict that documented independence for no reason - the "one measured
-// number everything else hangs off" shouldn't disappear because a derived comparison
-// number couldn't be computed.
+// RealisedCost is deliberately independent of the chain: the one measured number
+// everything else hangs off must not disappear because a derived comparison number
+// couldn't be computed.
 type Ledger struct {
 	From time.Time `json:"from"`
 	To   time.Time `json:"to"`
@@ -46,9 +43,8 @@ type Ledger struct {
 	Decisions        []DecisionRow `json:"decisions"`
 }
 
-// ComputeLedger runs the full savings ledger for [from,to): the realised-cost figure
-// (item 1), the world chain (item 2) priced both ways (item 3), and the per-slot
-// battery-mode decision replay (item 4).
+// ComputeLedger runs the full savings ledger for [from,to): the realised-cost figure,
+// the world chain priced both ways, and the per-slot battery-mode decision replay.
 //
 // feedInStatic is the site's currently configured feed-in price, and must be non-nil
 // only when that tariff declares itself time-invariant - see buildLedgerSlots and
@@ -72,9 +68,9 @@ func ComputeLedger(ctx context.Context, from, to time.Time, feedInStatic *float6
 	var chainUnavailable string
 	if chainErr != nil {
 		if errors.Is(chainErr, ErrBatteryPhysicsUnavailable) || errors.Is(chainErr, ErrSocGap) || errors.Is(chainErr, ErrBatteryRateCeilingUnavailable) {
-			// a physics refusal, not a request-level failure (ADR-011 rule 4: refuse
-			// rather than fabricate) - degrade to no chain rather than a 500 that
-			// also takes the realised-cost figure down with it.
+			// a physics refusal, not a request-level failure: refuse rather than
+			// fabricate, and degrade to no chain rather than a 500 that also takes
+			// the realised-cost figure down with it.
 			chain = nil
 			chainUnavailable = chainErr.Error()
 		} else {

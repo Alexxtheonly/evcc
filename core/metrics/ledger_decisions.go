@@ -1,11 +1,10 @@
 package metrics
 
-// Savings ledger per-slot decision replay (ADR-011 item 2/4): for each past slot,
-// what was applied, what was suggested, why they differ, and what the rejected
-// alternative would have cost.
+// Savings ledger per-slot decision replay: for each past slot, what was applied, what
+// was suggested, why they differ, and what the rejected alternative would have cost.
 //
-// Scoped to battery-mode decisions only, per ADR-011's own scoping note: control_slots
-// only ever records a battery mode (AppliedMode/SuggestedMode), so there is no
+// Scoped to battery-mode decisions only: control_slots only ever records a battery
+// mode (AppliedMode/SuggestedMode), so there is no
 // loadpoint/vehicle counterfactual to build from this table without inventing data
 // this table doesn't hold. A vehicle-side decision replay is a follow-up, not
 // something to approximate here.
@@ -24,10 +23,10 @@ import (
 // SlotFlowDeltaEUR is nil - never 0 - when it isn't computable: no veto happened
 // (nothing to compare), the slot fell outside the ledger's valid slot set (see
 // Coverage), the site has no battery to simulate against, or either mode on the row is
-// one simulateSlotStep does not model. ADR-011 rule 3: absence is never a sentinel.
+// one simulateSlotStep does not model. Absence is never spelled as a sentinel figure.
 //
-// This field was named HindsightDeltaEUR and is not true hindsight: it simulates
-// applied vs. suggested for the ONE vetoed slot only, at that slot's own starting
+// This is NOT hindsight: it simulates applied vs. suggested for the ONE vetoed slot
+// only, at that slot's own starting
 // SoC, and stops there - it does not follow either trajectory forward to see what
 // actually happened next. A charge vetoed at a very cheap price specifically because
 // it would pay off in a LATER, more expensive slot has that payoff priced nowhere;
@@ -35,11 +34,10 @@ import (
 // (charging always reads as a cost, discharging always reads as a saving in the same
 // slot it happened), not by whether the veto was actually right. See
 // TestSlotFlowDeltaIsSlotLocalNotForwardHindsight for a worked example where this
-// reads "veto vindicated" on a veto that cost roughly EUR 1. A true hindsight figure
-// needs to price the rejected alternative forward until its simulated SoC rejoins the
-// applied trajectory (or a full oracle replay, per ADR-011's "Potential" section,
-// which doesn't exist yet) - out of scope here; renamed instead so this field cannot
-// be mistaken for that.
+// reads "veto vindicated" on a veto that actually cost money. A true hindsight figure
+// would have to price the rejected alternative forward until its simulated SoC
+// rejoins the applied trajectory (or run a full oracle replay) - out of scope here,
+// hence the name: do not present this field as hindsight.
 type DecisionRow struct {
 	Ts          time.Time `json:"ts"`
 	AppliedMode string    `json:"appliedMode"`
@@ -52,9 +50,9 @@ type DecisionRow struct {
 	VetoReason    string  `json:"vetoReason,omitempty"`
 	HealthOk      bool    `json:"healthOk"`
 	// ModeChanged carries controlSlot's own flag forward: AppliedMode is a single
-	// point sample taken seconds into the slot, and Phase A's doc comment on that
-	// field says a reader must not assume it held for the whole 15 minutes when this
-	// is true. DecisionDeltas' replay simulates the FULL slot under AppliedMode
+	// point sample taken seconds into the slot, and a reader must not assume it held
+	// for the whole 15 minutes when this is true. DecisionDeltas' replay simulates
+	// the FULL slot under AppliedMode
 	// regardless - dropping this flag would let a reader trust that simulation's
 	// precision more than the source data supports.
 	ModeChanged      bool     `json:"modeChanged"`
@@ -64,8 +62,8 @@ type DecisionRow struct {
 // effectiveMode folds the two spellings of "evcc held no override this slot" into
 // one. api.BatteryUnknown at site level means "no change required", which on a site
 // with a battery is the same fact as api.BatteryNormal - persistControlSlot records
-// Normal for such a site since core/site_optimizer.go's fix, but every row written
-// before it does not, and an empty column is the same absence again.
+// Normal for such a site, but older rows do not, and an empty column is the same
+// absence again.
 //
 // Folding here only ever REMOVES a SlotFlowDeltaEUR that would otherwise have been
 // computed for a slot where the two modes are the same fact spelled differently - it
@@ -133,11 +131,10 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 		// distinct from a suggestion that happened to match what was applied, which
 		// folds to no delta below.
 		//
-		// The comparison and the two simulations run on the SAME folded strings.
-		// They used to differ - gate on effectiveMode, simulate on the raw column -
-		// which only agreed because simulateSlotStep's old default branch happened to
-		// replay an unrecognised mode as normal, the exact silent pricing its ok
-		// return now refuses.
+		// The comparison and the two simulations must run on the SAME folded strings.
+		// Gating on effectiveMode while simulating the raw column silently replays an
+		// unrecognised mode as normal - exactly the pricing simulateSlotStep's ok
+		// return exists to refuse.
 		if phys != nil && suggested != nil {
 			applied, rejected := effectiveMode(r.AppliedMode), effectiveMode(*suggested)
 
@@ -150,7 +147,7 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 
 				// a mode neither this replay nor anything else in the package
 				// models leaves SlotFlowDeltaEUR nil: "not understood" is an
-				// absence, and ADR-011 rule 3 forbids spelling it as a figure.
+				// absence, and must not be spelled as a figure.
 				if appliedOk && rejectedOk {
 					appliedCost := appliedFlow.ImportKWh*s.PriceGrid - appliedFlow.ExportKWh*s.PriceFeedIn
 					rejectedCost := rejectedFlow.ImportKWh*s.PriceGrid - rejectedFlow.ExportKWh*s.PriceFeedIn

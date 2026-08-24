@@ -29,11 +29,10 @@ func historyFor(t *testing.T, key string) []historyRow {
 	return rows
 }
 
-// TestConfigSettingsHistory covers F1: a database-configured loadpoint (the
-// ConfigSettings adapter, handed out by cmd/setup.go for every loadpoint
-// configured via the UI/API rather than evcc.yaml) must produce the same
-// settings_history rows a YAML-configured loadpoint gets through
-// server/db/settings.SetString - before this, it produced none at all.
+// TestConfigSettingsHistory: a database-configured loadpoint (the ConfigSettings
+// adapter, handed out by cmd/setup.go for every loadpoint configured via the UI/API
+// rather than evcc.yaml) must produce the same settings_history rows a YAML-configured
+// loadpoint gets through server/db/settings.SetString.
 func TestConfigSettingsHistory(t *testing.T) {
 	require.NoError(t, serverdb.NewInstance("sqlite", ":memory:"))
 	t.Cleanup(func() { serverdb.Instance = nil })
@@ -112,13 +111,9 @@ func TestConfigSettingsHistoryFailedWriteNotRecorded(t *testing.T) {
 	assert.Empty(t, historyFor(t, "db:"+strconv.Itoa(conf.ID)+".mode"))
 }
 
-// TestConfigSettingsHistoryPointerValue reproduces the live row observed
-// minutes after deploy:
-//
-//	(1787510832, 'db:13.smartCostLimit', '<nil>', '0x2f1b02b637d8', 0)
-//
-// SetFloatPtr hands its *float64 straight to set(), which rendered it with
-// fmt.Sprint - meaningless once the process restarts, and useless for a
+// TestConfigSettingsHistoryPointerValue: SetFloatPtr hands its *float64 straight to
+// set(), so rendering it with fmt.Sprint records a pointer address ("0x2f1b02b637d8")
+// instead of a value - meaningless once the process restarts, and useless for a
 // settings_history replay. The dereferenced float must be recorded instead.
 func TestConfigSettingsHistoryPointerValue(t *testing.T) {
 	require.NoError(t, serverdb.NewInstance("sqlite", ":memory:"))

@@ -101,7 +101,7 @@ func TestBatteryModeCandidate(t *testing.T) {
 		{"normal", map[string]types.Suggestion{"battery:a": {Action: "normal"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryNormal, suggestedMode: api.BatteryNormal}},
 		{"discharge maps to normal", map[string]types.Suggestion{"battery:a": {Action: "discharge"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryNormal, suggestedMode: api.BatteryNormal}},
 		{"charge with spread and payback", map[string]types.Suggestion{"battery:a": {Action: "charge"}}, []batteryDetail{bat("a")}, optimizerDecision{mode: api.BatteryCharge, suggestedMode: api.BatteryCharge, price: 0.2}},
-		// F4: batteries disagree, so mode stays Unknown (nothing applied), but
+		// batteries disagree, so mode stays Unknown (nothing applied), but
 		// suggestedMode still carries the first-encountered candidate rather
 		// than always reading "unknown"
 		{"conflict", map[string]types.Suggestion{"battery:a": {Action: "hold"}, "battery:b": {Action: "normal"}}, []batteryDetail{bat("a"), bat("b")}, optimizerDecision{suggestedMode: api.BatteryHold, vetoReason: vetoReasonForcedIdle}},
@@ -119,7 +119,7 @@ func TestBatteryModeCandidate(t *testing.T) {
 	details := []batteryDetail{bat("a")}
 
 	// charge is vetoed when the spread cannot recover the round-trip losses.
-	// F4: mode stays Unknown (nothing is applied), but suggestedMode still
+	// mode stays Unknown (nothing is applied), but suggestedMode still
 	// reads "charge" - the pairing control_slots.SuggestedMode/VetoReason
 	// needs to make the rejected suggestion auditable, not just the veto.
 	flatReq, flatRes := chargeReqRes([]float32{0.0002, 0.0002}, 5000, []float32{6375, 4990}, []float32{0, 1375})

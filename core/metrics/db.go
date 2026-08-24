@@ -141,7 +141,7 @@ func SetupSchema() error {
 		return err
 	}
 
-	// savings ledger persistence (ADR-011): what the control loop decided and
+	// savings ledger persistence: what the control loop decided and
 	// under what configuration, so a later replay can audit it instead of
 	// only having whatever is live right now
 	if err := db.Instance.AutoMigrate(new(controlSlot)); err != nil {

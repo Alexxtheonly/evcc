@@ -52,13 +52,13 @@ func (s *ConfigSettings) set(key string, val any) {
 
 	s.mu.Unlock()
 
-	// audit trail for the settings ledger (ADR-011 / F1): this adapter is
-	// handed to every database-configured loadpoint (cmd/setup.go) and
-	// persists through the configs table (conf.Update above) instead of
+	// audit trail for the settings ledger: this adapter is handed to every
+	// database-configured loadpoint (cmd/setup.go) and persists through the
+	// configs table (conf.Update above) instead of
 	// server/db/settings.SetString, so without this hook every such
-	// loadpoint's mode/limitSoc/minSoc/planTime/... changes were entirely
-	// missing from settings_history - a failed write must not be recorded
-	// as if it had happened.
+	// loadpoint's mode/limitSoc/minSoc/planTime/... changes are missing from
+	// settings_history - and a failed write must not be recorded as if it had
+	// happened.
 	if err != nil {
 		return
 	}
@@ -73,11 +73,11 @@ func (s *ConfigSettings) set(key string, val any) {
 	// same data: after a restart, conf.Data holds whatever gorm's
 	// serializer:json last decoded (plain maps/slices/float64s), while a
 	// fresh Set* call passes a typed Go struct. Comparing their rendered
-	// strings treated every such re-serialization as a change, even when
-	// nothing moved - twelve of the first thirteen rows after the last
-	// startup were exactly this. Round-tripping both sides through JSON
-	// first normalizes them to the same shape, so the comparison reflects
-	// the actual data rather than its current Go type.
+	// strings treats every such re-serialization as a change, even when
+	// nothing moved, and floods the history with rows after every restart.
+	// Round-tripping both sides through JSON first normalizes them to the
+	// same shape, so the comparison reflects the actual data rather than its
+	// current Go type.
 	if valuesEqual(oldVal, val) {
 		return
 	}
@@ -117,7 +117,7 @@ func canonicalize(val any) (any, error) {
 // render renders val the way fmt's default %v verb would, except that
 // pointers - at any depth, not just the top level - are dereferenced instead
 // of printed as their memory address. A *float64 field (SmartCostLimit, the
-// Estimate field nested inside SocConfig, ...) previously rendered as
+// Estimate field nested inside SocConfig, ...) would otherwise render as
 // something like "0x2f1b02b637d8": meaningless once the process restarts and
 // unrecoverable for a settings_history replay. A nil pointer still renders as
 // "<nil>", same as fmt - that is a real, distinct value and must not be

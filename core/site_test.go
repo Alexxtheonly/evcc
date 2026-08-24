@@ -75,7 +75,7 @@ func TestSitePowerPriorityAdjustment(t *testing.T) {
 	}
 }
 
-// TestSitePowerBatteryBufferRelaxedByForecast covers the §25 rule: a confident
+// TestSitePowerBatteryBufferRelaxedByForecast: a confident
 // same-day refill forecast may relax an *enabled* buffer threshold (make
 // batteryBuffered/batteryStart true where the static soc comparison alone would
 // not), but never turns on a threshold the user left at 0 (disabled), and never

@@ -14,7 +14,7 @@ import (
 	"github.com/evcc-io/evcc/util"
 )
 
-// savingsLedgerHandler serves the ADR-011 savings ledger for a period: the
+// savingsLedgerHandler serves the savings ledger for a period: the
 // realised-grid-cost figure, the W0..W3 world chain (both settlement modes, plus the
 // routing/timing split when a battery is configured), and the per-slot battery-mode
 // decision replay. Shaped like the neighbouring /api/db/metrics endpoints
@@ -103,21 +103,16 @@ func savingsLedgerErrorBody(err error) any {
 
 // savingsLedgerErrorStatus maps a ComputeLedger error to an HTTP status. Pulled out
 // of savingsLedgerHandler so the mapping itself is unit-testable without driving the
-// full metrics/db stack (see http_savings_ledger_handler_test.go) - a case missing
-// here previously fell to the default 500, which is exactly what happened to
-// metrics.ErrLoadpointNoChargeMeter: a refusal (ADR-011 rule 4: a configured
-// loadpoint with no charge-meter history) reported as a server fault instead of the
-// 422 every other refusal in this switch gets.
+// full metrics/db stack (see http_savings_ledger_handler_test.go). Every refusal
+// needs its own case: one missing falls to the default 500, reporting a refusal as a
+// server fault instead of the 422 every other refusal in this switch gets.
 func savingsLedgerErrorStatus(err error) int {
 	var refused *metrics.ErrBeforeTariffStart
 	switch {
 	case errors.As(err, &refused):
 		return http.StatusUnprocessableEntity
 	// malformed request shape: an out-of-bounds, unaligned, or reversed/identical
-	// [from,to). ErrLedgerRangeInverted used to be a plain errors.New in
-	// buildLedgerSlots (core/metrics/ledger_slots.go) - it fell to the default case
-	// below and returned 500 for a reversed or identical from/to, same failure mode
-	// ErrLoadpointNoChargeMeter had before it got its own case.
+	// [from,to).
 	case errors.Is(err, metrics.ErrLedgerRangeTooLarge),
 		errors.Is(err, metrics.ErrLedgerRangeUnaligned),
 		errors.Is(err, metrics.ErrLedgerRangeInverted):
@@ -125,7 +120,7 @@ func savingsLedgerErrorStatus(err error) int {
 	// ComputeLedger degrades a battery-physics refusal to a null Chain rather than
 	// failing the whole request (see Ledger's doc comment), so these three only
 	// reach here via a caller that skips that degradation - still not a server
-	// fault (ADR-011 rule 4: a refusal, not a crash), so 422 not 500.
+	// fault - a refusal, not a crash - so 422 not 500.
 	case errors.Is(err, metrics.ErrBatteryPhysicsUnavailable),
 		errors.Is(err, metrics.ErrSocGap),
 		errors.Is(err, metrics.ErrBatteryRateCeilingUnavailable):
@@ -137,7 +132,7 @@ func savingsLedgerErrorStatus(err error) int {
 	case errors.Is(err, metrics.ErrLoadpointNoChargeMeter):
 		return http.StatusUnprocessableEntity
 	// the site itself has no grid or home meter configured at all - a configuration
-	// problem the ledger refuses to work around (ADR-011 rule 4), not a server fault.
+	// problem the ledger refuses to work around, not a server fault.
 	case errors.Is(err, metrics.ErrNoGridMeter), errors.Is(err, metrics.ErrNoHomeMeter):
 		return http.StatusUnprocessableEntity
 	default:

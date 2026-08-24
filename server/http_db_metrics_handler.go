@@ -92,7 +92,7 @@ func deleteTariffsHandler(w http.ResponseWriter, r *http.Request) {
 	jsonWrite(w, deleteResult{rows})
 }
 
-// deleteControlSlotsHandler removes persisted control_slots rows (ADR-011/F9)
+// deleteControlSlotsHandler removes persisted control_slots rows
 func deleteControlSlotsHandler(w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
@@ -114,7 +114,7 @@ func deleteControlSlotsHandler(w http.ResponseWriter, r *http.Request) {
 	jsonWrite(w, deleteResult{rows})
 }
 
-// deleteOptimizerRunsHandler removes persisted optimizer_runs rows (ADR-011/F9)
+// deleteOptimizerRunsHandler removes persisted optimizer_runs rows
 func deleteOptimizerRunsHandler(w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
@@ -136,10 +136,9 @@ func deleteOptimizerRunsHandler(w http.ResponseWriter, r *http.Request) {
 	jsonWrite(w, deleteResult{rows})
 }
 
-// deleteSettingsHistoryHandler removes persisted settings_history rows
-// (ADR-011/F9). Deleting a value's own current row is already covered by
-// the existing settings API; this only prunes the audit trail of past
-// writes, not the settings themselves.
+// deleteSettingsHistoryHandler removes persisted settings_history rows. Deleting a
+// value's own current row is already covered by the existing settings API; this only
+// prunes the audit trail of past writes, not the settings themselves.
 func deleteSettingsHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	if db.Instance == nil {
 		jsonError(w, http.StatusBadRequest, errors.New("database offline"))

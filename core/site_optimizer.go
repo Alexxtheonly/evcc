@@ -236,8 +236,8 @@ func effectivePriorityToCPriority(priority int) int {
 // the whole term, turning "prefer this battery" into "avoid this battery". The solver
 // already works around the identical pitfall for the adjacent peak-leveling term by using
 // penalty_base instead of min_import_price for exactly this reason (see the comment at
-// optimizer.py:459-460); the priority term never got the same treatment because nothing ever
-// set a non-zero CPriority before this.
+// optimizer.py:459-460); the priority term never got the same treatment, since nothing
+// in evcc set a non-zero CPriority until now.
 func safeCPriority(priority int, minImportPrice float32) int {
 	if minImportPrice < 0 {
 		return 0
@@ -393,7 +393,7 @@ type optimizerDecision struct {
 	// suggestedMode is what the optimizer derived this run, independent of
 	// any veto - equal to mode except for vetoReasonPayback/vetoReasonForcedIdle,
 	// where mode is forced to api.BatteryUnknown but suggestedMode still
-	// carries the real candidate (F4). This is what control_slots.SuggestedMode
+	// carries the real candidate. This is what control_slots.SuggestedMode
 	// records: showing "charge" alongside veto_reason "payback" is the whole
 	// point of persisting both the suggestion and why it was rejected.
 	suggestedMode api.BatteryMode
@@ -490,7 +490,7 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 
 		if mode != api.BatteryUnknown && m != mode {
 			// batteries disagree: don't act, but keep the first-encountered
-			// candidate as suggestedMode (F4) - not authoritative since they
+			// candidate as suggestedMode - not authoritative since they
 			// disagreed, but still a real, reachable value instead of always
 			// "unknown"
 			return optimizerDecision{suggestedMode: mode, vetoReason: vetoReasonForcedIdle}
@@ -532,7 +532,7 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 // a flat price plateau cannot flap the battery every cycle. Reverting to
 // Unknown — automatic disabled, no suggestion, or disagreeing batteries — is
 // never delayed. Automatic disabled only ever affects the applyable mode:
-// the vetted suggestion behind it is still recorded (control_slots, ADR-011)
+// the vetted suggestion behind it is still recorded (control_slots)
 // so the gap between what the optimizer would have done and what was
 // actually applied is auditable from before automatic mode was ever turned on.
 //
@@ -649,11 +649,11 @@ func (site *Site) publishOptimizerDecisionLocked() {
 // api.BatteryNormal; the UI (BatteryStatusCard.statusState) likewise never
 // renders it, falling through to the raw power reading exactly as it does
 // for normal, and simulateSlotStep's default branch already replays it with
-// normal physics. Recording the string "unknown" made every row of a site
-// that simply never needs an override - advisory mode, no grid-charge limit,
-// no smart-cost limit - read as if the ledger had failed to observe
-// something, and made AppliedMode differ from an identical SuggestedMode,
-// which DecisionDeltas then priced as a veto worth 0 EUR.
+// normal physics. Recording the string "unknown" would make every row of a
+// site that simply never needs an override - advisory mode, no grid-charge
+// limit, no smart-cost limit - read as if the ledger had failed to observe
+// something, and would make AppliedMode differ from an identical
+// SuggestedMode, which DecisionDeltas then prices as a veto worth EUR 0.
 //
 // Not a fabrication: with a battery present, "no override in effect" IS
 // normal operation, which is what every other consumer in the codebase
@@ -669,7 +669,7 @@ func (site *Site) appliedBatteryMode() api.BatteryMode {
 	return api.BatteryNormal
 }
 
-// persistControlSlot stores one completed 15min control decision (ADR-011):
+// persistControlSlot stores one completed 15min control decision:
 // the optimizer's vetted suggestion versus the battery mode actually applied,
 // and why they differ. Driven by the update loop like persistTariffs, with
 // the same slot-boundary gate - automatic mode runs the optimizer far more
@@ -731,7 +731,7 @@ func (site *Site) persistControlSlot() {
 
 	// price only means something alongside an actually accepted charge
 	// decision - see optimizerChargePrice's own doc comment. suggested can
-	// now be api.BatteryCharge while vetoed (F4), and optimizerChargePrice
+	// now be api.BatteryCharge while vetoed, and optimizerChargePrice
 	// is not meaningfully updated for a vetoed run, so the veto must be
 	// checked here too or a payback-vetoed slot would show a stale/zero
 	// price as if it had been the accepted decision's basis.
@@ -839,9 +839,9 @@ func (site *Site) publishOptimizerHealthGate(reason optimizerHealthReason) {
 
 // liveRateVetoLocked reports whether rate has moved past the price the active
 // charge decision was based on. Caller must already hold site.RLock or
-// site.Lock. Unlike the fork this ports from, there is no grid-charge-limit
-// check: GetBatteryGridChargeLimit() is structurally nil while Automatic() is
-// true (see core/site_api.go), so under automatic mode that check is dead.
+// site.Lock. There is deliberately no grid-charge-limit check:
+// GetBatteryGridChargeLimit() is structurally nil while Automatic() is true
+// (see core/site_api.go), so under automatic mode such a check would be dead.
 func (site *Site) liveRateVetoLocked(rate api.Rate) bool {
 	fresh := time.Since(site.optimizerBatteryModeUpdated) <= optimizerBatteryModeValidity
 	active := site.optimizerBatteryMode == api.BatteryCharge && fresh
@@ -988,7 +988,7 @@ func (site *Site) clearSuggestions() {
 	site.setBatteryForecast(nil)
 	site.setOptimizerBatteryMode(optimizerDecision{})
 
-	// F6: the diagnostics of the last successful run must not linger with no
+	// the diagnostics of the last successful run must not linger with no
 	// staleness marker once a run fails - newOptimizerDiagnosticsPublish is
 	// only ever published from applyOptimizerResult (i.e. on Optimal/Feasible),
 	// so nothing else clears it. Publishing nil, the same way an absent
@@ -1225,9 +1225,9 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		// completed slot. fcstRaw is deliberately NOT pre-multiplied by scale here -
 		// blendScaleByLead below evaluates the per-slot ratio pv/(fcstRaw*scaleAt(lead))
 		// using each target slot's OWN lead, the same scale ftSlots[i] was built with
-		// (see B31: a single flat ratio computed with one scale, applied to slots
-		// built with a per-lead scale, silently mixes the two for every slot but the
-		// one whose lead happens to match).
+		// - a single flat ratio computed with one scale, applied to slots built with
+		// a per-lead scale, silently mixes the two for every slot but the one whose
+		// lead happens to match.
 		if pv, fcstRaw := site.measuredSlotEnergy(site.Meters.PVMetersRef...), site.measuredSlotEnergy(metrics.Forecast); pv > 0 && fcstRaw > 0 {
 			orig := slices.Clone(ftSlots[:min(optimizerDecaySlots, len(ftSlots))])
 			blendScaleByLead(ftSlots, solarEnergy, now, func(lead time.Duration) float64 {
@@ -1275,12 +1275,12 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		if pMaxImp := site.circuit.GetMaxPower(); pMaxImp > 0 {
 			// hard grid import limit if no price penalty is set by PrcPExcImp.
 			//
-			// evcc never sets Grid.PrcPExcImp today (B4) - do not start without
-			// restoring the guard below first. Setting it DISABLES the solver's normal
-			// per-Wh overshoot penalty (optimizer.py's prc_e_grid_imp_pen, gated off at
+			// evcc never sets Grid.PrcPExcImp today - do not start without restoring
+			// the guard below first. Setting it DISABLES the solver's normal per-Wh
+			// overshoot penalty (optimizer.py's prc_e_grid_imp_pen, gated off at
 			// optimizer.py:431 whenever prc_p_exc_imp is set), so import overshoot gets
-			// CHEAPER, not more expensive - measured 22468.3Wh of overshoot with
-			// PrcPExcImp set vs 7485.5Wh without it, on the identical request. If a
+			// CHEAPER, not more expensive - roughly 3x more overshoot was measured with
+			// PrcPExcImp set than without it on an otherwise identical request. If a
 			// future change sets PrcPExcImp (e.g. a real demand-charge tariff), it must
 			// also keep prc_e_grid_imp_pen active, not silently swap one penalty out
 			// for a weaker one.
@@ -1419,7 +1419,7 @@ func (site *Site) optimizerUpdate(battery []types.Measurement) error {
 		Details: details,
 	})
 
-	// diagnostic record of the run itself (ADR-011), independent of whether
+	// diagnostic record of the run itself, independent of whether
 	// the result was usable - an Infeasible run is exactly the kind of thing
 	// this table exists to make visible after the fact
 	site.persistOptimizerRun(string(resp.JSON200.Status), *resp.JSON200)
@@ -1534,8 +1534,8 @@ func newOptimizerDiagnosticsPublish(res optimizer.OptimizationResult) optimizerD
 	}
 }
 
-// persistOptimizerRun stores the diagnostic outcome of one optimizer run for
-// ADR-011. Automatic mode calls the optimizer roughly once per control-loop
+// persistOptimizerRun stores the diagnostic outcome of one optimizer run.
+// Automatic mode calls the optimizer roughly once per control-loop
 // cycle (~30s, ~30 runs per 15min slot), so a sampled Optimal/Feasible run is
 // gated to the same 15min slot boundary as persistTariffs and
 // persistControlSlot - that is the happy path, and one representative sample
@@ -2098,10 +2098,10 @@ func blendMeasured[T constraints.Float](slots []T, measured T, decaySlots int) {
 	}
 }
 
-// blendScaleByLead applies a per-lead scale that decays towards 1 over the first slots
-// (B31). It replaced a flat variant that took one scale for the whole window: a single flat scale
-// applied to every slot in the decay window silently mixes two different scales for
-// every slot but the first. slots[i] was built by scaleAndPruneByLead using
+// blendScaleByLead applies a per-lead scale that decays towards 1 over the first slots.
+// Do not simplify it to one flat scale for the whole window: a flat scale applied to
+// every slot in the decay window silently mixes two different scales for every slot but
+// the first. slots[i] was built by scaleAndPruneByLead using
 // scaleAt(lead of leadSlots[i]) - a flat ratio computed with, say, the nowcast scale
 // only cancels that baked-in per-lead scale correctly at i=0, where lead is 0 and the
 // two scales happen to be the same value; for i>0 the mismatch shows up as a

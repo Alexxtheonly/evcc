@@ -13,10 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSavingsLedgerErrorStatus covers A17: metrics.ErrLoadpointNoChargeMeter (a
-// configured loadpoint that has never written a single meters row - see that error's
-// doc comment) was missing from this switch and fell to the default case, reporting
-// HTTP 500 for what is a refusal (ADR-011 rule 4), not a server fault. Every other
+// TestSavingsLedgerErrorStatus: an error missing from this switch falls to the default
+// case, reporting HTTP 500 for what is a refusal, not a server fault - which is what
+// happened to metrics.ErrLoadpointNoChargeMeter (a configured loadpoint that has never
+// written a single meters row - see that error's doc comment). Every other
 // refusal ComputeLedger can return already maps to 422/400; this asserts the whole
 // table, so a future error added to ComputeLedger without a case here shows up as a
 // 500 in this test rather than in production.
@@ -29,10 +29,8 @@ func TestSavingsLedgerErrorStatus(t *testing.T) {
 		{"before tariff start", &metrics.ErrBeforeTariffStart{Earliest: time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)}, http.StatusUnprocessableEntity},
 		{"range too large", metrics.ErrLedgerRangeTooLarge, http.StatusBadRequest},
 		{"range unaligned", metrics.ErrLedgerRangeUnaligned, http.StatusBadRequest},
-		// D1: a reversed or identical from/to used to be a plain errors.New in
-		// buildLedgerSlots (core/metrics/ledger_slots.go), unrecognised here, so it fell
-		// to the default 500 - reproduced live via
-		// GET /api/savingsledger?from=...T00:00+02:00&to=...(earlier)T00:00+02:00.
+		// a reversed or identical from/to is a malformed request: without its own
+		// sentinel it falls to the default 500.
 		{"range inverted (reversed from/to)", metrics.ErrLedgerRangeInverted, http.StatusBadRequest},
 		{"battery physics unavailable", metrics.ErrBatteryPhysicsUnavailable, http.StatusUnprocessableEntity},
 		{"soc gap", metrics.ErrSocGap, http.StatusUnprocessableEntity},

@@ -493,7 +493,8 @@ func (site *Site) SetSolarAdjusted(val bool) {
 	}
 }
 
-// The optimizer replaces the limit in automatic mode, so it reads as unset.
+// GetBatteryGridChargeLimit returns nil in automatic mode - the optimizer replaces
+// the limit there, so it reads as unset.
 func (site *Site) GetBatteryGridChargeLimit() *float64 {
 	if site.Automatic() {
 		return nil

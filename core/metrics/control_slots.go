@@ -10,7 +10,7 @@ import (
 // controlSlot records one completed 15min control decision: what the
 // optimizer suggested and what was actually applied. The two differ whenever
 // a gate (damping, payback, a live-rate move, disagreeing batteries) vetoes
-// or delays the suggestion - see ADR-011. Capturing both, rather than only
+// or delays the suggestion. Capturing both, rather than only
 // the applied mode, is what makes that gap auditable after the fact instead
 // of merely asserted in the moment.
 type controlSlot struct {
@@ -48,7 +48,7 @@ type controlSlot struct {
 	// api.BatteryUnknown stringifies to "unknown", the identical token
 	// clearSuggestions() writes after a failed run and the one a site with no
 	// controllable battery produces, so the spelling cannot distinguish a
-	// decision from silence. ADR-011 rule 3: absence is never a sentinel.
+	// decision from silence. Absence is never encoded as a sentinel.
 	//
 	// Rows written while this column was not nullable still carry the literal
 	// "unknown" string; that legacy value is decoded back to nil on read (see
@@ -113,9 +113,7 @@ func MarkControlSlotModeChanged(ts time.Time) error {
 }
 
 // DeleteControlSlots removes the slots in [from,to). Both bounds are
-// required, a full wipe is /api/db/reset. F9 (ADR-011): the manual-delete
-// endpoints only ever covered energy and tariffs before this - this closes
-// that gap for control_slots.
+// required, a full wipe is /api/db/reset.
 func DeleteControlSlots(from, to time.Time) (int64, error) {
 	return deleteRange[controlSlot](from, to)
 }

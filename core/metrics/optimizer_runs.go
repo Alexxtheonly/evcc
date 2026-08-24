@@ -10,8 +10,8 @@ import (
 // optimizerRun records the diagnostic outcome of one optimizer run - status,
 // and the economic/constraint numbers behind it. Diagnostic only: this is
 // the cheapest input to "is the optimizer earning anything", not itself a
-// savings figure (see ADR-011, which also forbids ever rendering
-// ObjectiveValue in a currency context).
+// savings figure - and ObjectiveValue must never be rendered in a currency
+// context.
 type optimizerRun struct {
 	// Timestamp is the 15min slot boundary for a sampled Optimal/Feasible run
 	// (one representative row per slot), or the run's own real timestamp for
@@ -26,7 +26,7 @@ type optimizerRun struct {
 	// doc comment. Persisting res's zero value in that case would silently
 	// misrepresent "no schedule" as "a schedule with zero overshoot", so all
 	// four are left NULL together whenever Status isn't Optimal or Feasible.
-	ObjectiveValue          *float64 `gorm:"column:objective_value"`       // solver units, never currency (see ADR-011 rule 6)
+	ObjectiveValue          *float64 `gorm:"column:objective_value"`       // LP objective over a moving horizon, in solver units - never currency
 	GridImportOvershoot     *float64 `gorm:"column:grid_import_overshoot"` // Wh above PMaxImp across the horizon
 	GridExportOvershoot     *float64 `gorm:"column:grid_export_overshoot"` // Wh curtailed above PMaxExp across the horizon
 	GridImportLimitExceeded *bool    `gorm:"column:grid_import_limit_exceeded"`
@@ -51,7 +51,7 @@ func (optimizerRun) TableName() string {
 // is recorded at its own real timestamp - so two failing runs landing in the
 // same wall-clock second (unix seconds is this table's timestamp
 // granularity) use OnConflict UpdateAll instead: DoNothing would silently
-// drop the second one, exactly the failure F2 exists to prevent.
+// drop the second one.
 func PersistOptimizerRun(ts time.Time, status string, objectiveValue, gridImportOvershoot, gridExportOvershoot *float64, gridImportLimitExceeded, gridExportLimitHit *bool, sampled bool) error {
 	if db.Instance == nil {
 		return nil
@@ -74,9 +74,7 @@ func PersistOptimizerRun(ts time.Time, status string, objectiveValue, gridImport
 }
 
 // DeleteOptimizerRuns removes the runs in [from,to). Both bounds are
-// required, a full wipe is /api/db/reset. F9 (ADR-011): the manual-delete
-// endpoints only ever covered energy and tariffs before this - this closes
-// that gap for optimizer_runs.
+// required, a full wipe is /api/db/reset.
 func DeleteOptimizerRuns(from, to time.Time) (int64, error) {
 	return deleteRange[optimizerRun](from, to)
 }

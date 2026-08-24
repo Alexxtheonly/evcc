@@ -44,7 +44,7 @@ func TestComputeLedgerHappyPath(t *testing.T) {
 	require.Len(t, ledger.Decisions, 1)
 }
 
-// TestChainNotesCarryLabellingCaveats covers ADR-011 rule 7: estimated figures and
+// TestChainNotesCarryLabellingCaveats: estimated figures and
 // their caveats must be labelled in the payload itself, not left to a code comment or
 // an unwritten UI convention. This checks the three caveats a battery-configured,
 // partial-coverage period must surface: invoice comparability, that Routing includes
@@ -84,7 +84,7 @@ func TestChainNotesCarryLabellingCaveats(t *testing.T) {
 	require.Contains(t, chain.Notes, notePeriodAverageCoverage(chain.Coverage))
 }
 
-// TestComputeLedgerDegradesOnBatteryPhysicsRefusal covers the Priority-5 fix: a
+// TestComputeLedgerDegradesOnBatteryPhysicsRefusal: a
 // battery-physics refusal (here, a configured battery with a valid SoC reading but no
 // charge/discharge history to derive a capacity from, and no persisted device
 // capacity) must not take the realised-cost figure down with it - RealisedCost's own
@@ -177,7 +177,7 @@ func TestComputeLedgerDegradesOnRateCeilingRefusal(t *testing.T) {
 // car charges produces exactly EUR 0 of attributed value no matter how much the
 // timing actually saved - Contributions[2] ("Control") is arithmetically correct at
 // 0 for a site with no battery and one loadpoint, but nothing in the payload says
-// EV charge timing isn't attributed to any measure (ADR-011 rule 7).
+// EV charge timing isn't attributed to any measure.
 func TestChainNotesEVTimingUnattributed(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
@@ -206,10 +206,10 @@ func TestChainNotesEVTimingUnattributed(t *testing.T) {
 	found := slices.ContainsFunc(chain.Notes, func(n string) bool {
 		return strings.Contains(n, "EV") && strings.Contains(n, "not attributed")
 	})
-	require.True(t, found, "chain.Notes must say EV charge timing is not attributed to any measure (ADR-011 rule 7)")
+	require.True(t, found, "chain.Notes must say EV charge timing is not attributed to any measure")
 }
 
-// TestChainNotesFeedInZeroExplained covers B23: when every slot's feed-in price is
+// TestChainNotesFeedInZeroExplained: when every slot's feed-in price is
 // EUR 0 (a fixed placeholder tariff, common until a real feed-in rate is wired up),
 // every export line in the payload reads exactly EUR 0.00 - correct, but with nothing
 // in the payload saying why, indistinguishable from a computation that silently lost
@@ -244,7 +244,7 @@ func TestChainNotesFeedInZeroExplained(t *testing.T) {
 	require.True(t, found, "chain.Notes must explain that feed-in is configured at EUR 0 for this period, not silently zeroed")
 }
 
-// TestChainPublishesMeterResidual covers A1: R = grid_import - grid_export + pv +
+// TestChainPublishesMeterResidual: R = grid_import - grid_export + pv +
 // battery_discharge - battery_charge - home - loadpoint is NOT an identity on real
 // data, even though HomeKWh is itself defined as this same residual at the power
 // level - grid/home are integrated from instantaneous power while PV/battery/
@@ -288,14 +288,12 @@ func TestChainPublishesMeterResidual(t *testing.T) {
 	require.True(t, found, "chain.Notes must point a reader at meterResidual")
 }
 
-// TestRealisedNoteDisclosesItsOwnFallbackCount is the regression test on the P1
-// disclosure. ComputeRealisedCost and the chain build DIFFERENT slot sets - the
-// realised figure keeps slots the chain drops for a missing battery SoC (see
-// buildLedgerSlots' includeBattery gate) - so they have different feed-in-fallback
-// counts. Only the chain's count was ever emitted, so the realised euros were
-// disclosed against a slot set they were not computed on: on this site's own database
-// a EUR 35.70 headline over 547 slots, 416 of them imputed, sat beside a note saying
-// 86. Each figure must quote the imputation its own slot set actually used.
+// TestRealisedNoteDisclosesItsOwnFallbackCount: ComputeRealisedCost and the chain
+// build DIFFERENT slot sets - the realised figure keeps slots the chain drops for a
+// missing battery SoC (see buildLedgerSlots' includeBattery gate) - so they have
+// different feed-in-fallback counts, often by several times over. Emitting only the
+// chain's count discloses the realised euros against a slot set they were not computed
+// on. Each figure must quote the imputation its own slot set actually used.
 func TestRealisedNoteDisclosesItsOwnFallbackCount(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, SetupSchema())
