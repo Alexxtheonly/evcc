@@ -1,17 +1,13 @@
-// A real GET /api/savingsledger response from the owner's site, window
-// 2026-08-22T05:45Z..2026-08-24T05:45Z, re-captured 2026-08-24 against the current
-// build (the earlier capture predates meterResidual.eurBand, chain.w2Drift and
-// chainEarliest; every euro figure below is unchanged from it - only the counterfactual
-// battery's rate ceiling moved, because the p99 is taken over a history that has since
-// grown).
+// A captured GET /api/savingsledger response, window 2026-08-22T05:45Z..2026-08-24T05:45Z.
+// A .ts module rather than the .json it arrived as, because the repo's .gitignore ignores
+// *.json outside i18n/.
 //
-// Kept verbatim (a .ts module rather than the .json it arrived as, because the repo's
-// .gitignore ignores *.json outside i18n/) because it carries a negative Control
-// contribution at BOTH lenses that is SMALLER than the period's own measurement noise
-// (-EUR 0.326 against an eurBand of EUR 0.625) - the case the card must render as "too
-// small to call", not as "the controller cost you money". Do not "tidy" the figures: the
-// telescoping identity between worlds and contributions is what several tests assert,
-// and the noise band is deliberately larger than the figure it sits under.
+// It carries a negative Control contribution at BOTH lenses that is SMALLER than the
+// period's own measurement noise (-EUR 0.326 against an eurBand of EUR 0.625): the case
+// the card must render as "too small to call", not as "the controller cost you money".
+// Do not "tidy" the figures. The telescoping identity between worlds and contributions is
+// what several tests assert, and the noise band is deliberately larger than the figure it
+// sits under.
 
 import type { LedgerDecisionRow, SavingsLedger } from "../savingsLedger.types";
 
@@ -431,23 +427,17 @@ const ledgerLiveSample: SavingsLedger = {
 };
 
 /**
- * NOT CAPTURED - constructed. Every one of the 42 rows above is `appliedMode: "unknown"`
- * against `suggestedMode` "unknown" or "normal", i.e. 42 steady rows: the capture carries
- * no veto, no vetoReason and no slotFlowDeltaEur at all, so on its own it exercises none
- * of the euro-printing or veto paths in SavingsLedgerDecisions.vue.
- *
- * These four are hand-built to the shape core/metrics/ledger_decisions.go's DecisionRow
- * actually emits, one per outcome the capture is missing:
- *  - suggestedMode is OMITTED, never "unknown", when no run produced a suggestion
- *    (decodeSuggestedMode maps the legacy token to nil on the read path);
- *  - slotFlowDeltaEur is OMITTED whenever DecisionDeltas could not price the slot (no
- *    battery physics, or the slot is outside the valid slot set) - never a 0 sentinel;
+ * NOT CAPTURED, constructed. Every row above is steady, with no veto, no vetoReason and
+ * no slotFlowDeltaEur, so the capture alone exercises none of the euro-printing or veto
+ * paths. These four are hand-built to the shape DecisionRow actually emits:
+ *  - suggestedMode is OMITTED, never "unknown", when no run produced a suggestion;
+ *  - slotFlowDeltaEur is OMITTED whenever the slot could not be priced, never a 0
+ *    sentinel;
  *  - it is positive when the APPLIED mode cost more than the rejected suggestion would
  *    have within that slot, negative when it cost less.
  *
- * The timestamps continue the capture's own timeline and the magnitudes are on its scale;
- * they are plausible, not observed. Do not fold them into `decisions` above - that array
- * is a verbatim capture and several tests count it.
+ * Plausible, not observed. Do not fold them into `decisions` above: that array is a
+ * verbatim capture and several tests count it.
  */
 export const constructedDecisionRows: LedgerDecisionRow[] = [
   // a veto whose slot could be priced, and where the controller's choice cost money

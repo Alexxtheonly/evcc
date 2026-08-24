@@ -1,12 +1,10 @@
-// Pure transforms for the ADR-011 per-slot decision replay (core/metrics/ledger_decisions.go's
+// Pure transforms for the per-slot decision replay (core/metrics/ledger_decisions.go's
 // DecisionRow). Kept framework-free for unit testing.
 
 import type { LedgerDecisionRow } from "./savingsLedger.types";
 
-// AppliedMode/SuggestedMode mirror api.BatteryMode.String() as plain lowercase strings
-// (control_slots.go's own doc comment), the same vocabulary BATTERY_MODE already uses -
-// reuse PriceChart.vue's existing forecast.optimizer.mode* i18n keys rather than adding
-// a second set of English strings for the same four modes.
+// AppliedMode/SuggestedMode mirror api.BatteryMode.String() as plain lowercase strings, the
+// same vocabulary BATTERY_MODE uses, so the existing forecast.optimizer.mode* keys apply.
 const MODE_LABEL_KEYS: Record<string, string> = {
   normal: "forecast.optimizer.modeNormal",
   hold: "forecast.optimizer.modeHold",
@@ -15,15 +13,11 @@ const MODE_LABEL_KEYS: Record<string, string> = {
 };
 
 /**
- * api.BatteryUnknown is what evcc records for a slot in which it held no override, and on
- * a site with a battery that means exactly what api.BatteryNormal means. The backend now
- * folds the two at persistence time, but every row written before it did still carries
- * "unknown", and the rest of this UI has always treated them as one thing anyway -
- * Battery/BatteryStatusCard.vue's statusState(), Energyflow.vue, Bar.vue and
- * BatteryBoostButton.vue all match only hold/holdcharge/charge and let normal and unknown
- * alike fall through. Folded here, once, before anything compares or labels a mode, so a
- * legacy row cannot read as a veto that never happened - and so the wire word "unknown"
- * never reaches the screen.
+ * api.BatteryUnknown records a slot in which evcc held no override, which on a site with a
+ * battery means exactly what api.BatteryNormal means. The backend folds the two at
+ * persistence time, but rows written before it did still carry "unknown". Folded here once,
+ * before anything compares or labels a mode, so a legacy row cannot read as a veto that
+ * never happened and the wire word never reaches the screen.
  */
 export function normalizeMode(mode?: string): string {
   return !mode || mode === "unknown" ? "normal" : mode;
@@ -33,8 +27,8 @@ export function modeLabelKey(mode: string): string | undefined {
   return MODE_LABEL_KEYS[normalizeMode(mode)];
 }
 
-// control_slots.go's VetoReason is optimizerVetoReason's wire value (core/site_optimizer.go) -
-// the same enum OPTIMIZER_VETO_REASON already covers for the live slot-0 annotation.
+// control_slots.go's VetoReason is optimizerVetoReason's wire value, the same enum
+// OPTIMIZER_VETO_REASON covers for the live slot-0 annotation.
 const REASON_LABEL_KEYS: Record<string, string> = {
   payback: "forecast.optimizer.reasonPayback",
   forcedIdle: "forecast.optimizer.reasonForcedIdle",
@@ -49,14 +43,13 @@ export function reasonLabelKey(reason?: string): string | undefined {
 
 /**
  * A decision row's outcome, for colouring the timeline tick and the table row.
- *  - "steady": AppliedMode == SuggestedMode (normalizeMode applied to both) - nothing was
- *    vetoed, nothing to report.
- *  - "vetoed-cost": a veto happened and its slot-local delta is positive (the applied
- *    mode cost more than the rejected suggestion would have, in that slot).
- *  - "vetoed-saved": a veto happened and its slot-local delta is negative or zero.
- *  - "vetoed-unknown": a veto happened but slotFlowDeltaEur isn't computable (no
- *    battery physics, or the slot fell outside the ledger's valid slot set) - ADR-011
- *    rule 3: absence is never a sentinel, so this is a distinct state, not "saved".
+ *  - "steady": AppliedMode == SuggestedMode after normalizeMode, nothing was vetoed.
+ *  - "vetoed-cost": a veto whose slot-local delta is positive (the applied mode cost more
+ *    than the rejected suggestion would have, in that slot).
+ *  - "vetoed-saved": a veto whose slot-local delta is negative or zero.
+ *  - "vetoed-unknown": a veto whose slotFlowDeltaEur is not computable (no battery physics,
+ *    or the slot fell outside the valid slot set). Absence is never a sentinel, so this is
+ *    its own state, not "saved".
  */
 export type DecisionOutcome =
   | "no-suggestion"
@@ -67,12 +60,9 @@ export type DecisionOutcome =
 
 export function decisionOutcome(row: LedgerDecisionRow): DecisionOutcome {
   // absent, not "unknown": the backend records nil when no optimizer run produced a
-  // suggestion for the slot (core/metrics/control_slots.go). Folding that into "steady"
-  // via normalizeMode would claim the optimizer agreed with what was applied - on this
-  // site's own database that was 62 % of the rows. Rows written before the column was
-  // nullable spell the same absence as the literal "unknown"; those are decoded to null
-  // on the read path (core/metrics/ledger_decisions.go's decodeSuggestedMode) so they
-  // arrive here already absent - one rule, on the Go side, rather than a second one here.
+  // suggestion. Folding that into "steady" via normalizeMode would claim the optimizer
+  // agreed with what was applied. Legacy rows spelling the same absence as "unknown" are
+  // decoded to null on the Go read path, so they arrive here already absent.
   if (row.suggestedMode == null) return "no-suggestion";
   if (normalizeMode(row.appliedMode) === normalizeMode(row.suggestedMode)) return "steady";
   if (row.slotFlowDeltaEur == null) return "vetoed-unknown";
@@ -91,16 +81,15 @@ export interface DecisionSlot {
   tsMs: number;
 }
 
-/** Rows sorted ascending by ts, tagged with their outcome and epoch ms - what the
- * timeline strip and the table both iterate. */
+/** Rows sorted ascending by ts, tagged with their outcome and epoch ms. */
 export function decisionSlots(rows: LedgerDecisionRow[]): DecisionSlot[] {
   return rows
     .map((row) => ({ row, outcome: decisionOutcome(row), tsMs: new Date(row.ts).getTime() }))
     .sort((a, b) => a.tsMs - b.tsMs);
 }
 
-/** Count of vetoed rows whose health flag was false at the time - a decision made under
- * a condition the site itself flagged as unhealthy, worth surfacing distinctly. */
+/** Vetoed rows whose health flag was false: a decision made under a condition the site
+ * itself flagged as unhealthy. */
 export function unhealthyVetoCount(rows: LedgerDecisionRow[]): number {
   return rows.filter((r) => isVeto(decisionOutcome(r)) && !r.healthOk).length;
 }

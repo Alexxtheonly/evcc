@@ -78,7 +78,7 @@
 				</div>
 			</div>
 
-			<!-- Solver objective (NOT a settled grid cost - see COST_TOOLTIP / ADR-011 rule 6) -->
+			<!-- Solver objective, NOT a settled grid cost. See COST_TOOLTIP. -->
 			<div class="field col-12 col-md-6 col-lg-3">
 				<div class="field-head">
 					<div class="field-label small text-uppercase fw-bold evcc-gray">
@@ -201,12 +201,9 @@ export default defineComponent({
 		isCredit(): boolean {
 			return this.netCost < 0;
 		},
-		// Deliberately NOT fmtMoney: netCost is the solver's objective value, not a
-		// settled cost (ADR-011 rule 6 - it includes a terminal battery-value credit
-		// that hasn't been earned yet). fmtMoney's currency styling (symbol, locale
-		// currency grouping/rounding) would present it as if it were exactly what the
-		// user will pay - fmtNumber plus the plain currency code communicates the
-		// same rough magnitude without that implication.
+		// Deliberately NOT fmtMoney: netCost is the solver's objective value, not a settled
+		// cost, and includes a terminal battery-value credit that hasn't been earned yet.
+		// fmtMoney's currency styling would present it as exactly what the user will pay.
 		netCostDisplay(): string {
 			return `${this.fmtNumber(this.netCost, 2)} ${this.currency}`;
 		},

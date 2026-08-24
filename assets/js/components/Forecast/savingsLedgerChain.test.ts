@@ -15,10 +15,9 @@ import type { LedgerCoverage } from "./savingsLedger.types";
 
 const settled = (perSlot: number, periodAverage = perSlot) => ({ perSlot, periodAverage });
 
-// The UI recognises one backend note by its text (EV_TIMING_NOTE's doc comment says why
-// it has to). This is the tie that makes that coupling loud: it reads the Go source and
-// fails the moment noteEVTimingUnattributed is reworded, so the caption under the chart
-// cannot silently stop rendering on a site that has a loadpoint.
+// The UI recognises one backend note by its text. This is the tie that makes that
+// coupling loud: it reads the Go source and fails the moment noteEVTimingUnattributed is
+// reworded, so the caption under the chart cannot silently stop rendering.
 describe("EV_TIMING_NOTE", () => {
   it("is exactly core/metrics/ledger_worlds.go's noteEVTimingUnattributed", () => {
     // relative to the repo root, which is where the test runner is started from
@@ -76,9 +75,9 @@ describe("period window", () => {
     expect(prev.to.getTime()).toBe(win.from.getTime());
   });
 
-  // D2: the default window auto-narrows its `from` to where the tariff history starts
-  // (clampWindowToEarliest, below), so the window on screen is shorter than a period.
-  // Paging back must step from THAT start - anchoring on `to` skipped the days between.
+  // the default window auto-narrows its `from` to where the tariff history starts, so the
+  // window on screen is shorter than a period. Paging back must step from THAT start;
+  // anchoring on `to` skips the days between.
   it("shiftWindow(-1) steps from the displayed start of an auto-narrowed window", () => {
     const now = new Date("2026-08-24T08:15:00.000Z");
     const narrowed = clampWindowToEarliest(defaultWindow(now), "2026-08-21T10:30:00.000Z");

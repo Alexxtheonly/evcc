@@ -1,6 +1,6 @@
 <template>
-	<!-- role/aria-label: the diagram is the card's primary content, so it must announce
-	     its own start and end figures rather than reading as an empty div. -->
+	<!-- the diagram is the card's primary content, so it announces its own start and
+	     end figures rather than reading as an empty div -->
 	<div
 		ref="chartEl"
 		class="waterfall"
@@ -17,9 +17,8 @@ import { FONT_FAMILY, tooltipStyle, forecastGrid, forecastYAxis } from "./echart
 import colors, { batteryColor, lighterColor, setAlpha } from "@/colors";
 import escapeHtml from "@/utils/escapeHtml";
 import formatter from "@/mixins/formatter";
-// NOT ./chartMixin: that one is for the three horizontally-scrolling, time-axis,
-// mutually-scroll-synced forecast charts. This is a categorical chart that must fit the
-// card's width with no horizontal scroll, so it uses the plain echarts lifecycle mixin.
+// NOT ./chartMixin: that one is for the scroll-synced, time-axis forecast charts. This
+// is a categorical chart that must fit the card's width with no horizontal scroll.
 import echartsChart from "@/mixins/echartsChart";
 import type { CURRENCY } from "@/types/evcc";
 import type { LedgerChain } from "./savingsLedger.types";
@@ -36,24 +35,23 @@ import {
 } from "./savingsLedgerWaterfall";
 
 // Chart box, in px. Bound as an inline style rather than left in the stylesheet so the
-// plotting-area height below is derived from the same numbers the chart is actually
-// drawn at - minSpan() converts a pixel minimum into value units and silently lies if
-// these drift from the CSS.
+// plotting-area height below comes from the numbers the chart is actually drawn at:
+// minSpan() converts a pixel minimum into value units and silently lies if they drift.
 const CHART_HEIGHT = 220;
 const GRID_TOP = 28;
 const GRID_BOTTOM = 48;
-// exported for the no-clipping invariant assertion in savingsLedgerWaterfall.test.ts -
-// see AXIS_HEADROOM's doc comment for what it protects
+// exported for the no-clipping invariant asserted in savingsLedgerWaterfall.test.ts, see
+// AXIS_HEADROOM's doc comment for what it protects
 export const PLOT_HEIGHT = CHART_HEIGHT - GRID_TOP - GRID_BOTTOM;
 // wide viewports would otherwise draw five fat slabs
 const BAR_MAX_WIDTH = 64;
-// below this rendered height an "estimated" bar is drawn solid instead of dash-outlined -
-// see itemStyle() for why
+// below this rendered height an "estimated" bar is drawn solid instead of dash-outlined,
+// see itemStyle()
 const DASHED_OUTLINE_MIN_PX = 14;
 
-// A contribution's effect on the bill, as a direction rather than a sign: the strip under
-// the chart says "saved EUR 6.06", so a bare "-EUR 5.88" on the bar 40px above it can be
-// read as a loss. Down = this measure took money off the bill, up = it added to it.
+// A contribution's effect on the bill as a direction rather than a sign: beside a strip
+// reading "saved EUR 6.06", a bare "-EUR 5.88" on the bar above it reads as a loss.
+// Down = took money off the bill, up = added to it.
 const GLYPH_DOWN = "↓";
 const GLYPH_UP = "↑";
 
@@ -93,8 +91,8 @@ export default defineComponent({
 
 			return {
 				animationDuration: 0,
-				// the headline toggle swaps every figure in place - a short update
-				// animation makes that legible instead of a jump cut (PriceChart.vue)
+				// the headline toggle swaps every figure in place; animating that
+				// makes it legible instead of a jump cut
 				animationDurationUpdate: 300,
 				textStyle: { fontFamily: FONT_FAMILY },
 				grid: {
@@ -106,9 +104,7 @@ export default defineComponent({
 				},
 				tooltip: {
 					trigger: "item",
-					// same box as every other forecast chart (solid text-colour panel,
-					// background-colour type), not the plain grey one this chart used to
-					// draw. confine keeps it inside the card on a phone.
+					// same box as every other forecast chart, confined to the card
 					...tooltipStyle(colors.text || ""),
 					formatter: (p: { dataIndex: number }) => this.tooltipHtml(cols[p.dataIndex]),
 				},
@@ -140,22 +136,16 @@ export default defineComponent({
 					},
 				},
 				// min stays 0: the chart is plotted in a system translated by layout.origin
-				// (see plotBase), which is zero in every normal period and negative exactly
-				// when a level dips below zero - so nothing is ever clipped and the axis
-				// labels still read real euros via the formatter below.
+				// (plotBase), so nothing is clipped and the formatter below still reads euros
 				yAxis: forecastYAxis({
 					max: axis.max,
 					interval: axis.interval,
 					axisLabel: {
 						color: muted,
-						// whole euros: the ticks are chosen as whole units (waterfallAxis),
-						// and cents on a gridline are noise next to the bars' own labels.
-						// EXCEPT when origin is non-zero (a net-credit period, where a level
-						// dips below zero): the ticks are then offset by origin and are no
-						// longer whole, so rounding them prints a gridline at "EUR 1" that
-						// actually sits at EUR 0.80 - and a bottom tick of "-EUR 0". The
-						// honest figure wins over the round one, which is what
-						// waterfallAxis's own doc comment says should happen.
+						// whole euros: waterfallAxis chooses whole-unit ticks. EXCEPT
+						// when origin is non-zero, where the ticks are offset by it and
+						// rounding prints a gridline at "EUR 1" that sits at EUR 0.80.
+						// The honest figure wins over the round one.
 						formatter: (value: number) =>
 							this.fmtMoney(value + origin, this.currency, origin !== 0, true),
 					},
@@ -197,18 +187,14 @@ export default defineComponent({
 								axis.max > 0 ? (plotSpan(c, floor) / axis.max) * PLOT_HEIGHT : 0
 							),
 							// per item, not per series: the label must never inherit the
-							// bar's own colour (a dim battery green on a dark card is
-							// barely legible), and an overspend keeps its danger colour.
+							// bar's colour, and an overspend keeps its danger colour
 							label: { color: this.labelColor(c) },
 						})),
 					},
 					{
-						// the waterfall's connectors: one horizontal rule per running level,
-						// so the eye follows the descent from bar to bar. step:"end" holds
-						// each level until the next category, then steps to the new one -
-						// and every one of those vertical steps coincides exactly with the
-						// bar that caused it, so a lower z hides them behind the bars and
-						// only the horizontal links between bars are visible.
+						// one horizontal rule per running level. Every vertical step of
+						// step:"end" coincides with the bar that caused it, so a lower z
+						// hides them and only the horizontal links stay visible.
 						name: "connector",
 						type: "line",
 						step: "end",
@@ -228,7 +214,7 @@ export default defineComponent({
 		},
 	},
 	methods: {
-		// ADR-011 rule 7: the estimate marker lives IN the axis label, not in a footnote.
+		// the estimate marker lives IN the axis label, never in a footnote
 		axisLabel(key: string): string {
 			const name = this.$t(`forecast.savingsLedger.axis.${key}`) as string;
 			const line = `{n|${name}}`;
@@ -256,22 +242,15 @@ export default defineComponent({
 		},
 		columnColor(column: WaterfallColumn): string {
 			if (column.overspend) return colors.danger || "";
-			// The overspend test above is band-gated for a reason: a figure smaller than
-			// the period's own measurement noise is not evidence of a direction, so it
-			// must not be coloured as a loss. That reasoning is symmetric - it is not
-			// evidence of a saving either, and a saturated palette colour says "this
-			// measure saved you money" just as loudly as the danger colour says the
-			// opposite, while the caption underneath says the figure is too small to call.
-			// Neutral in BOTH directions; the bar, its arrow and its printed figure are
-			// all untouched, only the semantic colour goes. Totals never carry this flag
-			// (waterfallLayout hardcodes insideNoise false for them), so this only ever
-			// catches a contribution.
+			// The overspend test above is band-gated because a figure inside the period's
+			// measurement noise is not evidence of a direction. That is symmetric: a
+			// saturated palette colour claims a saving as loudly as the danger colour
+			// claims a loss, so neutral BOTH ways. Only the semantic colour goes.
 			if (column.insideNoise) return colors.muted || "";
 			switch (column.key) {
 				case "baseline":
-					// the quietest element on the chart: it is the reference every other
-					// bar is measured against, not a measure of its own. colors.grid is
-					// near-black in the light theme and would dominate.
+					// the quietest element on the chart: the reference every other bar
+					// is measured against, not a measure of its own
 					return lighterColor(colors.muted) || colors.muted || "";
 				case "pv":
 					return colors.self || "";
@@ -286,23 +265,19 @@ export default defineComponent({
 		// full-contrast text in both themes, whatever the bar underneath it is coloured
 		labelColor(column: WaterfallColumn): string {
 			if (column.overspend) return colors.danger || "";
-			// currentColor rather than a hardcoded hex: the SVG renderer resolves it
-			// against the card's own text colour, so the label stays legible even if the
-			// CSS custom property read in colors.ts came back empty.
+			// currentColor rather than a hardcoded hex, so the label stays legible even if
+			// the CSS custom property read in colors.ts came back empty
 			return colors.text || "currentColor";
 		},
 		// estimated bars carry a dashed outline as well as their axis label, so the
-		// distinction survives a greyscale filter and doesn't rest on colour alone.
-		// (itemStyle.decal is deliberately not used - the decal/aria machinery isn't
-		// registered in echarts.ts.)
+		// distinction survives a greyscale filter. (itemStyle.decal is deliberately not
+		// used: the decal/aria machinery isn't registered in echarts.ts.)
 		//
-		// heightPx gates the outline: a 1px dash on all four sides of a short bar leaves
-		// almost no fill between them, and the bar reads as a dotted rule rather than a
-		// bar - observed in the browser on this site's real Control contribution (EUR 0.71
-		// on a EUR 15 axis, ~7px tall). Below the threshold the bar is drawn solid; ADR-011
-		// rule 7 is still satisfied because the "estimated" marker lives in the axis label,
-		// which is the rule's actual requirement - the outline is the redundant second
-		// channel, and a channel that destroys the bar is worse than no second channel.
+		// heightPx gates the outline: on a short bar a 1px dash on all four sides leaves
+		// almost no fill and the bar reads as a dotted rule. Drawing it solid below the
+		// threshold is safe because the "estimated" marker lives in the axis label; the
+		// outline is a redundant second channel, and one that destroys the bar is worse
+		// than none.
 		itemStyle(column: WaterfallColumn, heightPx: number): Record<string, unknown> {
 			const style: Record<string, unknown> = {
 				color: this.columnColor(column),
@@ -315,10 +290,8 @@ export default defineComponent({
 			}
 			return style;
 		},
-		// Deliberately short: the column, its figure, what it means, and whether it is
-		// measured or estimated. The battery provenance strings (capacitySource/etaSource/
-		// floorSource) live in the info modal, in full - repeating them here turned the
-		// tooltip into a paragraph that covered the bar it was describing.
+		// Deliberately short. The battery provenance strings live in the info modal, in
+		// full: repeating them here turns the tooltip into a paragraph covering the bar.
 		tooltipHtml(column: WaterfallColumn | undefined): string {
 			if (!column) return "";
 			const t = (key: string, params?: Record<string, unknown>) =>
@@ -339,9 +312,9 @@ export default defineComponent({
 				);
 			}
 
-			// N2: a figure smaller than the period's own measured noise floor has a
-			// magnitude but not a usable direction. The number stays exactly as computed -
-			// this only stops the tooltip reading as though the sign meant something.
+			// a figure inside the period's measured noise floor has a magnitude but no
+			// usable direction. The number stays exactly as computed; this only stops the
+			// tooltip reading as though the sign meant something.
 			if (column.insideNoise && !column.zero) {
 				lines.splice(
 					2,
@@ -353,9 +326,8 @@ export default defineComponent({
 			}
 
 			// routing/timing is surfaced here rather than as its own column: they sum to
-			// Control, and only under the perSlot headline are they a coherent pair - see
-			// WaterfallKey's doc comment in savingsLedgerWaterfall.ts for why they must
-			// never be shown beside a periodAverage Control figure.
+			// Control and are only a coherent pair under the perSlot headline, see
+			// WaterfallKey's doc comment for why.
 			if (column.key === "control" && this.chain.control && this.headline === "perSlot") {
 				const money = (v: number) => escapeHtml(this.billEffect(v));
 				lines.push(

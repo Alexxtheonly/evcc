@@ -10,9 +10,8 @@
 		<p>{{ $t("forecast.savingsLedger.info.end") }}</p>
 		<p>{{ $t("forecast.savingsLedger.info.estimates") }}</p>
 
-		<!-- ADR-011 rule 7: the real Source strings from batteryPhysics
-		     (core/metrics/ledger_worlds.go), never an invented error bar - the API has
-		     none. Rendered only when the payload actually carries them. -->
+		<!-- the real Source strings from batteryPhysics, never an invented error bar: the
+		     API has none. Rendered only when the payload actually carries them. -->
 		<ul v-if="physicsLines.length" class="small" data-testid="savings-ledger-info-physics">
 			<li v-for="(line, i) in physicsLines" :key="i">{{ line }}</li>
 		</ul>
@@ -22,10 +21,9 @@
 			{{ $t("forecast.savingsLedger.coverageChainDiverges", { pct: chainCoveragePct }) }}
 		</p>
 
-		<!-- Every note the API sent is still here in full (ADR-011 rule 7: none may be
-		     dropped), but collapsed: they are the backend's own wording, down to field
-		     names like meterResidual and decisions[].slotFlowDeltaEur, and opening the
-		     modal on them buried the plain-language explanation above. -->
+		<!-- Every note the API sent is here in full, none may be dropped, but collapsed:
+		     they are the backend's own wording down to field names, and opening the modal
+		     on them buries the plain-language explanation above. -->
 		<details v-if="notes.length" class="notes" data-testid="savings-ledger-info-notes-details">
 			<summary class="notes-title">{{ $t("forecast.savingsLedger.notesTitle") }}</summary>
 			<ul class="notes-list small" data-testid="savings-ledger-info-notes">
@@ -41,21 +39,15 @@ import GenericModal from "../Helper/GenericModal.vue";
 import formatter from "@/mixins/formatter";
 import type { LedgerChain } from "./savingsLedger.types";
 
-// D4: batteryPhysics' *Source fields are the API's own provenance and are rendered
-// verbatim - except that they are written for whoever maintains the Go side, and
-// etaSource ends in a cross-reference to it: "constant (0.9), not derived - shared with
-// core/site_optimizer.go's eta, see BatteryEta". A source path and a Go identifier mean
-// nothing to the person reading this modal, so any clause naming a .go file is dropped.
-// The provenance itself ("constant (0.9), not derived" - a fixed constant, not measured
-// from this battery) survives untouched: nothing is softened, only the code pointer goes.
+// batteryPhysics' *Source fields are the API's own provenance, rendered verbatim except
+// for clauses that cross-reference the Go source ("shared with core/site_optimizer.go's
+// eta, see BatteryEta"): a source path means nothing to whoever is reading this modal.
+// The provenance itself is never softened, only the code pointer goes.
 //
-// F5: dropping clauses can drop all of them - a single-clause string naming a .go file
-// would leave "", and the i18n template around it renders "Capacity 10.0 kWh - .".
-// Absence rendered as punctuation is still a claim about the provenance. No string sent
-// today hits this, but the fallback is one expression: show the original, code pointer
-// and all, rather than nothing. Note this filter is clause-granular, so real provenance
-// sharing a clause with a file reference goes with it - acceptable for the strings that
-// exist, and the fallback now bounds the worst case at "too much" instead of "none".
+// The filter is clause-granular, so a single-clause string naming a .go file would leave
+// "" and the i18n template around it would render "Capacity 10.0 kWh - .". Absence
+// rendered as punctuation is still a claim about the provenance, so fall back to the
+// original, code pointer and all, rather than to nothing.
 function readableSource(source: string): string {
 	const readable = source
 		.split(" - ")

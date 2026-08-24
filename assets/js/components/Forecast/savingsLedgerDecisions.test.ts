@@ -24,10 +24,9 @@ describe("decisionOutcome", () => {
     expect(decisionOutcome(row())).toBe("steady");
   });
 
-  // D6: api.BatteryUnknown means "no override in effect", which is what BatteryNormal
-  // means. Rows written before the backend folded the two still carry "unknown" on one
-  // side and "normal" on the other - a difference of wire strings, not of behaviour, and
-  // never a veto.
+  // api.BatteryUnknown means "no override in effect", which is what BatteryNormal means.
+  // Rows written before the backend folded the two carry "unknown" on one side and
+  // "normal" on the other: a difference of wire strings, not of behaviour, never a veto.
   it("is steady when one side says unknown and the other normal", () => {
     expect(decisionOutcome(row({ appliedMode: "unknown", suggestedMode: "normal" }))).toBe(
       "steady"
@@ -44,7 +43,7 @@ describe("decisionOutcome", () => {
   });
 
   it("is vetoed-unknown when a veto happened but slotFlowDeltaEur is not computable", () => {
-    // ADR-011 rule 3: absence must never read as "saved" (0)
+    // absence must never read as "saved" (0)
     expect(decisionOutcome(row({ appliedMode: "normal", suggestedMode: "hold" }))).toBe(
       "vetoed-unknown"
     );

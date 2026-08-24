@@ -1,12 +1,11 @@
 <template>
 	<div class="savings-ledger-decisions" data-testid="savings-ledger-decisions">
-		<!-- no heading of its own: this strip is mounted as its own Card in
-		     views/Forecast.vue, whose header renders decisions.title. -->
+		<!-- no heading of its own: mounted as its own Card in views/Forecast.vue, whose
+		     header renders decisions.title -->
 		<div class="section-head">
-			<!-- D3: the card above this one is headed with the requested PERIOD, but only
-			     slots with a recorded control decision appear here - typically the last
-			     few hours of a multi-day period. Naming the span the ticks actually cover
-			     is the honest alternative to padding the strip out with fabricated slots. -->
+			<!-- the card above is headed with the requested PERIOD, but only slots with a
+			     recorded control decision appear here. Naming the span the ticks actually
+			     cover beats padding the strip out with fabricated slots. -->
 			<p
 				v-if="recordedSpan"
 				class="span-note text-muted small mb-0"
@@ -109,9 +108,9 @@
 						</div>
 					</div>
 
-					<!-- D6: "did the controller override the suggestion" is the outcome, not
-					     a raw string comparison - a legacy row carrying "unknown" against
-					     "normal" is the same mode twice, not a veto worth a row of its own. -->
+					<!-- "did the controller override the suggestion" is the outcome, not a raw
+					     string comparison: a legacy row carrying "unknown" against "normal" is
+					     the same mode twice, not a veto. -->
 					<template v-if="isVeto(selected.outcome)">
 						<div class="dc-line">
 							<div class="dc-k">
@@ -130,11 +129,8 @@
 							</div>
 						</div>
 					</template>
-					<!-- D3: "the optimizer said nothing" is not "the optimizer agreed" - the
-					     same conflation N4 removed from the tick and the table cell, left
-					     behind in the panel that reads as authoritative. 35 of 59 rows on
-					     this site's own strip were no-suggestion rows, every one of them
-					     told "Nothing was vetoed in this slot." -->
+					<!-- "the optimizer said nothing" is not "the optimizer agreed", and this
+					     panel is the one that reads as authoritative -->
 					<div
 						v-else-if="selected.outcome === 'no-suggestion'"
 						class="dc-line text-muted small"
@@ -150,13 +146,10 @@
 						{{ $t("forecast.savingsLedger.decisions.noVeto") }}
 					</div>
 
-					<!-- D6: the slot-local delta prices a veto against the suggestion it
-					     rejected, so on a steady slot there is nothing for it to measure.
-					     It used to render regardless, printing whatever the backend put in
-					     slotFlowDeltaEur - and while applied/suggested differed only as
-					     strings ("unknown" vs "normal") that was a fabricated "the veto was
-					     worth EUR 0.00" on every such slot. Shown only where a veto exists;
-					     absent-but-vetoed still says so, in its own words, below. -->
+					<!-- the slot-local delta prices a veto against the suggestion it rejected,
+					     so on a steady slot there is nothing for it to measure and printing
+					     one fabricates "the veto was worth EUR 0.00". Shown only where a veto
+					     exists; absent-but-vetoed says so in its own words below. -->
 					<div v-if="isVeto(selected.outcome)" class="dc-line">
 						<div class="dc-k">{{ $t("forecast.savingsLedger.decisions.delta") }}</div>
 						<div class="dc-v" data-testid="savings-ledger-decision-delta">
@@ -278,8 +271,8 @@ export default defineComponent({
 		unhealthyCount(): number {
 			return unhealthyVetoCount(this.decisions);
 		},
-		// D3: first slot start to last slot END (a row is a slot start, so the span runs
-		// one slot past it) - the real extent of the strip, not the card's period.
+		// first slot start to last slot END (a row is a slot start, so the span runs one
+		// slot past it): the real extent of the strip, not the card's period
 		recordedSpan(): string {
 			if (!this.slots.length) return "";
 			const first = this.slots[0]!;
@@ -306,10 +299,9 @@ export default defineComponent({
 		isSelected(slot: DecisionSlot): boolean {
 			return this.selected?.row.ts === slot.row.ts;
 		},
-		// D5: a tick's meaning (steady / vetoed-cost / vetoed-saved / vetoed-unknown) was
-		// carried only by height and colour, with :title exposing nothing but a
-		// timestamp - the accessible name. This builds the same distinction the visual
-		// legend shows, plus the euro delta where one exists, as the button's real name.
+		// a tick's meaning is carried visually by height and colour, and :title exposes
+		// only a timestamp. This builds the same distinction the legend shows, plus the
+		// euro delta where one exists, as the button's accessible name.
 		tickAriaLabel(slot: DecisionSlot): string {
 			const time = this.fmtDayTime(new Date(slot.row.ts));
 			if (slot.outcome === "no-suggestion") {
@@ -325,10 +317,9 @@ export default defineComponent({
 			const key = slot.outcome === "vetoed-cost" ? "vetoedCost" : "vetoedSaved";
 			return `${time}, ${this.$t(`forecast.savingsLedger.decisions.outcome.${key}`, { delta })}`;
 		},
-		// D6: an absent/"unknown" mode is folded to normal by modeLabelKey's own
-		// normalizeMode - the wire word never reaches the screen. A genuinely
-		// unrecognised mode (one this UI predates) is still shown verbatim rather than
-		// disguised as something it isn't.
+		// an absent/"unknown" mode is folded to normal by modeLabelKey's normalizeMode, so
+		// the wire word never reaches the screen. A genuinely unrecognised mode is shown
+		// verbatim rather than disguised as something it isn't.
 		modeLabel(mode?: string): string {
 			const key = modeLabelKey(mode ?? "");
 			return key ? (this.$t(key) as string) : (mode ?? "");
@@ -346,11 +337,10 @@ export default defineComponent({
 			if (slot.outcome === "steady") return EMPTY;
 			return this.modeLabel(slot.row.suggestedMode);
 		},
-		// D6: the slot-local delta prices a veto against the suggestion it rejected, so a
-		// steady slot has nothing for it to measure. Keyed on the outcome, not on
-		// nullness - a legacy row carrying applied "unknown" against suggested "normal" IS
-		// steady (the same mode spelled two ways) and used to render "EUR 0.00" here
-		// beside a suggested column already saying there was no veto.
+		// the slot-local delta prices a veto against the suggestion it rejected, so a
+		// steady slot has nothing for it to measure. Keyed on the outcome, not on nullness:
+		// a legacy row carrying applied "unknown" against suggested "normal" IS steady, the
+		// same mode spelled two ways.
 		deltaLabel(slot: DecisionSlot): string {
 			if (!isVeto(slot.outcome) || slot.row.slotFlowDeltaEur == null) return EMPTY;
 			return this.fmtMoney(slot.row.slotFlowDeltaEur, this.currency, true, true);
@@ -388,12 +378,9 @@ export default defineComponent({
 	background: var(--evcc-box-border);
 	cursor: pointer;
 }
-/* D1: "nothing was vetoed" is two thirds of a typical strip, and it used to inherit
-   .tick's --evcc-box-border - which in dark mode IS the card background (#151630) and in
-   light mode is the page grey on a white card. 35 of 52 slots therefore rendered as
-   nothing at all, and the legend's own swatch was blank too because no .tick--steady rule
-   existed anywhere. Plain grey, at a third of a vetoed bar's height: clearly present in
-   both themes, and subordinate to the green/red ones by both size and saturation. */
+/* "nothing was vetoed" is two thirds of a typical strip, and .tick's own
+   --evcc-box-border IS the card background in dark mode. Plain grey at a third of a
+   vetoed bar's height: present in both themes, subordinate by size and saturation. */
 .tick--steady {
 	background: var(--evcc-gray);
 }
@@ -405,16 +392,12 @@ export default defineComponent({
 	height: 24px;
 	background: var(--evcc-red);
 }
-/* N4: "no optimizer run produced a suggestion for this slot" is its own state, not a
-   quieter kind of agreement - a hollow tick, so it reads as present-but-empty rather than
-   as either a veto or a match.
-   D8: hollow alone did not survive the size it renders at. A 1px inset ring on a 5x8 box
-   leaves a 3x6 hole, which measured 54% of .tick--steady's ink with only 18 of 40 pixels
-   differing - a slightly paler solid block, on 59% of this site's strip. Shortening it to
-   3px puts it on the channel this strip already uses for significance (24px veto, 8px
-   steady) and takes it to 28% of the ink with 30 of 40 pixels differing. The legend
-   swatch is unaffected: .legend .lg's own height outranks this rule, so the swatch stays
-   14x9 and keeps the hollow ring that distinguishes it there. */
+/* "no optimizer run produced a suggestion" is its own state, not a quieter kind of
+   agreement: hollow, so it reads as present-but-empty rather than as a veto or a match.
+   Hollow alone does not survive this size - a 1px ring on a 5x8 box is a slightly paler
+   solid block next to .tick--steady - so the height also drops to 3px, putting it on the
+   channel the strip already uses for significance (24px veto, 8px steady). The legend
+   swatch is unaffected: .legend .lg's height outranks this rule, so it keeps the ring. */
 .tick--no-suggestion {
 	height: 3px;
 	background: transparent;
