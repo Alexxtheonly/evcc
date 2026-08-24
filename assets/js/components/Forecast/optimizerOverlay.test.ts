@@ -334,9 +334,8 @@ describe("shouldAnnotateOptimizerDecision", () => {
   });
 
   it("does not render a decision older than its validity horizon", () => {
-    const stale: OptimizerDecision = { ...base, updated: "2026-01-01T00:00:00Z" };
-    const later = t("2026-01-01T00:07:00Z"); // 7 min after updated, past validFor
-    expect(shouldAnnotateOptimizerDecision(stale, true, later)).toBe(false);
+    const later = t("2026-01-01T00:07:00Z"); // 7 min after base.updated, past validFor
+    expect(shouldAnnotateOptimizerDecision(base, true, later)).toBe(false);
   });
 
   it("renders a decision exactly at its validity horizon", () => {

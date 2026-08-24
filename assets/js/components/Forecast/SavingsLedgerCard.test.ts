@@ -15,6 +15,8 @@ import api from "@/api";
 import SavingsLedgerCard from "./SavingsLedgerCard.vue";
 // eslint-disable-next-line import/first
 import liveSample from "./__fixtures__/ledgerLiveSample";
+// eslint-disable-next-line import/first
+import { EV_TIMING_NOTE } from "./savingsLedgerChain";
 
 // minimal $t/$te that walk en.json so tests assert on real English text, matching the
 // pattern in Vehicles/Status.test.ts and Optimize/OptimizeHeader.test.ts. Also expands
@@ -37,9 +39,11 @@ config.global.mocks["$i18n"] = { locale: "en-US" };
 // test's own markup behind an empty <card-stub/> the first time this ran.
 config.global.renderStubDefaultSlot = true;
 
-// fixed, already slot-aligned "now" - every isAtPresent check in the component reads
-// `new Date()` directly, so the window seeded via $route.query below must be built
-// against this same instant for isAtPresent to come out the way each test expects.
+// The card's period is always defaultWindow(new Date()) - the DEFAULT_WINDOW_DAYS ending
+// at the current slot boundary - so the clock is what seeds it. This instant is already
+// slot-aligned and puts that default window at 2026-08-17T00:00Z..2026-08-24T00:00Z,
+// which is the window the clamp tests below assert against. Every isAtPresent check in
+// the component reads `new Date()` directly, so it must be the same instant.
 const NOW = new Date("2026-08-24T00:00:00.000Z");
 
 const ledgerStub = {
@@ -53,15 +57,20 @@ const ledgerStub = {
   decisions: [],
 };
 
-function mountCard(query: Record<string, string>) {
+function mountCard() {
   // shallow: this test is about which top-level branch (loading/refusal/content) the
   // card's own template picks and how many requests it issues - not about the internals
   // of Card/SelectGroup/DateNavigatorButton/SavingsLedgerWaterfall/SavingsLedgerInfoModal,
   // which is what mount() would additionally exercise.
-  return shallowMount(SavingsLedgerCard, {
-    global: { mocks: { $route: { query } } },
-  });
+  return shallowMount(SavingsLedgerCard);
 }
+
+// paging is the only way into a window the user did not land on, and the only thing that
+// makes isAtPresent false - the auto-clamps below are gated on it.
+const pageBack = async (wrapper: any) => {
+  (wrapper.vm as any).page(-1);
+  await flushPromises();
+};
 
 beforeEach(() => {
   vi.setSystemTime(NOW);
@@ -84,10 +93,7 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
       })
       .mockResolvedValueOnce({ status: 200, data: ledgerStub });
 
-    const wrapper = mountCard({
-      from: "2026-08-17T00:00:00.000Z",
-      to: "2026-08-24T00:00:00.000Z", // == NOW, so isAtPresent is true
-    });
+    const wrapper = mountCard();
 
     await flushPromises(); // first (422) request
     await flushPromises(); // clamped win reassignment -> second (200) request
@@ -119,10 +125,7 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
       })
       .mockResolvedValueOnce({ status: 200, data: ledgerStub });
 
-    mountCard({
-      from: "2026-08-17T00:00:00.000Z",
-      to: "2026-08-24T00:00:00.000Z", // == NOW, so isAtPresent is true
-    });
+    mountCard();
 
     await flushPromises();
     await flushPromises();
@@ -153,10 +156,7 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
       })
       .mockResolvedValueOnce({ status: 200, data: ledgerStub });
 
-    const wrapper = mountCard({
-      from: "2026-08-17T00:00:00.000Z",
-      to: "2026-08-24T00:00:00.000Z", // == NOW, so isAtPresent is true
-    });
+    const wrapper = mountCard();
 
     await flushPromises(); // 1st (422) -> clamp to the tariff start
     await flushPromises(); // 2nd (200, chainEarliest) -> clamp to the chain start
@@ -170,42 +170,50 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
   });
 
   test("never narrows to chainEarliest on a window the user explicitly paged to", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({
-      status: 200,
-      data: { ...ledgerStub, chainEarliest: "2026-08-21T12:45:00+02:00" },
-    });
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ status: 200, data: ledgerStub }) // the mount fetch
+      .mockResolvedValueOnce({
+        // 2026-08-14 sits INSIDE the paged 08-10..08-17 window, so clamping to it would
+        // succeed and isAtPresent is the only thing declining it
+        status: 200,
+        data: { ...ledgerStub, chainEarliest: "2026-08-14T02:00:00+02:00" },
+      });
 
-    const wrapper = mountCard({
-      from: "2026-08-01T00:00:00.000Z",
-      to: "2026-08-08T00:00:00.000Z", // well before NOW -> isAtPresent is false
-    });
-
+    const wrapper = mountCard();
     await flushPromises();
+    await pageBack(wrapper); // now well before NOW -> isAtPresent is false
 
-    expect(api.get).toHaveBeenCalledTimes(1);
+    // no third request: the window the user chose is rendered as-is, with
+    // diagramSubsetWarning naming the real figure, rather than silently narrowed
+    expect(api.get).toHaveBeenCalledTimes(2);
+    const secondCallParams = vi.mocked(api.get).mock.calls[1]![1] as any;
+    expect(secondCallParams.params.from).toBe("2026-08-10T00:00:00.000Z");
     expect(wrapper.find('[data-testid="savings-ledger-content"]').exists()).toBe(true);
   });
 
+  // A user who paged weeks back into a genuine ErrBeforeTariffStart refusal must see that
+  // refusal, not get silently teleported to a period they never asked for. The clamp here
+  // WOULD succeed - 2026-08-14 is inside the paged 08-10..08-17 window - so isAtPresent is
+  // the only thing preventing it.
   test("a 422 with earliest while paged into the past renders the plain refusal and does not clamp", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({
-      status: 422,
-      data: {
-        error: "no tariff data before 2026-08-21T12:30:00+02:00",
-        earliest: "2026-08-21T12:30:00+02:00",
-      },
-    });
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ status: 200, data: ledgerStub }) // the mount fetch
+      .mockResolvedValueOnce({
+        status: 422,
+        data: {
+          error: "no tariff data before 2026-08-14T02:00:00+02:00",
+          earliest: "2026-08-14T02:00:00+02:00",
+        },
+      });
 
-    const wrapper = mountCard({
-      from: "2026-08-01T00:00:00.000Z",
-      to: "2026-08-08T00:00:00.000Z", // well before NOW -> isAtPresent is false
-    });
-
+    const wrapper = mountCard();
     await flushPromises();
+    await pageBack(wrapper); // now well before NOW -> isAtPresent is false
 
-    expect(api.get).toHaveBeenCalledTimes(1); // no auto-retry
+    expect(api.get).toHaveBeenCalledTimes(2); // no auto-retry
     expect(wrapper.find('[data-testid="savings-ledger-refuse"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="savings-ledger-refuse-body"]').text()).toBe(
-      "no tariff data before 2026-08-21T12:30:00+02:00"
+      "no tariff data before 2026-08-14T02:00:00+02:00"
     );
     expect(wrapper.find('[data-testid="savings-ledger-content"]').exists()).toBe(false);
   });
@@ -222,18 +230,31 @@ function overspendSample() {
 }
 
 describe("SavingsLedgerCard presentation", () => {
-  // the real API response the diagram was built against
-  const PRESENT_WINDOW = {
-    from: "2026-08-22T00:00:00.000Z",
-    to: "2026-08-24T00:00:00.000Z", // == NOW
-  };
+  // liveSample carries chainEarliest 2026-08-21T10:45Z. These tests are about what the
+  // card renders, not about clamping, so the clock is set where the default window
+  // already starts after it (2026-08-21T12:00Z) and the chain clamp has nothing to
+  // narrow - every test below then expects exactly one request.
+  beforeEach(() => {
+    vi.setSystemTime(new Date("2026-08-28T12:00:00.000Z"));
+  });
 
   const detail = (wrapper: any, key: string) =>
     wrapper.find(`[data-testid="savings-ledger-detail-${key}"]`);
 
+  test("binds the info icon to the title's last word without splitting the title", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
+    const wrapper = mountCard();
+    await flushPromises();
+
+    const title = wrapper.find('[data-testid="savings-ledger-title"]');
+    expect(title.text()).toContain("What the system did with your money");
+    // a non-breaking space, so the icon cannot wrap onto a line of its own
+    expect(title.element.textContent).toContain("money\u00a0");
+  });
+
   test("renders the three-figure strip from the chain, at the default headline", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     expect(api.get).toHaveBeenCalledTimes(1);
@@ -246,7 +267,7 @@ describe("SavingsLedgerCard presentation", () => {
 
   test("keeps the estimate marker and coverage visible without interaction", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     // ADR-011 rules 3 and 7, in one line under the diagram
@@ -265,7 +286,7 @@ describe("SavingsLedgerCard presentation", () => {
     loss.chain.contributions[2].settled.periodAverage = -5.0;
 
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: loss });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     const saved = detail(wrapper, "saved");
@@ -276,7 +297,7 @@ describe("SavingsLedgerCard presentation", () => {
 
   test("hands the decisions rows upward instead of letting a second card re-fetch them", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     expect(api.get).toHaveBeenCalledTimes(1);
@@ -284,7 +305,7 @@ describe("SavingsLedgerCard presentation", () => {
     // null the moment the request starts, then the rows once it lands
     expect(emitted).toHaveLength(2);
     expect(emitted![0]![0]).toBeNull();
-    expect(emitted![1]![0]).toHaveLength(liveSample.decisions.length);
+    expect(emitted![1]![0]).toHaveLength(42); // ledgerLiveSample's recorded slots
   });
 
   // F2: control_slots is written whenever the optimizer is enabled and sponsored, with
@@ -298,7 +319,7 @@ describe("SavingsLedgerCard presentation", () => {
     delete noBattery.chain.batteryPhysics;
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: noBattery });
 
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     const emitted = wrapper.emitted("update:decisions")!;
@@ -316,11 +337,11 @@ describe("SavingsLedgerCard presentation", () => {
     noChain.chainUnavailable = "not enough battery history to derive capacity";
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: noChain });
 
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     const emitted = wrapper.emitted("update:decisions")!;
-    expect(emitted[emitted.length - 1]![0]).toHaveLength(noChain.decisions.length);
+    expect(emitted[emitted.length - 1]![0]).toHaveLength(42);
   });
 
   // F6: the three figures used to be bottom-aligned by a full-height flex column whose
@@ -331,7 +352,7 @@ describe("SavingsLedgerCard presentation", () => {
   // value that wraps. Asserted as DOM order, the thing the CSS depends on.
   test("every label precedes every value, so the figures share one grid row", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     const cols = wrapper.find('[data-testid="savings-ledger-details"]').element.children;
@@ -346,7 +367,7 @@ describe("SavingsLedgerCard presentation", () => {
       // handing back the very same payload would make the second response a no-op
       .mockResolvedValueOnce({ status: 200, data: JSON.parse(JSON.stringify(liveSample)) });
 
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
     expect(wrapper.emitted("update:decisions")).toHaveLength(2);
 
@@ -362,7 +383,7 @@ describe("SavingsLedgerCard presentation", () => {
     await flushPromises();
     const landed = wrapper.emitted("update:decisions")!;
     expect(landed).toHaveLength(4);
-    expect(landed[3]![0]).toHaveLength(liveSample.decisions.length);
+    expect(landed[3]![0]).toHaveLength(42);
   });
 
   test("takes the decisions card down again when the period is refused", async () => {
@@ -370,7 +391,7 @@ describe("SavingsLedgerCard presentation", () => {
       .mockResolvedValueOnce({ status: 200, data: liveSample })
       .mockResolvedValueOnce({ status: 400, data: { error: "range unaligned" } });
 
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
     (wrapper.vm as any).page(-1);
     await flushPromises();
@@ -384,7 +405,7 @@ describe("SavingsLedgerCard presentation", () => {
 
   test("names a Control overspend under the chart even when the period headlines a saving", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: overspendSample() });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     // the strip legitimately reads "saved EUR 6.06 (91 %)" on this payload while the
@@ -401,7 +422,7 @@ describe("SavingsLedgerCard presentation", () => {
   // "the controller cost you €0.41" in the danger colour under a residual worth €0.63.
   test("refuses to call a Control figure inside the period's noise a loss", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     expect(wrapper.find('[data-testid="savings-ledger-control-overspend"]').exists()).toBe(false);
@@ -422,7 +443,7 @@ describe("SavingsLedgerCard presentation", () => {
     saved.chain.contributions[2].settled = { perSlot: 0.5, periodAverage: 0.5 };
 
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: saved });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     expect(wrapper.find('[data-testid="savings-ledger-control-overspend"]').exists()).toBe(false);
@@ -433,26 +454,22 @@ describe("SavingsLedgerCard presentation", () => {
 
   test("names the EV-charge-timing non-attribution under the chart, not only in the modal", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     const line = wrapper.find('[data-testid="savings-ledger-ev-timing"]');
     expect(line.exists()).toBe(true);
     expect(line.text()).toContain("cheaper hour");
     // the API's own full sentence is still handed to the modal, never dropped
-    expect((wrapper.vm as any).notes).toContain(
-      liveSample.chain!.notes!.find((n) => n.startsWith("EV charge timing"))
-    );
+    expect((wrapper.vm as any).notes).toContain(EV_TIMING_NOTE);
   });
 
   test("drops the EV-timing line for a site whose payload never mentions it", async () => {
     const noEv = JSON.parse(JSON.stringify(liveSample));
-    noEv.chain.notes = noEv.chain.notes.filter(
-      (n: string) => !n.startsWith("EV charge timing is not attributed")
-    );
+    noEv.chain.notes = noEv.chain.notes.filter((n: string) => n !== EV_TIMING_NOTE);
 
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: noEv });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     expect(wrapper.find('[data-testid="savings-ledger-ev-timing"]').exists()).toBe(false);
@@ -469,7 +486,7 @@ describe("SavingsLedgerCard presentation", () => {
     diverged.chain.coverage = { validSlots: 254, totalSlots: 635, fraction: 254 / 635 };
 
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: diverged });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     const caption = wrapper.find('[data-testid="savings-ledger-caption"]').text();
@@ -493,7 +510,7 @@ describe("SavingsLedgerCard presentation", () => {
     barely.chain.coverage = { validSlots: 669, totalSlots: 672, fraction: 669 / 672 };
 
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: barely });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     expect(wrapper.find('[data-testid="savings-ledger-diagram-subset"]').exists()).toBe(false);
@@ -504,7 +521,7 @@ describe("SavingsLedgerCard presentation", () => {
 
   test("says nothing about a subset when the diagram covers the same slots as the period", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     expect(wrapper.find('[data-testid="savings-ledger-diagram-subset"]').exists()).toBe(false);
@@ -518,7 +535,7 @@ describe("SavingsLedgerCard presentation", () => {
     appended.realised.note = `${appended.chain.notes[0]}; no feed-in price was recorded for 416 of the slots behind this figure`;
 
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: appended });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     const notes = (wrapper.vm as any).notes as string[];
@@ -530,13 +547,14 @@ describe("SavingsLedgerCard presentation", () => {
 
   test("offers the caveats behind an info control rather than dropping them", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
-    const wrapper = mountCard(PRESENT_WINDOW);
+    const wrapper = mountCard();
     await flushPromises();
 
     expect(wrapper.find('[data-testid="savings-ledger-info-icon"]').exists()).toBe(true);
     // realised.note and chain.notes[0] are the same sentence - deduped, not dropped
     const notes = (wrapper.vm as any).notes as string[];
-    expect(notes).toHaveLength(liveSample.chain!.notes!.length);
+    // 11 chain notes, plus realised.note which is byte-identical to the first of them
+    expect(notes).toHaveLength(11);
     expect(new Set(notes).size).toBe(notes.length);
     expect(notes).toContain(liveSample.realised.note);
   });
@@ -561,10 +579,7 @@ describe("SavingsLedgerCard overlapping requests", () => {
       .mockReturnValueOnce(new Promise((r) => (resolveFirst = r)) as any)
       .mockReturnValueOnce(new Promise((r) => (resolveSecond = r)) as any);
 
-    const wrapper = mountCard({
-      from: "2026-08-22T00:00:00.000Z",
-      to: "2026-08-24T00:00:00.000Z", // == NOW
-    });
+    const wrapper = mountCard();
     await flushPromises();
 
     const vm = wrapper.vm as any;

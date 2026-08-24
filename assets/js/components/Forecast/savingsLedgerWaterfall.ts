@@ -27,8 +27,6 @@ import {
  * demonstrate. */
 export type WaterfallKey = "baseline" | "pv" | "battery" | "control" | "paid";
 
-export const WATERFALL_KEYS: WaterfallKey[] = ["baseline", "pv", "battery", "control", "paid"];
-
 export interface WaterfallColumn {
   key: WaterfallKey;
   /** For the two end columns (`total`): that world's cost, a level. For the three middle
@@ -76,14 +74,21 @@ export interface WaterfallLayout {
   saved: number;
   /** saved / w0, or null when w0 is not a usable denominator. */
   savedFraction: number | null;
-  /** Where the telescoping chain actually ends (w0 - pv - battery - control). Equals
-   * `paid` by construction; exposed so a test can assert the identity rather than the
-   * UI silently papering over a mismatch. */
-  endLevel: number;
   /** Zero of the plotting coordinate system, in euro: min(0, lowest bar bottom). Zero in
    * every normal period. Negative only when some level goes below zero (a net-credit
    * period), which is exactly when a chart pinned at y=0 would clip a bar. */
   origin: number;
+  /** The period's own measurement-noise floor, in euro (contributionBand) - the magnitude
+   * a contribution has to clear before its SIGN is evidence. Carried here so the bar's
+   * colour and the sentence printed under it cannot be derived from two different
+   * thresholds. */
+  band: number;
+  /** The Control column, or null when the chain carries no Control contribution at all.
+   * `columns` always holds one (an absent measure is drawn as a zero-magnitude bar, never
+   * dropped), and that column's own flags are the drawing truth. This is the only thing
+   * that tells absent from zero: |0| <= band is true, so reading the column alone would
+   * report a site that never ran a controller as "too small to call". */
+  control: WaterfallColumn | null;
 }
 
 const MIDDLE: { key: WaterfallKey; label: "PV" | "Battery" | "Control" }[] = [
@@ -166,6 +171,7 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
 
   const origin = Math.min(0, ...columns.map((c) => c.base));
   const saved = w0 - paid;
+  const hasControl = chain.contributions.some((c) => c.label === "Control");
 
   return {
     columns,
@@ -173,8 +179,9 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
     paid,
     saved,
     savedFraction: w0 > 0 ? saved / w0 : null,
-    endLevel: level,
     origin,
+    band,
+    control: hasControl ? (columns.find((c) => c.key === "control") ?? null) : null,
   };
 }
 
@@ -194,8 +201,6 @@ export function plotBase(column: WaterfallColumn, layout: WaterfallLayout): numb
 export function plotLevels(layout: WaterfallLayout): number[] {
   return layout.columns.map((c) => c.level - layout.origin);
 }
-
-// --- axis scale ---------------------------------------------------------------------
 
 /** Headroom above the tallest bar so its value label has somewhere to sit. Small on
  * purpose: rounding up to the next whole-euro tick below usually adds a good deal more.
@@ -236,20 +241,18 @@ export interface WaterfallAxis {
 export function waterfallAxis(layout: WaterfallLayout): WaterfallAxis {
   const top = Math.max(0, ...layout.columns.map((c) => c.base + c.span - layout.origin));
   const needed = top * AXIS_HEADROOM;
-  if (!(needed > 0)) return { max: 1, interval: 1 };
-  for (let exp = 0; exp <= 12; exp++) {
+  // a non-finite top has no honest scale; every other case is covered by the loop below,
+  // which is unbounded on purpose - a bounded one needed a fallback return that no input
+  // could reach, i.e. an untestable branch in the code that decides what a bar looks like.
+  if (!(needed > 0) || !Number.isFinite(needed)) return { max: 1, interval: 1 };
+  for (let exp = 0; ; exp++) {
     for (const mantissa of AXIS_STEP_MANTISSAS) {
       const interval = mantissa * Math.pow(10, exp);
       const splits = Math.ceil(needed / interval);
       if (splits <= AXIS_MAX_SPLITS) return { max: interval * splits, interval };
     }
   }
-  // unreachable for any real euro figure (1e12 ticks cover everything) - never fabricate
-  // a scale that hides a bar.
-  return { max: needed, interval: needed / AXIS_MAX_SPLITS };
 }
-
-// --- minimum rendered bar height ------------------------------------------------------
 
 /** A bar smaller than this reads as a rule, not a bar - and once the "estimated" dashed
  * outline is drawn on it, as a dotted hairline with no fill at all. */

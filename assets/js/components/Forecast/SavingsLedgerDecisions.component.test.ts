@@ -2,7 +2,7 @@ import { mount, config } from "@vue/test-utils";
 import { describe, expect, test } from "vite-plus/test";
 import en from "../../../../i18n/en.json";
 import SavingsLedgerDecisions from "./SavingsLedgerDecisions.vue";
-import liveSample from "./__fixtures__/ledgerLiveSample";
+import liveSample, { constructedDecisionRows } from "./__fixtures__/ledgerLiveSample";
 import type { LedgerDecisionRow } from "./savingsLedger.types";
 
 // same minimal $t/$te walk over en.json the neighbouring SavingsLedgerCard.test.ts uses,
@@ -43,59 +43,57 @@ const legacyPricedRow: LedgerDecisionRow = {
   slotFlowDeltaEur: 0,
 };
 
-const vetoRow: LedgerDecisionRow = {
-  ts: "2026-08-24T09:00:00+02:00",
-  appliedMode: "hold",
-  suggestedMode: "charge",
-  vetoReason: "payback",
-  healthOk: true,
-  modeChanged: false,
-  slotFlowDeltaEur: 0.42,
-};
-
-const vetoUnpricedRow: LedgerDecisionRow = {
-  ts: "2026-08-24T09:15:00+02:00",
-  appliedMode: "hold",
-  suggestedMode: "charge",
-  vetoReason: "payback",
-  healthOk: true,
-  modeChanged: false,
-};
+// the capture's own 42 rows are all steady, so every veto and euro path below runs
+// against the constructed rows instead - see their comment in the fixture.
+const [vetoCostRow, vetoSavedRow, vetoUnpricedRow, noSuggestionRow] = constructedDecisionRows as [
+  LedgerDecisionRow,
+  LedgerDecisionRow,
+  LedgerDecisionRow,
+  LedgerDecisionRow,
+];
 
 describe("SavingsLedgerDecisions table view", () => {
-  test("fixture sanity: the live sample carries the legacy rows, and no longer prices them", () => {
-    expect(legacyRows.length).toBeGreaterThan(0);
-    for (const r of legacyRows) expect(r.slotFlowDeltaEur).toBeUndefined();
-  });
-
   // F1: the detail panel was gated on the outcome, but the table's delta cell was keyed
   // only on nullness - so a legacy row rendered Applied "Normal operation" | Suggested
   // "—" | Δ "€0.00": a priced veto in the same row as a column saying there was no veto.
   test("a steady row prints no delta, whatever the payload put in slotFlowDeltaEur", async () => {
+    // legacyPricedRow spreads legacyRows[0]; if a re-capture ever drops the legacy rows
+    // that spread yields a row with no ts or mode at all, and every assertion below fails
+    // pointing at the renderer rather than at the fixture.
+    expect(legacyRows.length).toBeGreaterThan(0);
     const wrapper = mountDecisions([legacyPricedRow]);
     await showTable(wrapper);
 
     const rows = wrapper.findAll('[data-testid^="savings-ledger-decision-row-"]');
-    expect(rows.length).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.attributes("data-outcome")).toBe("steady");
 
-    for (const row of rows) {
-      expect(row.attributes("data-outcome")).toBe("steady");
-      const cells = row.findAll("td");
-      // 0 time, 1 applied, 2 suggested, 3 delta, 4 basis
-      expect(cells[2]!.text()).toBe("—");
-      expect(cells[3]!.text()).toBe("—");
-      expect(cells[3]!.classes()).not.toContain("text-loss");
-    }
+    const cells = rows[0]!.findAll("td");
+    // 0 time, 1 applied, 2 suggested, 3 delta, 4 basis
+    expect(cells[2]!.text()).toBe("—");
+    expect(cells[3]!.text()).toBe("—");
+    expect(cells[3]!.classes()).not.toContain("text-danger");
     expect(wrapper.text()).not.toContain("0.00");
   });
 
   test("a real veto still prints its delta, and a costly one is still marked", async () => {
-    const wrapper = mountDecisions([vetoRow]);
+    const wrapper = mountDecisions([vetoCostRow]);
     await showTable(wrapper);
 
     const cells = wrapper.find('[data-testid^="savings-ledger-decision-row-"]').findAll("td");
-    expect(cells[3]!.text()).toContain("0.42");
-    expect(cells[3]!.classes()).toContain("text-loss");
+    expect(cells[3]!.text()).toBe("€0.04");
+    expect(cells[3]!.classes()).toContain("text-danger");
+  });
+
+  test("a veto that came out cheaper prints its delta without the loss colour", async () => {
+    const wrapper = mountDecisions([vetoSavedRow]);
+    await showTable(wrapper);
+
+    const row = wrapper.find('[data-testid^="savings-ledger-decision-row-"]');
+    expect(row.attributes("data-outcome")).toBe("vetoed-saved");
+    const cells = row.findAll("td");
+    expect(cells[3]!.text()).toBe("-€0.02");
+    expect(cells[3]!.classes()).not.toContain("text-danger");
   });
 
   test("a veto with no computable delta prints absence, not a figure", async () => {
@@ -108,20 +106,13 @@ describe("SavingsLedgerDecisions table view", () => {
   });
 });
 
+// N4: control_slots stored api.BatteryMode.String(), and api.BatteryUnknown stringifies
+// to "unknown" - the same token clearSuggestions() writes after a failed run and the same
+// one a battery-less site produces. 35 of 57 live rows (62 %) were that token, all with
+// health_ok = 1, and normalizeMode folded every one of them into "steady": the strip
+// showed 35 slots where the optimizer had agreed with what was applied, when in fact it
+// had said nothing at all.
 describe("SavingsLedgerDecisions absent suggestions", () => {
-  // N4: control_slots stored api.BatteryMode.String(), and api.BatteryUnknown stringifies
-  // to "unknown" - the same token clearSuggestions() writes after a failed run and the
-  // same one a battery-less site produces. 35 of 57 live rows (62 %) were that token, all
-  // with health_ok = 1, and normalizeMode folded every one of them into "steady": the
-  // strip showed 35 slots where the optimizer had agreed with what was applied, when in
-  // fact it had said nothing at all.
-  const noSuggestionRow: LedgerDecisionRow = {
-    ts: "2026-08-24T10:00:00+02:00",
-    appliedMode: "hold",
-    healthOk: true,
-    modeChanged: false,
-  };
-
   test("an absent suggestion is its own state, not agreement and not a veto", async () => {
     const wrapper = mountDecisions([noSuggestionRow]);
     await showTable(wrapper);
@@ -160,7 +151,7 @@ describe("SavingsLedgerDecisions absent suggestions", () => {
     );
   });
 
-  test("the same row folded to steady while the column could not say 'absent'", async () => {
+  test("the pre-N4 'unknown' spelling reads as a veto that never happened", async () => {
     // the pre-N4 wire shape for the identical slot: "unknown" rather than absent
     const wrapper = mountDecisions([{ ...noSuggestionRow, suggestedMode: "unknown" }]);
     await showTable(wrapper);

@@ -35,6 +35,7 @@ import {
 	type TimeWindow,
 } from "./optimizerOverlay";
 import { forecastToSeries } from "../Battery/history";
+import { reasonLabelKey } from "./savingsLedgerDecisions";
 import type {
 	CURRENCY,
 	DeviceColors,
@@ -43,7 +44,7 @@ import type {
 	UiForecastSlot,
 	Vehicle,
 } from "@/types/evcc";
-import { BATTERY_MODE, OPTIMIZER_VETO_REASON } from "@/types/evcc";
+import { BATTERY_MODE } from "@/types/evcc";
 
 export default defineComponent({
 	name: "PriceChart",
@@ -111,8 +112,6 @@ export default defineComponent({
 			};
 		},
 
-		// --- optimizer schedule overlay (Phase 2.1) ---
-
 		batteryChargeWindows(): TimeWindow[] {
 			return batteryChargeWindows(this.evopt);
 		},
@@ -165,8 +164,6 @@ export default defineComponent({
 			};
 		},
 
-		// --- battery SoC trajectory (Phase 2.2) ---
-
 		batteryDetails() {
 			return this.evopt?.details?.batteryDetails || [];
 		},
@@ -185,8 +182,6 @@ export default defineComponent({
 			return this.socSeries.some((s) => s.points.length > 0);
 		},
 
-		// --- adaptive plan markers (Phase 2.3) ---
-
 		planMarkers() {
 			return adaptivePlanMarkers(
 				this.vehicles,
@@ -194,8 +189,6 @@ export default defineComponent({
 				this.endDate.getTime()
 			);
 		},
-
-		// --- slot-0 decision annotation (Phase 2.4) ---
 
 		optimizerDecisionLabel(): string | undefined {
 			const d = this.optimizerDecision;
@@ -210,18 +203,11 @@ export default defineComponent({
 				[BATTERY_MODE.CHARGE]: "forecast.optimizer.modeCharge",
 				[BATTERY_MODE.UNKNOWN]: "forecast.optimizer.modeUnknown",
 			};
-			const reasonKeys: Record<string, string> = {
-				[OPTIMIZER_VETO_REASON.PAYBACK]: "forecast.optimizer.reasonPayback",
-				[OPTIMIZER_VETO_REASON.FORCED_IDLE]: "forecast.optimizer.reasonForcedIdle",
-				[OPTIMIZER_VETO_REASON.DAMPING]: "forecast.optimizer.reasonDamping",
-				[OPTIMIZER_VETO_REASON.LIVE_RATE]: "forecast.optimizer.reasonLiveRate",
-			};
-
 			const modeKey = modeKeys[d.mode];
 			if (!modeKey) return undefined;
 
 			let label = this.$t(modeKey) as string;
-			const reasonKey = d.vetoReason && reasonKeys[d.vetoReason];
+			const reasonKey = reasonLabelKey(d.vetoReason);
 			if (reasonKey) {
 				label += ` (${this.$t(reasonKey)})`;
 			}
@@ -341,6 +327,21 @@ export default defineComponent({
 				this.priceSeries(this.feedinSlots, exportColor),
 			];
 
+			// the same axis whether or not a SoC axis joins it on the right
+			const priceAxis = forecastYAxis({
+				...this.yAxisConfig,
+				axisLabel: {
+					color: colors.muted,
+					formatter: (value: number) => {
+						const v =
+							this.currency && this.energyPriceSubunit(this.currency)
+								? value * 100
+								: value;
+						return `${Math.round(v)}`;
+					},
+				},
+			});
+
 			if (this.hasSocSeries) {
 				this.socSeries.forEach((s) => {
 					series.push({
@@ -398,19 +399,7 @@ export default defineComponent({
 				),
 				yAxis: this.hasSocSeries
 					? [
-							forecastYAxis({
-								...this.yAxisConfig,
-								axisLabel: {
-									color: colors.muted,
-									formatter: (value: number) => {
-										const v =
-											this.currency && this.energyPriceSubunit(this.currency)
-												? value * 100
-												: value;
-										return `${Math.round(v)}`;
-									},
-								},
-							}),
+							priceAxis,
 							forecastYAxis({
 								min: 0,
 								max: 100,
@@ -422,19 +411,7 @@ export default defineComponent({
 								},
 							}),
 						]
-					: forecastYAxis({
-							...this.yAxisConfig,
-							axisLabel: {
-								color: colors.muted,
-								formatter: (value: number) => {
-									const v =
-										this.currency && this.energyPriceSubunit(this.currency)
-											? value * 100
-											: value;
-									return `${Math.round(v)}`;
-								},
-							},
-						}),
+					: priceAxis,
 				series,
 			};
 		},

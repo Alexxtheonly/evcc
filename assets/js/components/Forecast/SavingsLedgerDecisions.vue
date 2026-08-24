@@ -77,11 +77,11 @@
 					>
 					<span
 						><i class="lg tick--vetoed-saved"></i
-						>{{ $t("forecast.savingsLedger.decisions.table.delta") }} ≤ 0</span
+						>{{ $t("forecast.savingsLedger.decisions.legend.deltaSaved") }}</span
 					>
 					<span
 						><i class="lg tick--vetoed-cost"></i
-						>{{ $t("forecast.savingsLedger.decisions.table.delta") }} &gt; 0</span
+						>{{ $t("forecast.savingsLedger.decisions.legend.deltaCost") }}</span
 					>
 					<span
 						><i class="lg tick--vetoed-unknown"></i
@@ -162,7 +162,7 @@
 						<div class="dc-v" data-testid="savings-ledger-decision-delta">
 							<span
 								v-if="selected.row.slotFlowDeltaEur != null"
-								:class="{ 'text-loss': selected.row.slotFlowDeltaEur > 0 }"
+								:class="{ 'text-danger': selected.row.slotFlowDeltaEur > 0 }"
 								data-testid="savings-ledger-decision-delta-value"
 								>{{
 									fmtMoney(selected.row.slotFlowDeltaEur, currency, true, true)
@@ -223,33 +223,12 @@
 						>
 							<td>{{ fmtDayTime(new Date(slot.row.ts)) }}</td>
 							<td>{{ modeLabel(slot.row.appliedMode) }}</td>
-							<td>
-								{{
-									slot.outcome === "no-suggestion"
-										? $t(
-												"forecast.savingsLedger.decisions.outcome.noSuggestion"
-											)
-										: slot.outcome === "steady"
-											? "—"
-											: modeLabel(slot.row.suggestedMode)
-								}}
-							</td>
-							<!-- D6, same rule as the detail panel above: the delta prices a veto
-							     against the suggestion it rejected, so a steady slot has nothing for
-							     it to measure and must not print one. Keyed on the outcome, not on
-							     nullness - a legacy row carrying applied "unknown" against suggested
-							     "normal" IS steady (the same mode spelled two ways), and used to
-							     render "€0.00" here beside a suggested column already saying
-							     "—": a priced veto next to "there was no veto". -->
+							<td>{{ suggestedLabel(slot) }}</td>
 							<td
 								class="num"
-								:class="{ 'text-loss': slot.outcome === 'vetoed-cost' }"
+								:class="{ 'text-danger': slot.outcome === 'vetoed-cost' }"
 							>
-								{{
-									isVeto(slot.outcome) && slot.row.slotFlowDeltaEur != null
-										? fmtMoney(slot.row.slotFlowDeltaEur, currency, true, true)
-										: "—"
-								}}
+								{{ deltaLabel(slot) }}
 							</td>
 							<td>{{ slot.row.healthOk ? "" : "⚠" }}</td>
 						</tr>
@@ -278,6 +257,9 @@ import {
 	type DecisionOutcome,
 	type DecisionSlot,
 } from "./savingsLedgerDecisions";
+
+// the table's placeholder for a cell with nothing to say
+const EMPTY = "—";
 
 export default defineComponent({
 	name: "SavingsLedgerDecisions",
@@ -354,6 +336,24 @@ export default defineComponent({
 		reasonLabel(reason?: string): string {
 			const key = reasonLabelKey(reason);
 			return key ? (this.$t(key) as string) : (reason ?? "");
+		},
+		// "the optimizer said nothing" and "the optimizer agreed" are different facts and
+		// neither is a rejected mode, so neither may print one.
+		suggestedLabel(slot: DecisionSlot): string {
+			if (slot.outcome === "no-suggestion") {
+				return this.$t("forecast.savingsLedger.decisions.outcome.noSuggestion") as string;
+			}
+			if (slot.outcome === "steady") return EMPTY;
+			return this.modeLabel(slot.row.suggestedMode);
+		},
+		// D6: the slot-local delta prices a veto against the suggestion it rejected, so a
+		// steady slot has nothing for it to measure. Keyed on the outcome, not on
+		// nullness - a legacy row carrying applied "unknown" against suggested "normal" IS
+		// steady (the same mode spelled two ways) and used to render "EUR 0.00" here
+		// beside a suggested column already saying there was no veto.
+		deltaLabel(slot: DecisionSlot): string {
+			if (!isVeto(slot.outcome) || slot.row.slotFlowDeltaEur == null) return EMPTY;
+			return this.fmtMoney(slot.row.slotFlowDeltaEur, this.currency, true, true);
 		},
 	},
 });
@@ -476,9 +476,6 @@ export default defineComponent({
 	margin-top: 0.5rem;
 	font-size: 0.75rem;
 	color: var(--evcc-gray);
-}
-.text-loss {
-	color: var(--evcc-red);
 }
 
 table.tbl {

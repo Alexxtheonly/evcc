@@ -13,7 +13,7 @@
 // telescoping identity between worlds and contributions is what several tests assert,
 // and the noise band is deliberately larger than the figure it sits under.
 
-import type { SavingsLedger } from "../savingsLedger.types";
+import type { LedgerDecisionRow, SavingsLedger } from "../savingsLedger.types";
 
 const ledgerLiveSample: SavingsLedger = {
   from: "2026-08-22T07:45:00+02:00",
@@ -429,5 +429,63 @@ const ledgerLiveSample: SavingsLedger = {
     },
   ],
 };
+
+/**
+ * NOT CAPTURED - constructed. Every one of the 42 rows above is `appliedMode: "unknown"`
+ * against `suggestedMode` "unknown" or "normal", i.e. 42 steady rows: the capture carries
+ * no veto, no vetoReason and no slotFlowDeltaEur at all, so on its own it exercises none
+ * of the euro-printing or veto paths in SavingsLedgerDecisions.vue.
+ *
+ * These four are hand-built to the shape core/metrics/ledger_decisions.go's DecisionRow
+ * actually emits, one per outcome the capture is missing:
+ *  - suggestedMode is OMITTED, never "unknown", when no run produced a suggestion
+ *    (decodeSuggestedMode maps the legacy token to nil on the read path);
+ *  - slotFlowDeltaEur is OMITTED whenever DecisionDeltas could not price the slot (no
+ *    battery physics, or the slot is outside the valid slot set) - never a 0 sentinel;
+ *  - it is positive when the APPLIED mode cost more than the rejected suggestion would
+ *    have within that slot, negative when it cost less.
+ *
+ * The timestamps continue the capture's own timeline and the magnitudes are on its scale;
+ * they are plausible, not observed. Do not fold them into `decisions` above - that array
+ * is a verbatim capture and several tests count it.
+ */
+export const constructedDecisionRows: LedgerDecisionRow[] = [
+  // a veto whose slot could be priced, and where the controller's choice cost money
+  {
+    ts: "2026-08-24T07:45:00+02:00",
+    appliedMode: "normal",
+    suggestedMode: "charge",
+    vetoReason: "payback",
+    healthOk: true,
+    modeChanged: false,
+    slotFlowDeltaEur: 0.0412,
+  },
+  // the same, the other way: the veto was the cheaper choice in that slot
+  {
+    ts: "2026-08-24T08:00:00+02:00",
+    appliedMode: "hold",
+    suggestedMode: "charge",
+    vetoReason: "liveRate",
+    healthOk: true,
+    modeChanged: false,
+    slotFlowDeltaEur: -0.0176,
+  },
+  // a real veto in a slot the ledger could not price - absence, never a zero
+  {
+    ts: "2026-08-24T08:15:00+02:00",
+    appliedMode: "hold",
+    suggestedMode: "charge",
+    vetoReason: "damping",
+    healthOk: true,
+    modeChanged: false,
+  },
+  // no optimizer run produced a suggestion for this slot at all
+  {
+    ts: "2026-08-24T08:30:00+02:00",
+    appliedMode: "hold",
+    healthOk: true,
+    modeChanged: false,
+  },
+];
 
 export default ledgerLiveSample;

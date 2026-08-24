@@ -66,7 +66,20 @@ export function coverageDivergence(
   return { headlineFraction: headline.fraction, chainFraction: chain.fraction };
 }
 
-// --- period window -----------------------------------------------------------------
+/** core/metrics/ledger_worlds.go's noteEVTimingUnattributed, verbatim.
+ *
+ * The one chain note whose subject matter ADR-011 rule 7 puts under the chart rather than
+ * behind the info control (SavingsLedgerCard.vue's evTimingCaption). The API has no note
+ * IDs, so recognising it means comparing prose - a coupling that cannot be removed from
+ * this side, only made loud: savingsLedgerChain.test.ts reads that Go file and fails the
+ * build the moment the string is reworded, so the caption can never silently stop
+ * rendering. Match it whole, never by a prefix: a half-recognised note is a note whose
+ * meaning may already have moved.
+ *
+ * The note itself is never lost either way - it renders verbatim in the info modal like
+ * every other one; only the summary line under the chart depends on this match. */
+export const EV_TIMING_NOTE =
+  "EV charge timing is not attributed to any measure - PV/Battery/Control all price a loadpoint's energy at when it was actually drawn, so shifting a charge to a cheaper slot shows EUR 0 of value here even when it saved money";
 
 export const DEFAULT_WINDOW_DAYS = 7;
 
@@ -151,30 +164,4 @@ export function clampWindowToEarliest(win: LedgerWindow, earliestRaw: string): L
   if (earliest.getTime() >= win.to.getTime()) return null;
 
   return { from: earliest, to: win.to };
-}
-
-function controlEur(chain: LedgerChain, headline: SettlementHeadline): number | null {
-  const control = chain.contributions.find((c) => c.label === "Control");
-  return control ? pickSettled(control.settled, headline) : null;
-}
-
-/** True when the Control contribution (W2->W3, the real controller vs. the W2 dumb rule)
- * is an overspend the period's own measurement noise can actually support. Drives the
- * named clause under the chart: a period where solar and the battery saved a great deal
- * can legitimately headline "saved 91 %" while this step lost money, and nothing else on
- * the card says so. Absent Control (no battery) is never a loss: there's nothing for
- * software to have gotten wrong. Compared against contributionBand(), not
- * ZERO_EPSILON_EUR - a false "it lost money" is the most expensive wrong answer this card
- * can give. */
-export function isControlOverspend(chain: LedgerChain, headline: SettlementHeadline): boolean {
-  const eur = controlEur(chain, headline);
-  return eur !== null && eur < -contributionBand(chain);
-}
-
-/** True when Control is present but smaller in magnitude than the period's measurement
- * noise, in either direction - the card must then say the step is too small to call
- * rather than render it as a saving or a loss. */
-export function isControlInsideNoise(chain: LedgerChain, headline: SettlementHeadline): boolean {
-  const eur = controlEur(chain, headline);
-  return eur !== null && Math.abs(eur) <= contributionBand(chain);
 }
