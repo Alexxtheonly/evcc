@@ -41,6 +41,29 @@ import GenericModal from "../Helper/GenericModal.vue";
 import formatter from "@/mixins/formatter";
 import type { LedgerChain } from "./savingsLedger.types";
 
+// D4: batteryPhysics' *Source fields are the API's own provenance and are rendered
+// verbatim - except that they are written for whoever maintains the Go side, and
+// etaSource ends in a cross-reference to it: "constant (0.9), not derived - shared with
+// core/site_optimizer.go's eta, see BatteryEta". A source path and a Go identifier mean
+// nothing to the person reading this modal, so any clause naming a .go file is dropped.
+// The provenance itself ("constant (0.9), not derived" - a fixed constant, not measured
+// from this battery) survives untouched: nothing is softened, only the code pointer goes.
+//
+// F5: dropping clauses can drop all of them - a single-clause string naming a .go file
+// would leave "", and the i18n template around it renders "Capacity 10.0 kWh - .".
+// Absence rendered as punctuation is still a claim about the provenance. No string sent
+// today hits this, but the fallback is one expression: show the original, code pointer
+// and all, rather than nothing. Note this filter is clause-granular, so real provenance
+// sharing a clause with a file reference goes with it - acceptable for the strings that
+// exist, and the fallback now bounds the worst case at "too much" instead of "none".
+function readableSource(source: string): string {
+	const readable = source
+		.split(" - ")
+		.filter((clause) => !clause.includes(".go"))
+		.join(" - ");
+	return readable || source;
+}
+
 export default defineComponent({
 	name: "SavingsLedgerInfoModal",
 	components: { GenericModal },
@@ -60,7 +83,7 @@ export default defineComponent({
 			return [
 				this.$t("forecast.savingsLedger.info.physicsCapacity", {
 					value: `${this.fmtNumber(phys.capacityKWh, 1)} kWh`,
-					source: phys.capacitySource,
+					source: readableSource(phys.capacitySource),
 				}) as string,
 				// deliberately NOT a single round-trip figure: etaC and etaD are separate
 				// one-way constants in the Go source, and multiplying them here would
@@ -68,11 +91,11 @@ export default defineComponent({
 				this.$t("forecast.savingsLedger.info.physicsEta", {
 					charge: this.fmtPercentage(phys.etaC * 100, 0),
 					discharge: this.fmtPercentage(phys.etaD * 100, 0),
-					source: phys.etaSource,
+					source: readableSource(phys.etaSource),
 				}) as string,
 				this.$t("forecast.savingsLedger.info.physicsFloor", {
 					value: this.fmtPercentage(phys.floorFrac * 100, 1),
-					source: phys.floorSource,
+					source: readableSource(phys.floorSource),
 				}) as string,
 			];
 		},

@@ -14,8 +14,23 @@ const MODE_LABEL_KEYS: Record<string, string> = {
   holdcharge: "forecast.optimizer.modeHoldcharge",
 };
 
+/**
+ * api.BatteryUnknown is what evcc records for a slot in which it held no override, and on
+ * a site with a battery that means exactly what api.BatteryNormal means. The backend now
+ * folds the two at persistence time, but every row written before it did still carries
+ * "unknown", and the rest of this UI has always treated them as one thing anyway -
+ * Battery/BatteryStatusCard.vue's statusState(), Energyflow.vue, Bar.vue and
+ * BatteryBoostButton.vue all match only hold/holdcharge/charge and let normal and unknown
+ * alike fall through. Folded here, once, before anything compares or labels a mode, so a
+ * legacy row cannot read as a veto that never happened - and so the wire word "unknown"
+ * never reaches the screen.
+ */
+export function normalizeMode(mode?: string): string {
+  return !mode || mode === "unknown" ? "normal" : mode;
+}
+
 export function modeLabelKey(mode: string): string | undefined {
-  return MODE_LABEL_KEYS[mode];
+  return MODE_LABEL_KEYS[normalizeMode(mode)];
 }
 
 // control_slots.go's VetoReason is optimizerVetoReason's wire value (core/site_optimizer.go) -
@@ -34,7 +49,8 @@ export function reasonLabelKey(reason?: string): string | undefined {
 
 /**
  * A decision row's outcome, for colouring the timeline tick and the table row.
- *  - "steady": AppliedMode == SuggestedMode - nothing was vetoed, nothing to report.
+ *  - "steady": AppliedMode == SuggestedMode (normalizeMode applied to both) - nothing was
+ *    vetoed, nothing to report.
  *  - "vetoed-cost": a veto happened and its slot-local delta is positive (the applied
  *    mode cost more than the rejected suggestion would have, in that slot).
  *  - "vetoed-saved": a veto happened and its slot-local delta is negative or zero.
@@ -45,7 +61,7 @@ export function reasonLabelKey(reason?: string): string | undefined {
 export type DecisionOutcome = "steady" | "vetoed-cost" | "vetoed-saved" | "vetoed-unknown";
 
 export function decisionOutcome(row: LedgerDecisionRow): DecisionOutcome {
-  if (row.appliedMode === row.suggestedMode) return "steady";
+  if (normalizeMode(row.appliedMode) === normalizeMode(row.suggestedMode)) return "steady";
   if (row.slotFlowDeltaEur == null) return "vetoed-unknown";
   return row.slotFlowDeltaEur > 0 ? "vetoed-cost" : "vetoed-saved";
 }
@@ -67,5 +83,5 @@ export function decisionSlots(rows: LedgerDecisionRow[]): DecisionSlot[] {
 /** Count of vetoed rows whose health flag was false at the time - a decision made under
  * a condition the site itself flagged as unhealthy, worth surfacing distinctly. */
 export function unhealthyVetoCount(rows: LedgerDecisionRow[]): number {
-  return rows.filter((r) => r.appliedMode !== r.suggestedMode && !r.healthOk).length;
+  return rows.filter((r) => decisionOutcome(r) !== "steady" && !r.healthOk).length;
 }

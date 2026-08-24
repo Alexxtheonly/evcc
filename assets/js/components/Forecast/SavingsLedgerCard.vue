@@ -98,22 +98,35 @@
 				}}
 			</p>
 
+			<!-- D5: at 390px "would have cost" wraps to two lines while "you paid" and
+			     "saved" don't, and with the house <br/> markup that pushed the first
+			     column's figure a line below the other two - three parallel figures that
+			     no longer read as a row. Labels and values are two passes over the same
+			     list instead, so .row's own wrap puts every label on one line of the grid
+			     and every value on the next: the figures are aligned by the grid, not by a
+			     growing label, and stay aligned when a VALUE wraps too. Bottom-aligning
+			     them via a full-height flex column only held while all three values were
+			     one line tall, and the third is the longest of the three ("€1,234.56
+			     (91%)" measures 108.6px against a 108.7px column at 390px). -->
 			<div class="row gx-2 mt-1" data-testid="savings-ledger-details">
 				<div
 					v-for="detail in details"
 					:key="detail.key"
 					:class="[detail.colClass, `text-${detail.align}`]"
 				>
-					<small>
-						<span class="text-gray">{{ detail.label }}</span>
-						<br />
-						<span
-							class="fw-bold"
-							:class="detail.valueClass"
-							:data-testid="`savings-ledger-detail-${detail.key}`"
-							>{{ detail.value }}</span
-						>
-					</small>
+					<small class="text-gray">{{ detail.label }}</small>
+				</div>
+				<div
+					v-for="detail in details"
+					:key="`value-${detail.key}`"
+					:class="[detail.colClass, `text-${detail.align}`]"
+				>
+					<small
+						class="fw-bold"
+						:class="detail.valueClass"
+						:data-testid="`savings-ledger-detail-${detail.key}`"
+						>{{ detail.value }}</small
+					>
 				</div>
 			</div>
 
@@ -419,7 +432,22 @@ export default defineComponent({
 		// layer below untouched: a refusal or an error nulls `ledger`, which emits null
 		// and takes the decisions card down with it.
 		ledger(value: SavingsLedger | null) {
-			this.$emit("update:decisions", value ? value.decisions : null);
+			// F2: chain.batteryPhysics is present exactly when the site has a battery -
+			// computeChainFromSlots only derives it under set.HasBattery. control_slots is
+			// written whenever the optimizer is enabled and sponsored, battery or not, so a
+			// PV-and-loadpoint site records rows too; but batteryModeCandidate has no
+			// controllable battery to iterate, so every one of those rows is
+			// "unknown"/"unknown" - no veto, no delta, and nothing left to say except a
+			// battery mode for a battery that does not exist. There are no battery
+			// decisions to replay on such a site, so the card does not appear at all.
+			//
+			// An absent chain is deliberately NOT treated the same way: that is
+			// chainUnavailable, a site that HAS a battery whose physics couldn't be derived
+			// yet (ComputeLedger degrades the chain rather than the whole response). Its
+			// rows are real decisions - vetoes included - and are still worth showing, with
+			// every delta honestly nil because there was no physics to price them with.
+			const batteryLess = !!value?.chain && !value.chain.batteryPhysics;
+			this.$emit("update:decisions", value && !batteryLess ? value.decisions : null);
 		},
 		// The `ledger` watcher above only fires once a response has landed, so between the
 		// click and that response the chart area showed "Loading…" under the NEW period's
