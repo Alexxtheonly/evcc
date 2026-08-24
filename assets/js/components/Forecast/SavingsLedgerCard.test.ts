@@ -1,4 +1,5 @@
 import { shallowMount, config, flushPromises } from "@vue/test-utils";
+import { nextTick } from "vue";
 import { describe, expect, test, vi, beforeEach, afterEach } from "vite-plus/test";
 import en from "../../../../i18n/en.json";
 
@@ -304,5 +305,49 @@ describe("SavingsLedgerCard presentation", () => {
     expect(notes).toHaveLength(liveSample.chain!.notes!.length);
     expect(new Set(notes).size).toBe(notes.length);
     expect(notes).toContain(liveSample.realised.note);
+  });
+});
+
+describe("SavingsLedgerCard overlapping requests", () => {
+  // Paging twice quickly leaves two requests in flight. The second one's `loading = true`
+  // is a no-op (already true), so nothing re-hides the content, and whichever response
+  // lands LAST used to win - which for ordinary HTTP can be the first period's. The card
+  // then showed period A's euros under period B's label, permanently.
+  test("a superseded response never overwrites the newer period's figures", async () => {
+    const stub = (paid: number) => ({
+      ...ledgerStub,
+      realised: { ...ledgerStub.realised, settled: { perSlot: paid, periodAverage: paid } },
+    });
+
+    let resolveFirst: (v: unknown) => void = () => {};
+    let resolveSecond: (v: unknown) => void = () => {};
+
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ status: 200, data: stub(10) }) // the mount fetch
+      .mockReturnValueOnce(new Promise((r) => (resolveFirst = r)) as any)
+      .mockReturnValueOnce(new Promise((r) => (resolveSecond = r)) as any);
+
+    const wrapper = mountCard({
+      from: "2026-08-22T00:00:00.000Z",
+      to: "2026-08-24T00:00:00.000Z", // == NOW
+    });
+    await flushPromises();
+
+    const vm = wrapper.vm as any;
+    vm.page(-1);
+    await nextTick();
+    vm.page(-1);
+    await nextTick();
+    expect(api.get).toHaveBeenCalledTimes(3);
+
+    // out-of-order landing: the NEWER request answers first, the older one straggles in
+    resolveSecond({ status: 200, data: stub(22) });
+    await flushPromises();
+    resolveFirst({ status: 200, data: stub(11) });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="savings-ledger-detail-paid"]').text()).toContain("22");
+    expect(wrapper.find('[data-testid="savings-ledger-detail-paid"]').text()).not.toContain("11");
+    expect(vm.loading).toBe(false);
   });
 });

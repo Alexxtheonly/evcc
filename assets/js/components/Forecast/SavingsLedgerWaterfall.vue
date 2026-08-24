@@ -42,7 +42,9 @@ import {
 const CHART_HEIGHT = 220;
 const GRID_TOP = 28;
 const GRID_BOTTOM = 48;
-const PLOT_HEIGHT = CHART_HEIGHT - GRID_TOP - GRID_BOTTOM;
+// exported for the no-clipping invariant assertion in savingsLedgerWaterfall.test.ts -
+// see AXIS_HEADROOM's doc comment for what it protects
+export const PLOT_HEIGHT = CHART_HEIGHT - GRID_TOP - GRID_BOTTOM;
 // wide viewports would otherwise draw five fat slabs
 const BAR_MAX_WIDTH = 64;
 // below this rendered height an "estimated" bar is drawn solid instead of dash-outlined -
@@ -144,8 +146,14 @@ export default defineComponent({
 						color: muted,
 						// whole euros: the ticks are chosen as whole units (waterfallAxis),
 						// and cents on a gridline are noise next to the bars' own labels.
+						// EXCEPT when origin is non-zero (a net-credit period, where a level
+						// dips below zero): the ticks are then offset by origin and are no
+						// longer whole, so rounding them prints a gridline at "EUR 1" that
+						// actually sits at EUR 0.80 - and a bottom tick of "-EUR 0". The
+						// honest figure wins over the round one, which is what
+						// waterfallAxis's own doc comment says should happen.
 						formatter: (value: number) =>
-							this.fmtMoney(value + origin, this.currency, false, true),
+							this.fmtMoney(value + origin, this.currency, origin !== 0, true),
 					},
 				}),
 				series: [

@@ -1,7 +1,7 @@
 import { shallowMount, config } from "@vue/test-utils";
 import { describe, it, expect } from "vite-plus/test";
 import en from "../../../../i18n/en.json";
-import SavingsLedgerWaterfall from "./SavingsLedgerWaterfall.vue";
+import SavingsLedgerWaterfall, { PLOT_HEIGHT } from "./SavingsLedgerWaterfall.vue";
 import { batteryColor } from "@/colors";
 import {
   waterfallLayout,
@@ -10,6 +10,7 @@ import {
   plotLevels,
   plotSpan,
   minSpan,
+  AXIS_HEADROOM,
   BAR_MIN_PX,
   WATERFALL_KEYS,
 } from "./savingsLedgerWaterfall";
@@ -337,6 +338,15 @@ describe("plotSpan / minSpan", () => {
       expect(col.zero).toBe(true);
       expect(plotSpan(col, floor)).toBe(0);
     }
+  });
+
+  // The one invariant that keeps a bar from being drawn taller than the axis it sits on.
+  // waterfallAxis picks max from the true spans; the BAR_MIN_PX floor is applied AFTER
+  // that and can only push a bar UP, so the headroom has to cover the largest push. The
+  // three constants live in two files with nothing else tying them together - this is the
+  // tie. If it ever fails, a bar is being clipped and the chart is lying about a number.
+  it("keeps the minimum bar height inside the axis headroom", () => {
+    expect(BAR_MIN_PX / PLOT_HEIGHT).toBeLessThan(1 - 1 / AXIS_HEADROOM);
   });
 });
 

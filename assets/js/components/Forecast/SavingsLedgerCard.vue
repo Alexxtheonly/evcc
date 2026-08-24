@@ -252,6 +252,11 @@ export default defineComponent({
 			// watcher), so a genuinely-empty clamped period doesn't retry forever, but a
 			// fresh navigation always gets one clamp attempt of its own.
 			hasAutoClamped: false,
+			// monotonic request counter - see fetch(). Only the newest request may write
+			// ledger/refusal/loadError/loading, so two overlapping fetches (the date
+			// navigator clicked twice in quick succession) cannot resolve out of order and
+			// leave period A's euros rendered under period B's periodLabel.
+			fetchSeq: 0,
 		};
 	},
 	computed: {
@@ -477,6 +482,14 @@ export default defineComponent({
 			this.win = defaultWindow(new Date());
 		},
 		async fetch() {
+			// Every write below is gated on this request still being the newest one. Without
+			// it, paging twice quickly leaves both requests in flight; the second one's
+			// `loading = true` is a no-op (already true), so nothing re-hides the content,
+			// and whichever response lands last wins - which for ordinary HTTP can be the
+			// FIRST period's. The card then shows period A's chain, and the decisions card
+			// period A's rows, under period B's header, and nothing ever corrects it.
+			const seq = ++this.fetchSeq;
+			const current = () => seq === this.fetchSeq;
 			this.loading = true;
 			this.refusal = null;
 			this.loadError = null;
@@ -487,6 +500,9 @@ export default defineComponent({
 					// them inline instead of letting api.ts's interceptor raise a toast.
 					validateStatus: (status: number) => [200, 400, 422].includes(status),
 				});
+				// a superseded request must not touch state, and must not clamp the window
+				// out from under the newer one
+				if (!current()) return;
 				if (res.status === 200) {
 					this.ledger = res.data as SavingsLedger;
 				} else {
@@ -515,11 +531,15 @@ export default defineComponent({
 					this.refusal = body?.error || res.statusText;
 				}
 			} catch (e) {
+				console.error("failed to load savings ledger", e);
+				if (!current()) return;
 				this.ledger = null;
 				this.loadError = e instanceof Error ? e.message : String(e);
-				console.error("failed to load savings ledger", e);
 			} finally {
-				this.loading = false;
+				// a superseded request leaves loading alone: the newer one owns it and is
+				// still running, so clearing it here would drop the loading state early and
+				// briefly show the previous period's content under the new period label
+				if (current()) this.loading = false;
 			}
 		},
 	},

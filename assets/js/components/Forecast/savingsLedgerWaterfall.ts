@@ -182,8 +182,17 @@ export function plotLevels(layout: WaterfallLayout): number[] {
 // --- axis scale ---------------------------------------------------------------------
 
 /** Headroom above the tallest bar so its value label has somewhere to sit. Small on
- * purpose: rounding up to the next whole-euro tick below usually adds a good deal more. */
-const AXIS_HEADROOM = 1.05;
+ * purpose: rounding up to the next whole-euro tick below usually adds a good deal more.
+ *
+ * Load-bearing beyond aesthetics: the minimum-bar-height floor (BAR_MIN_PX) is applied
+ * AFTER the axis is chosen, so it can push the tallest bar above axisMax and clip it
+ * unless this headroom covers it. Exported so the invariant
+ *   BAR_MIN_PX / plotHeightPx < 1 - 1/AXIS_HEADROOM
+ * can be asserted against the chart component's real geometry - see
+ * savingsLedgerWaterfall.test.ts. Raising BAR_MIN_PX or shrinking the chart without
+ * re-checking it silently clips the tallest bar, which is a wrong picture, not a
+ * cosmetic regression. */
+export const AXIS_HEADROOM = 1.05;
 /** At most this many ticks, so a tall axis doesn't turn into a ladder. */
 const AXIS_MAX_SPLITS = 5;
 /** Tick sizes, WHOLE units only (1, 2, 5, 10, 20, 50, ...). The axis labels are rendered
