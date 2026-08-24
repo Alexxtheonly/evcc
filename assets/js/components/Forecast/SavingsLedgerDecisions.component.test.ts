@@ -139,7 +139,7 @@ describe("SavingsLedgerDecisions absent suggestions", () => {
     );
   });
 
-  test("the pre-N4 'unknown' spelling reads as a veto that never happened", async () => {
+  test("the legacy 'unknown' spelling reads as a veto that never happened", async () => {
     // the older wire shape for the identical slot: "unknown" rather than absent
     const wrapper = mountDecisions([{ ...noSuggestionRow, suggestedMode: "unknown" }]);
     await showTable(wrapper);
