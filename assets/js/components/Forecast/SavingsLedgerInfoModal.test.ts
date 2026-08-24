@@ -43,8 +43,8 @@ describe("SavingsLedgerInfoModal provenance", () => {
     );
   });
 
-  // F5: the filter is clause-granular, so a provenance string that is a SINGLE clause
-  // naming a .go file left "" behind and the template rendered "Capacity 19.3 kWh - .".
+  // the filter is clause-granular, so a provenance string that is a SINGLE clause naming a
+  // .go file would leave "" and the template would render "Capacity 19.3 kWh - .".
   // Absence rendered as punctuation is still a claim about where the figure came from.
   test("a source that is nothing but a code pointer falls back to itself, not to ''", () => {
     const text = physicsText("see core/site.go");

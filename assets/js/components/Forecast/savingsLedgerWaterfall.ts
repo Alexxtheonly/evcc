@@ -1,8 +1,5 @@
-// Pure geometry for the ADR-011 savings-ledger waterfall (bridge) chart. Framework-free
-// for unit testing, mirroring savingsLedgerChain.ts / optimizerOverlay.ts.
-//
-// Grounded in core/metrics/ledger_worlds.go - see savingsLedger.types.ts's field-level
-// comments for the Go source each type mirrors.
+// Pure geometry for the savings-ledger waterfall (bridge) chart. Kept framework-free for
+// unit testing; sign conventions mirror core/metrics/ledger_worlds.go.
 
 import type { LedgerChain } from "./savingsLedger.types";
 import {
@@ -12,54 +9,36 @@ import {
   type SettlementHeadline,
 } from "./savingsLedgerChain";
 
-/** The five columns, left to right. Always all five, even when a contribution is absent
- * (a site without a battery draws battery/control as zero-magnitude columns rather than
- * silently dropping them - the reader must be able to see that the measure existed and
- * moved nothing). Control is NEVER split into routing/timing here: routing+timing ==
- * control.full, and splitting the column costs more readability than the extra detail
- * buys. The split is surfaced in the Control column's tooltip instead, and ONLY at the
- * perSlot headline, because control.routing/control.timing are not a per-lens pair like
- * every other figure here - Routing is always the period-average-lens diff and Timing is
- * always Full (the perSlot-lens diff) minus Routing (ledger_worlds.go's ControlSplit doc
- * comment). They sum to Full, i.e. to the perSlot Control contribution; showing them
- * beside a periodAverage Control figure would render two numbers that don't sum to the
- * figure above them, breaking the "parts sum to the whole" guarantee this chart exists to
- * demonstrate. */
+/** The five columns, left to right. Always all five: an absent contribution (a site with no
+ * battery) is a zero-magnitude column, never a dropped one. Control is never split into
+ * routing/timing here - Routing is the period-average-lens diff and Timing is Full minus
+ * Routing, so beside a periodAverage Control figure the parts would not sum to the whole
+ * this chart exists to demonstrate. The split is in the Control tooltip, at perSlot only. */
 export type WaterfallKey = "baseline" | "pv" | "battery" | "control" | "paid";
 
 export interface WaterfallColumn {
   key: WaterfallKey;
-  /** For the two end columns (`total`): that world's cost, a level. For the three middle
-   * columns: the contribution, SIGNED per ledger_worlds.go - POSITIVE means the measure
-   * SAVED money (the bar descends), NEGATIVE means it COST money (the bar rises). */
+  /** End columns (`total`): that world's cost, a level. Middle columns: the contribution,
+   * POSITIVE when the measure SAVED money (bar descends), NEGATIVE when it cost money. */
   eur: number;
-  /** Bottom edge of the bar, in euro. */
   base: number;
-  /** Height of the bar, in euro; always >= 0. */
   span: number;
-  /** Running cost level after this column. */
   level: number;
   /** One of the two end columns (full-height bar from zero), not a contribution. */
   total: boolean;
-  /** ADR-011 rule 7: this column's figure rests on the W2 counterfactual battery and
-   * must carry that in its axis label, not in a footnote. PV is measured arithmetic over
-   * directly measured PV/grid energy and realised prices, no derived battery assumption
-   * involved; Battery and Control are estimated whenever the site has a battery
-   * (chain.batteryPhysics is set) because W2 depends on it. deriveBatteryPhysics's Source
-   * strings say whether that's a device-reported fact or a fallback derived from history;
-   * this module never fabricates a numeric error bar the API doesn't provide. */
+  /** Rests on the W2 counterfactual battery, so the axis label has to say so rather than a
+   * footnote. PV is measured arithmetic; Battery and Control are estimated whenever the
+   * site has a battery. Never fabricate a numeric error bar: the API provides none. */
   estimated: boolean;
-  /** The measure cost money rather than saving it, by more than the period's own
-   * measurement noise (contributionBand) - drawn rising, in the danger colour. The bar
-   * still rises whenever eur is negative; this flag only governs whether the card is
-   * entitled to call it a loss. Never clamped to zero (ADR-011 rule 1). */
+  /** Cost money by more than the period's own measurement noise (contributionBand), drawn
+   * rising in the danger colour. Never clamped to zero: a period that came out worse than
+   * the baseline says so. */
   overspend: boolean;
   /** |eur| <= ZERO_EPSILON_EUR: drawn as a zero-height bar carrying its own label. */
   zero: boolean;
-  /** |eur| <= contributionBand: the figure is smaller than the period's measured noise
-   * floor, so its DIRECTION is not evidence. The figure itself is still drawn and
-   * printed - never hidden, never rounded to zero - but it must not be coloured or
-   * worded as a saving or a loss. */
+  /** |eur| <= contributionBand: smaller than the period's measured noise floor, so its
+   * DIRECTION is not evidence. Still drawn and printed, never hidden or rounded away, but
+   * never coloured or worded as a saving or a loss either. */
   insideNoise: boolean;
 }
 
@@ -67,27 +46,19 @@ export interface WaterfallLayout {
   columns: WaterfallColumn[];
   /** chain.worlds[0], the "without solar, battery or control" cost. */
   w0: number;
-  /** chain.worlds[3], what was actually paid. */
   paid: number;
-  /** w0 - paid. NEGATIVE when the period cost more than the baseline - shown, never
-   * clamped (ADR-011 rule 1). */
+  /** w0 - paid. NEGATIVE when the period cost more than the baseline; shown, never clamped. */
   saved: number;
-  /** saved / w0, or null when w0 is not a usable denominator. */
   savedFraction: number | null;
-  /** Zero of the plotting coordinate system, in euro: min(0, lowest bar bottom). Zero in
-   * every normal period. Negative only when some level goes below zero (a net-credit
-   * period), which is exactly when a chart pinned at y=0 would clip a bar. */
+  /** Zero of the plotting coordinate system, in euro: min(0, lowest bar bottom). Negative
+   * only when a level goes below zero, which is exactly when a chart pinned at y=0 clips. */
   origin: number;
-  /** The period's own measurement-noise floor, in euro (contributionBand) - the magnitude
-   * a contribution has to clear before its SIGN is evidence. Carried here so the bar's
-   * colour and the sentence printed under it cannot be derived from two different
-   * thresholds. */
+  /** The period's own measurement-noise floor, in euro (contributionBand). Carried here so
+   * the bar's colour and the sentence printed under it cannot use two different thresholds. */
   band: number;
   /** The Control column, or null when the chain carries no Control contribution at all.
-   * `columns` always holds one (an absent measure is drawn as a zero-magnitude bar, never
-   * dropped), and that column's own flags are the drawing truth. This is the only thing
-   * that tells absent from zero: |0| <= band is true, so reading the column alone would
-   * report a site that never ran a controller as "too small to call". */
+   * The only thing that tells absent from zero: |0| <= band, so reading the column alone
+   * would report a site that never ran a controller as "too small to call". */
   control: WaterfallColumn | null;
 }
 
@@ -103,14 +74,11 @@ function worldCost(chain: LedgerChain, index: number, headline: SettlementHeadli
 }
 
 /**
- * Five columns: the W0 baseline, one floating bar per measure, and the W3 bill.
- *
- * The running cost level telescopes exactly - L0 = W0, L1 = L0 - PV, L2 = L1 - Battery,
- * L3 = L2 - Control - because Contribution = Cost(previous world) - Cost(this world)
- * (ledger_worlds.go), so every intermediate level IS the corresponding world's cost and
- * L3 is W3. Each middle bar spans [min(before, after), max(before, after)] with height
- * |eur|, so a measure that cost money draws upward from the previous level instead of
- * being hidden or clamped.
+ * Five columns: the W0 baseline, one floating bar per measure, and the W3 bill. The
+ * running cost level telescopes exactly (L0 = W0 ... L3 = W3) because Contribution =
+ * Cost(previous world) - Cost(this world). Each middle bar spans [min(before, after),
+ * max(before, after)] with height |eur|, so a measure that cost money draws upward from
+ * the previous level instead of being hidden or clamped.
  */
 export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline): WaterfallLayout {
   const w0 = worldCost(chain, 0, headline);
@@ -136,8 +104,7 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
   let level = w0;
   for (const { key, label } of MIDDLE) {
     const contribution = chain.contributions.find((c) => c.label === label);
-    // absent contribution (e.g. a site with no battery) is a zero-magnitude column, not
-    // a missing one - the reader still sees that the measure was considered.
+    // an absent contribution is a zero-magnitude column, never a dropped one
     const eur = contribution ? pickSettled(contribution.settled, headline) : 0;
     const before = level;
     const after = before - eur;
@@ -185,34 +152,28 @@ export function waterfallLayout(chain: LedgerChain, headline: SettlementHeadline
   };
 }
 
-/** Bar bottom in plotting coordinates. The chart is drawn in a system translated by
- * `origin` (zero in every normal period) so that a net-credit period - where a level
- * goes below zero - is neither clipped by an axis pinned at 0 nor broken by ECharts'
- * stacking, which accumulates positive and negative values into separate stacks and so
- * cannot express a floating bar whose base is negative and whose height is positive.
- * Always >= 0 by construction. */
+/** Bar bottom in plotting coordinates, translated by `origin` so a net-credit period is
+ * neither clipped by an axis pinned at 0 nor broken by ECharts' stacking, which cannot
+ * express a floating bar with a negative base. Always >= 0 by construction. */
 export function plotBase(column: WaterfallColumn, layout: WaterfallLayout): number {
   return column.base - layout.origin;
 }
 
-/** The running level after each column, in plotting coordinates - the y of the thin
- * connector that links one bar to the next. Same origin shift as plotBase, so a caller
- * can feed both to the same axis. */
+/** The running level after each column, in plotting coordinates: the y of the connector
+ * linking one bar to the next. */
 export function plotLevels(layout: WaterfallLayout): number[] {
   return layout.columns.map((c) => c.level - layout.origin);
 }
 
-/** Headroom above the tallest bar so its value label has somewhere to sit. Small on
- * purpose: rounding up to the next whole-euro tick below usually adds a good deal more.
- *
- * Load-bearing beyond aesthetics: the minimum-bar-height floor (BAR_MIN_PX) is applied
- * AFTER the axis is chosen, so it can push the tallest bar above axisMax and clip it
- * unless this headroom covers it. Exported so the invariant
+/** Headroom above the tallest bar so its value label has somewhere to sit. Load-bearing
+ * beyond aesthetics: the minimum-bar-height floor (BAR_MIN_PX) is applied AFTER the axis is
+ * chosen, so it can push the tallest bar above axisMax and clip it unless this headroom
+ * covers it. Exported so the invariant
  *   BAR_MIN_PX / plotHeightPx < 1 - 1/AXIS_HEADROOM
- * can be asserted against the chart component's real geometry - see
- * savingsLedgerWaterfall.test.ts. Raising BAR_MIN_PX or shrinking the chart without
- * re-checking it silently clips the tallest bar, which is a wrong picture, not a
- * cosmetic regression. */
+ * can be asserted against the chart component's real geometry (PLOT_HEIGHT in
+ * SavingsLedgerWaterfall.vue), see savingsLedgerWaterfall.test.ts. Raising BAR_MIN_PX or
+ * shrinking the chart without re-checking it silently clips the tallest bar, which is a
+ * wrong picture, not a cosmetic regression. */
 export const AXIS_HEADROOM = 1.05;
 /** At most this many ticks, so a tall axis doesn't turn into a ladder. */
 const AXIS_MAX_SPLITS = 5;
@@ -229,21 +190,18 @@ export interface WaterfallAxis {
 }
 
 /**
- * A whole-euro tick scale that covers every bar with a little headroom.
- *
- * Picks the smallest whole-unit step that gets the whole chart inside AXIS_MAX_SPLITS
- * ticks, then pins the axis at an exact multiple of it - so the labels read "0, 2, 4, 6,
- * 8" rather than ECharts' auto choice of "14.81". In the (rare) shifted case where
- * layout.origin is negative the ticks are still evenly spaced whole units apart, but the
- * labels are offset by origin and so are not themselves round - the honest figure wins
- * over the round one.
+ * A whole-euro tick scale covering every bar with a little headroom: the smallest
+ * whole-unit step that fits the chart inside AXIS_MAX_SPLITS ticks, pinned at an exact
+ * multiple of it so the labels read "0, 2, 4, 6, 8" rather than ECharts' "14.81". Where
+ * layout.origin is negative the ticks stay evenly spaced but the labels are offset by it
+ * and so are not themselves round: the honest figure wins over the round one.
  */
 export function waterfallAxis(layout: WaterfallLayout): WaterfallAxis {
   const top = Math.max(0, ...layout.columns.map((c) => c.base + c.span - layout.origin));
   const needed = top * AXIS_HEADROOM;
   // a non-finite top has no honest scale; every other case is covered by the loop below,
-  // which is unbounded on purpose - a bounded one needed a fallback return that no input
-  // could reach, i.e. an untestable branch in the code that decides what a bar looks like.
+  // which is unbounded on purpose. A bounded one needs a fallback return that no input can
+  // reach, i.e. an untestable branch in the code that decides what a bar looks like.
   if (!(needed > 0) || !Number.isFinite(needed)) return { max: 1, interval: 1 };
   for (let exp = 0; ; exp++) {
     for (const mantissa of AXIS_STEP_MANTISSAS) {
@@ -254,12 +212,11 @@ export function waterfallAxis(layout: WaterfallLayout): WaterfallAxis {
   }
 }
 
-/** A bar smaller than this reads as a rule, not a bar - and once the "estimated" dashed
- * outline is drawn on it, as a dotted hairline with no fill at all. */
+/** A bar smaller than this reads as a rule, and with the "estimated" dashed outline on it
+ * as a dotted hairline with no fill at all. */
 export const BAR_MIN_PX = 4;
 
-/** BAR_MIN_PX expressed in the chart's own value units, given the axis top and the
- * plotting area's height in pixels. */
+/** BAR_MIN_PX expressed in the chart's own value units. */
 export function minSpan(axisMax: number, plotHeightPx: number): number {
   if (!(axisMax > 0) || !(plotHeightPx > 0)) return 0;
   return (BAR_MIN_PX / plotHeightPx) * axisMax;
@@ -267,13 +224,10 @@ export function minSpan(axisMax: number, plotHeightPx: number): number {
 
 /**
  * Bar height in plotting coordinates, floored at `floor` so a small-but-nonzero
- * contribution still reads as a bar.
- *
- * A `zero: true` column is returned untouched: a measure that moved nothing must never be
- * drawn as though it had. The floor is deliberately applied to the height only, leaving
- * the bar's base where the geometry put it - the bar's top can therefore overshoot its
- * true level by up to BAR_MIN_PX. That is a rendering minimum, not a restatement of the
- * figure: the connectors and every printed number still come from the true levels.
+ * contribution still reads as a bar. A `zero: true` column is returned untouched: a measure
+ * that moved nothing must never be drawn as though it had. The floor applies to the height
+ * only, so a bar's top can overshoot its true level by up to BAR_MIN_PX; the connectors and
+ * every printed number still come from the true levels.
  */
 export function plotSpan(column: WaterfallColumn, floor: number): number {
   if (column.zero) return column.span;

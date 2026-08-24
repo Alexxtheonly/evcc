@@ -1,60 +1,37 @@
-// Pure transforms for the ADR-011 savings ledger chain bar and period window. Kept
-// framework-free for unit testing (mirrors the Battery/history.ts and
-// Forecast/optimizerOverlay.ts pattern).
-//
-// Grounded in core/metrics/ledger_worlds.go, read in full before writing this file -
-// see savingsLedger.types.ts's field-level comments for the Go source each type mirrors.
+// Pure transforms for the savings ledger chain bar and period window. Kept framework-free
+// for unit testing; mirrors core/metrics/ledger_worlds.go.
 
 import type { LedgerChain, LedgerCoverage, LedgerSettled } from "./savingsLedger.types";
 
 export const SLOT_MINUTES = 15;
 
-/** Which of Settled's two prices is shown as the headline figure. The API has no
- * "this site settles per-slot" declaration (isDynamicTariff only reports that the price
- * series varies, not how the site is billed - see ADR-011's Settlement section), so a
- * generic, upstreamable UI cannot default to per-slot the way the mockup's site-specific
- * narrative does. periodAverage is the conservative default; perSlot is one toggle away. */
+/** Which of Settled's two prices is shown as the headline figure. The API has no "this site
+ * settles per-slot" declaration (isDynamicTariff only reports that the price series varies,
+ * not how the site is billed), so periodAverage is the conservative default and perSlot is
+ * one toggle away. */
 export type SettlementHeadline = "perSlot" | "periodAverage";
 
 export function pickSettled(s: LedgerSettled, headline: SettlementHeadline): number {
   return headline === "perSlot" ? s.perSlot : s.periodAverage;
 }
 
-// Sign convention for every contribution figure this module and savingsLedgerWaterfall.ts
-// handle, straight from ledger_worlds.go's Contribution doc comment: Contribution =
-// Cost(previous world) - Cost(this world). A measure that REDUCED cost (this world is
-// cheaper) is POSITIVE - savings. A measure that made things WORSE (this world cost more
-// than the previous one, e.g. Control when the real controller did worse than the W2 dumb
-// rule) is NEGATIVE - overspend. Confirmed against TestChainOraclePerSlotEuros: Worlds =
-// [1.76, 1.23, 0.0, 0.825] gives a Control contribution of 0.0 - 0.825 = -0.825, a real
-// overspend case in that fixture.
-//
-// A measure under this magnitude renders as a rule, not a swatch - matches the Go side's
-// own "drawn" filter in the (fake-data) mockup, applied here to real contributions.
-//
-// It is a DRAWING threshold, not an evidence threshold. Using it to decide whether a
-// contribution's sign may be asserted was the card's worst bug: half a cent is a hundred
-// times below the measured uncertainty the same payload publishes, so a Control figure of
-// -EUR 0.0664 was rendered in the danger colour as "the controller cost you money" while
-// chain.meterResidual said the period's measurement noise was 1.345 kWh - about EUR 0.49,
-// 7x the figure it was underwriting. Use contributionBand() for any sign claim.
+// A contribution under this magnitude renders as a rule, not a swatch. A DRAWING threshold,
+// never an evidence one: half a cent is two orders of magnitude below the measurement
+// uncertainty the same payload publishes, so a sign claim gated on it can be underwritten
+// by nothing at all. Use contributionBand() for any sign claim.
 export const ZERO_EPSILON_EUR = 0.005;
 
-/** The smallest magnitude a contribution must reach before its SIGN may be asserted:
- * the period's own measurement noise (chain.meterResidual.eurBand, absSumKWh priced at
- * the mean grid rate), never below ZERO_EPSILON_EUR so a period with a perfect residual
- * still gets the drawing threshold. Published by the backend precisely so the UI stops
- * comparing euros against a hardcoded constant - see the Go MeterResidual.EurBand doc
- * comment. */
+/** The smallest magnitude a contribution must reach before its SIGN may be asserted: the
+ * period's own measurement noise (chain.meterResidual.eurBand), never below
+ * ZERO_EPSILON_EUR so a period with a perfect residual still gets the drawing threshold. */
 export function contributionBand(chain: LedgerChain): number {
   return Math.max(ZERO_EPSILON_EUR, chain.meterResidual?.eurBand ?? 0);
 }
 
-/** Coverage differs between the headline (realised, grid+home+tariff only) and the
- * chain (also needs PV/battery/loadpoint - see buildLedgerSlots's includeLoadpoint/
- * includeBattery doc comment) whenever the site has degraded PV/battery/EV data that
- * the plain grid meter doesn't need. Returns null when they match (the common case),
- * so a caller only renders the extra note when there's something to explain. */
+/** Coverage differs between the headline (grid+home+tariff only) and the chain (also needs
+ * PV/battery/loadpoint) whenever the site has degraded data the plain grid meter doesn't
+ * need. Null when they match, so a caller only renders the extra note when there is
+ * something to explain. */
 export function coverageDivergence(
   headline: LedgerCoverage,
   chain: LedgerCoverage
@@ -66,26 +43,19 @@ export function coverageDivergence(
   return { headlineFraction: headline.fraction, chainFraction: chain.fraction };
 }
 
-/** core/metrics/ledger_worlds.go's noteEVTimingUnattributed, verbatim.
- *
- * The one chain note whose subject matter ADR-011 rule 7 puts under the chart rather than
- * behind the info control (SavingsLedgerCard.vue's evTimingCaption). The API has no note
- * IDs, so recognising it means comparing prose - a coupling that cannot be removed from
- * this side, only made loud: savingsLedgerChain.test.ts reads that Go file and fails the
- * build the moment the string is reworded, so the caption can never silently stop
- * rendering. Match it whole, never by a prefix: a half-recognised note is a note whose
- * meaning may already have moved.
- *
- * The note itself is never lost either way - it renders verbatim in the info modal like
- * every other one; only the summary line under the chart depends on this match. */
+/** core/metrics/ledger_worlds.go's noteEVTimingUnattributed, byte for byte. The API has no
+ * note IDs, so recognising this one means comparing prose; savingsLedgerChain.test.ts reads
+ * that Go file and fails the build the moment the string is reworded, so the caption under
+ * the chart can never silently stop rendering. Match it whole, never by a prefix: a
+ * half-recognised note is a note whose meaning may already have moved. */
 export const EV_TIMING_NOTE =
   "EV charge timing is not attributed to any measure - PV/Battery/Control all price a loadpoint's energy at when it was actually drawn, so shifting a charge to a cheaper slot shows EUR 0 of value here even when it saved money";
 
 export const DEFAULT_WINDOW_DAYS = 7;
 
 /** Truncate to the current 15-minute slot start, in local wall-clock time. Safe against
- * ErrLedgerRangeUnaligned (core/metrics/ledger_slots.go) as long as the viewer's UTC
- * offset is itself a multiple of 15 minutes, true for every real-world timezone. */
+ * ErrLedgerRangeUnaligned as long as the viewer's UTC offset is itself a multiple of 15
+ * minutes, true for every real-world timezone. */
 export function alignToSlotStart(d: Date): Date {
   const aligned = new Date(d);
   aligned.setSeconds(0, 0);
@@ -93,11 +63,9 @@ export function alignToSlotStart(d: Date): Date {
   return aligned;
 }
 
-/** Ceiling counterpart to alignToSlotStart: rounds UP to the next 15-minute slot
- * boundary, or returns the same instant unchanged if it's already exactly on one.
- * alignToSlotStart (floor) would be dishonest for clampWindowToEarliest below - flooring
- * the backend's earliest-available instant could land back before the first priced slot
- * and get refused all over again. */
+/** Ceiling counterpart to alignToSlotStart. Flooring would be dishonest for
+ * clampWindowToEarliest below: it can land back before the first priced slot and get the
+ * retried request refused all over again. */
 export function ceilToSlotStart(d: Date): Date {
   const floored = alignToSlotStart(d);
   if (floored.getTime() === d.getTime()) return floored;
@@ -116,15 +84,12 @@ export function defaultWindow(now: Date): LedgerWindow {
   return { from, to };
 }
 
-/** Page the window by one period's worth of days. Positive dir pages forward but never
- * past the current slot boundary - the ledger has nothing to say about the future.
+/** Page the window by one period's worth of days, never past the current slot boundary.
  *
- * Backwards is anchored on the window's own `from`, i.e. the period DISPLAYED, not on
- * its `to`: clampWindowToEarliest can move `from` forward (the default window narrows
- * itself to where the tariff history starts) while `to` stays where it was, so a step
- * anchored on `to` landed a full period before the *unnarrowed* start and left every day
- * in between unreachable. Forwards stays anchored on `to` - it is already bounded by now,
- * so it can neither skip days nor produce a zero-length window. */
+ * Backwards anchors on the window's own `from`, the period DISPLAYED, not on `to`:
+ * clampWindowToEarliest can move `from` forward while `to` stays put, and a step anchored
+ * on `to` then lands a full period before the unnarrowed start, leaving every day in
+ * between unreachable. Forwards stays anchored on `to`, which is already bounded by now. */
 export function shiftWindow(win: LedgerWindow, dir: 1 | -1, now: Date): LedgerWindow {
   const span = DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   if (dir === -1) {
@@ -144,17 +109,13 @@ export function isWindowAtPresent(win: LedgerWindow, now: Date): boolean {
 }
 
 /** Narrows a refused window's `from` forward to the earliest instant the backend says it
- * actually has tariff data for - the `earliest` field on a 422 ErrBeforeTariffStart body
- * (server/http_savings_ledger_handler.go's savingsLedgerErrorBody), consumed by
- * SavingsLedgerCard.vue's fetch() ONLY for the default/present window, never a window the
- * user explicitly paged to (see that file for why). Ceiling-aligned via ceilToSlotStart so
- * the retried request can't land on an unpriced instant and get refused again.
+ * has tariff data for (the `earliest` field on a 422 ErrBeforeTariffStart body).
+ * Ceiling-aligned so the retried request cannot land on an unpriced instant and be refused
+ * again.
  *
- * Returns null - caller must fall back to the plain refusal, never fabricate a window -
- * whenever clamping wouldn't honestly help: earliestRaw doesn't parse; the ceiling-aligned
- * earliest isn't strictly before win.to (nothing left in the window to show); or it isn't
- * strictly after win.from (clamping wouldn't narrow anything - the original refusal
- * already told the whole story). */
+ * Returns null whenever clamping would not honestly help: earliestRaw does not parse, or
+ * the aligned instant is not strictly inside (win.from, win.to). The caller must then fall
+ * back to the plain refusal and never fabricate a window. */
 export function clampWindowToEarliest(win: LedgerWindow, earliestRaw: string): LedgerWindow | null {
   const parsed = new Date(earliestRaw);
   if (Number.isNaN(parsed.getTime())) return null;

@@ -1,18 +1,11 @@
 <template>
 	<Card edge-to-edge class="box-pull-out mb-4" data-testid="savings-ledger-card">
-		<!-- Card's :title prop renders through a hardcoded text-truncate/no-wrap span
-		     (Helper/Card.vue) - fine for the app's usual short titles ("Solar Production"),
-		     but it silently ellipsised this card's longer, deliberately narrative title
-		     ("What the system did with your money") at 390px, even with nothing else in
-		     the header row. A plain heading in the body wraps normally instead. -->
+		<!-- not Card's :title prop: that renders through a hardcoded text-truncate span,
+		     which ellipsises this card's longer title at 390px. A plain heading wraps. -->
 		<h3 class="evcc-card-title fw-normal m-0" data-testid="savings-ledger-title">
-			{{ title }}<!-- a non-breaking space keeps the icon on the last word's line at 390px
-			     instead of letting it drop onto one of its own, and does so in every
-			     language - splitting the translated title on its last space did not.
-			     The diagram's caveats (what each step means, what is estimated and on
-			     what basis, every note the API sent) are one tap away rather than a
-			     wall of text under the chart. A modal, not a bootstrap tooltip: the
-			     content does not fit a hover tooltip on a phone. -->&nbsp;<span
+			{{ title }}<!-- a non-breaking space keeps the icon on the last word's line at
+			     390px in every language, which splitting the translated title on its last
+			     space did not. -->&nbsp;<span
 				class="info-icon"
 				role="button"
 				tabindex="0"
@@ -93,16 +86,10 @@
 				}}
 			</p>
 
-			<!-- D5: at 390px "would have cost" wraps to two lines while "you paid" and
-			     "saved" don't, and with the house <br/> markup that pushed the first
-			     column's figure a line below the other two - three parallel figures that
-			     no longer read as a row. Labels and values are two passes over the same
-			     list instead, so .row's own wrap puts every label on one line of the grid
-			     and every value on the next: the figures are aligned by the grid, not by a
-			     growing label, and stay aligned when a VALUE wraps too. Bottom-aligning
-			     them via a full-height flex column only held while all three values were
-			     one line tall, and the third is the longest of the three ("€1,234.56
-			     (91%)" measures 108.6px against a 108.7px column at 390px). -->
+			<!-- labels and values are two passes over the same list, so .row's own wrap puts
+			     every label on one grid line and every value on the next: the figures stay
+			     aligned when a label OR a value wraps. Bottom-aligning them in a full-height
+			     flex column only holds while every value is one line tall. -->
 			<div class="row gx-2 mt-1" data-testid="savings-ledger-details">
 				<div
 					v-for="detail in details"
@@ -125,14 +112,10 @@
 				</div>
 			</div>
 
-			<!-- ADR-011 rule 3 (coverage visible without interaction) and rule 7 (the
-			     estimate marker is on the figures, not hidden behind a click) in one line.
-			     The overspend clause is appended here rather than raised into a banner:
-			     the strip above can legitimately read "saved 91 %" while Control itself
-			     lost money, and nothing else on the card names that. -->
-			<!-- N0: the strip above is entirely the chain's, over the chain's slots. When
-			     those are materially fewer than the period's, say what the period actually
-			     cost rather than letting "you paid" be read as the total. -->
+			<!-- coverage and the estimate marker belong on the figures, not behind a click.
+			     The strip above is entirely the chain's, over the chain's slots: when those
+			     are materially fewer than the period's, name what the period actually cost
+			     rather than letting "you paid" be read as the total. -->
 			<p
 				v-if="diagramSubsetWarning"
 				class="caption text-warning"
@@ -148,7 +131,7 @@
 					data-testid="savings-ledger-control-overspend"
 				>
 					· {{ controlOverspendClause }}</span
-				><!-- N2: same slot, deliberately NOT the danger colour - a figure inside the
+				><!-- same slot, deliberately NOT the danger colour: a figure inside the
 				     measurement noise is not a loss, and colouring it like one is the claim
 				     this clause exists to withdraw. --><span
 					v-if="controlNoiseClause"
@@ -157,8 +140,8 @@
 					· {{ controlNoiseClause }}</span
 				>
 			</p>
-			<!-- ADR-011 rule 7: a measure that cannot be honestly attributed is named in
-			     one line under the chart, not left to a modal. -->
+			<!-- a measure that cannot be honestly attributed is named under the chart, in one
+			     line, rather than left to a modal. -->
 			<p
 				v-if="evTimingCaption"
 				class="caption caption-next text-gray"
@@ -223,9 +206,8 @@ export default defineComponent({
 	props: {
 		currency: { type: String as PropType<CURRENCY> },
 	},
-	// the per-slot decisions strip is its own card in Forecast.vue, but its data comes
-	// from this card's single GET /api/savingsledger response - emitted upward rather
-	// than fetched a second time, so a period change is still exactly one request.
+	// the decisions strip is its own card in Forecast.vue but shares this card's single
+	// response, emitted upward rather than fetched again: one request per period change.
 	emits: ["update:decisions"],
 	data() {
 		return {
@@ -235,27 +217,20 @@ export default defineComponent({
 			ledger: null as SavingsLedger | null,
 			refusal: null as string | null,
 			loadError: null as string | null,
-			// guard the two auto-clamps in fetch() (see their doc comments) to at most
-			// one retry each per explicit navigation - reset to false everywhere
-			// this.win is reassigned by an explicit user action (page(),
-			// jumpToPresent()), so a genuinely-empty clamped
-			// period doesn't retry forever, but a fresh navigation always gets one
-			// attempt of each.
+			// one retry each per explicit navigation, reset wherever this.win is
+			// reassigned by a user action, so an empty clamped period cannot retry
+			// forever.
 			//
-			// SEPARATE flags, deliberately. They used to share one, and on this site the
-			// two clamps are SEQUENTIAL: the default window starts before the tariff
-			// history, so the 422 clamp fires first and consumed the only attempt - after
-			// which the chain clamp below never ran at all, and the user was left on a
-			// window whose diagram covered 254 of 635 slots with the strip reading "you
-			// paid EUR 4.60" against a real bill of EUR 34.69. They cannot loop into each
-			// other: clampWindowToEarliest strictly advances `from` and returns null when
-			// it cannot, and each flag still bounds its own clamp to one attempt.
+			// SEPARATE flags, deliberately: the two clamps can be SEQUENTIAL (a window
+			// starting before both the tariff history and the battery), and sharing one
+			// flag lets the first clamp consume the only attempt so the second never
+			// runs. They cannot loop into each other - clampWindowToEarliest strictly
+			// advances `from` and returns null when it cannot.
 			hasClampedTariff: false,
 			hasClampedChain: false,
-			// monotonic request counter - see fetch(). Only the newest request may write
-			// ledger/refusal/loadError/loading, so two overlapping fetches (the date
-			// navigator clicked twice in quick succession) cannot resolve out of order and
-			// leave period A's euros rendered under period B's periodLabel.
+			// monotonic request counter: only the newest request may write
+			// ledger/refusal/loadError/loading, so two overlapping fetches cannot resolve
+			// out of order and leave period A's euros under period B's label.
 			fetchSeq: 0,
 		};
 	},
@@ -286,9 +261,8 @@ export default defineComponent({
 		waterfall(): WaterfallLayout | null {
 			return this.ledger?.chain ? waterfallLayout(this.ledger.chain, this.headline) : null;
 		},
-		// The strip under the diagram, house pattern (SolarDetails/ValueDetails): label,
-		// break, bold coloured value. Without a chain there is no baseline to compare
-		// against, so only the one measured figure is shown - never a fabricated pair.
+		// Without a chain there is no baseline to compare against, so only the one measured
+		// figure is shown, never a fabricated pair.
 		details(): LedgerDetail[] {
 			if (!this.ledger) return [];
 			const wf = this.waterfall;
@@ -315,9 +289,8 @@ export default defineComponent({
 				valueClass: "text-primary",
 			});
 			if (wf) {
-				// ADR-011 rule 1: a period that came out worse than the baseline says so.
-				// The sign is carried by the label ("cost you") and the danger colour, and
-				// the magnitude is never clamped at zero.
+				// a period that came out worse than the baseline says so: the sign is carried
+				// by the label and the danger colour, the magnitude is never clamped at zero.
 				const loss = wf.saved < 0;
 				const pct =
 					wf.savedFraction != null
@@ -344,12 +317,9 @@ export default defineComponent({
 			const divergence = this.chainCoverageDivergence;
 			return divergence ? this.fmtPercentage(divergence.chainFraction * 100, 1) : "";
 		},
-		// Coverage, in the order the figures above it actually come from. Every number in
-		// the waterfall and in the three-figure strip is the CHAIN's, over the chain's
-		// slots - so when the two coverages diverge the chain's is what qualifies them and
-		// has to come first. Leading with the realised coverage (92 % of slots) above a
-		// strip built entirely from a 40 % chain read as reassurance for figures it did not
-		// describe; see diagramSubsetWarning for the rest of that fix.
+		// Coverage, in the order the figures above it come from. Every number in the
+		// waterfall and the strip is the CHAIN's, so where the two diverge the chain's has
+		// to come first: the realised one reads as reassurance for figures it never covered.
 		caption(): string {
 			if (!this.ledger) return "";
 			const parts: string[] = [];
@@ -375,22 +345,15 @@ export default defineComponent({
 			);
 			return parts.join(" · ");
 		},
-		// N0: when the diagram covers materially fewer slots than the period, "you paid
-		// EUR 4.60" above it is the chain's W3 over its own subset, not the period's bill -
-		// on this site's own database the same payload said EUR 34.69 over 584 slots while
-		// the strip read EUR 4.60 over 254. The default view auto-narrows to
-		// chainEarliest so this is rare (see fetch()); a user who explicitly pages into a
-		// divergent period gets the period's real figure named here instead of implied
-		// wrongly above.
+		// When the diagram covers materially fewer slots than the period, "you paid" above
+		// it is the chain's W3 over its own subset, not the period's bill. Named here rather
+		// than implied wrongly above.
 		diagramSubsetWarning(): string {
 			const divergence = this.chainCoverageDivergence;
-			// MATERIALLY fewer, which the comment above has always claimed and the code
-			// never checked: coverageDivergence reports any difference at all, so a single
-			// dropped PV read (chain 669 of 672 slots against realised 670) raised a
-			// standing text-warning banner whose two euro figures differed by cents. Two
-			// percentage points of the period - about a slot an hour on a 7-day window -
-			// is the line: below it "you paid" above the diagram and the period's own bill
-			// are the same statement, and the caption already carries both coverages.
+			// MATERIALLY fewer: coverageDivergence reports any difference at all, and a
+			// single dropped read is not a reason for a standing warning whose two euro
+			// figures differ by cents. Two percentage points of the period is the line;
+			// below it the two are the same statement, and the caption carries both anyway.
 			if (
 				!this.ledger?.chain ||
 				!divergence ||
@@ -408,24 +371,22 @@ export default defineComponent({
 				),
 			}) as string;
 		},
-		// ADR-011 rule 1, restated for the case the three-figure strip cannot express: on a
-		// period where solar and the battery saved a great deal, the strip legitimately
-		// reads "saved 91 %" while the Control step itself LOST money against its own
-		// baseline. Without this clause the only trace of that is the colour of one bar.
+		// the case the three-figure strip cannot express: where solar and the battery saved
+		// a great deal the strip legitimately reads "saved 91 %" while the Control step
+		// itself LOST money. Without this clause the only trace is the colour of one bar.
 		controlOverspendClause(): string {
 			const control = this.waterfall?.control;
 			if (!control?.overspend) return "";
 			return this.$t("forecast.savingsLedger.controlOverspendShort", {
-				// magnitude: the direction is carried by the wording ("cost") and the
-				// danger colour, never by a bare minus sign
+				// magnitude only: the direction is carried by the wording and the danger
+				// colour, never by a bare minus sign
 				amount: this.money(Math.abs(control.eur)),
 			}) as string;
 		},
-		// N2: the counterpart to the clause above, for the case it must NOT fire. A Control
-		// figure smaller than the period's own measured noise floor has a magnitude but no
-		// usable direction, and a false "the controller cost you money" is the most
-		// expensive wrong answer this card can give. The figure is still drawn and printed
-		// - this says what it is worth, in the card's own gray, not in the danger colour.
+		// the counterpart to the clause above, for when it must NOT fire. A Control figure
+		// inside the period's own noise floor has a magnitude but no usable direction, and a
+		// false "the controller cost you money" is this card's most expensive wrong answer.
+		// Still drawn and printed, in gray, never in the danger colour.
 		controlNoiseClause(): string {
 			const wf = this.waterfall;
 			if (!wf?.control?.insideNoise) return "";
@@ -434,24 +395,18 @@ export default defineComponent({
 				band: this.money(wf.band),
 			}) as string;
 		},
-		// ADR-011 rule 7: rendered only when the API actually sent the EV-timing note (see
-		// EV_TIMING_NOTE), so a site without a loadpoint is not told about a
-		// non-attribution that cannot affect it.
+		// rendered only when the API actually sent the EV-timing note, so a site without a
+		// loadpoint is not told about a non-attribution that cannot affect it.
 		evTimingCaption(): string {
 			const notes = this.ledger?.chain?.notes ?? [];
 			if (!notes.includes(EV_TIMING_NOTE)) return "";
 			return this.$t("forecast.savingsLedger.evTimingShort") as string;
 		},
-		// ADR-011 rule 7: every caveat the API sends must be rendered, never dropped -
-		// realised.note is always present, chain.notes only when the chain computed. Both
-		// OPEN with noteInvoiceComparability (core/metrics/ledger_worlds.go /
-		// ledger_settlement.go), but realised.note appends its own static-feed-in
-		// disclosure to it, so the two stopped being string-equal and a Set-based dedupe
-		// let the invoice sentence render twice. Deduped by containment instead: a note
-		// that is a prefix of one already kept adds nothing the longer form doesn't say.
-		// Nothing is ever lost - realised.note leads the list, so the longer form is the
-		// one kept whole. Deliberately no separator or sentence splitting: that made the
-		// backend's punctuation load-bearing for whether a caveat rendered.
+		// Every caveat the API sends must be rendered, never dropped. realised.note and
+		// chain.notes[0] open with the same invoice caveat but are not string-equal, so a
+		// Set-based dedupe renders it twice; deduped by containment instead, realised.note
+		// first so the longer form is the one kept whole. Deliberately no separator or
+		// sentence splitting: that makes the backend's punctuation decide what renders.
 		notes(): string[] {
 			if (!this.ledger) return [];
 			const all = [this.ledger.realised.note, ...(this.ledger.chain?.notes ?? [])];
@@ -471,42 +426,31 @@ export default defineComponent({
 			deep: true,
 		},
 		// hand the decisions rows to Forecast.vue, which mounts them as their own card.
-		// Watching `ledger` rather than emitting from fetch() keeps the fetch/refusal
-		// layer below untouched: a refusal or an error nulls `ledger`, which emits null
-		// and takes the decisions card down with it.
+		// Watching `ledger` rather than emitting from fetch() means a refusal or an error
+		// nulls it, emits null, and takes that card down with it.
 		ledger(value: SavingsLedger | null) {
-			// F2: chain.batteryPhysics is present exactly when the site has a battery -
-			// computeChainFromSlots only derives it under set.HasBattery. control_slots is
-			// written whenever the optimizer is enabled and sponsored, battery or not, so a
-			// PV-and-loadpoint site records rows too; but batteryModeCandidate has no
-			// controllable battery to iterate, so every one of those rows is
-			// "unknown"/"unknown" - no veto, no delta, and nothing left to say except a
-			// battery mode for a battery that does not exist. There are no battery
-			// decisions to replay on such a site, so the card does not appear at all.
+			// chain.batteryPhysics is present exactly when the site has a battery.
+			// control_slots is written whenever the optimizer runs, battery or not, so a
+			// PV-and-loadpoint site records rows too, but every one of them is
+			// "unknown"/"unknown": a battery mode for a battery that does not exist. No
+			// decisions to replay, so the card does not appear.
 			//
-			// An absent chain is deliberately NOT treated the same way: that is
-			// chainUnavailable, a site that HAS a battery whose physics couldn't be derived
-			// yet (ComputeLedger degrades the chain rather than the whole response). Its
-			// rows are real decisions - vetoes included - and are still worth showing, with
-			// every delta honestly nil because there was no physics to price them with.
+			// An absent chain is deliberately NOT the same case: that is chainUnavailable,
+			// a site that HAS a battery whose physics could not be derived. Its rows are
+			// real decisions, worth showing with every delta honestly nil.
 			const batteryLess = !!value?.chain && !value.chain.batteryPhysics;
 			this.$emit("update:decisions", value && !batteryLess ? value.decisions : null);
 		},
-		// The `ledger` watcher above only fires once a response has landed, so between the
-		// click and that response the chart area showed "Loading…" under the NEW period's
-		// label while the decisions card below still showed the PREVIOUS period's ticks
-		// and euro deltas - with no period label of its own to contradict them. Taking it
-		// down for the duration of the fetch restores what the strip did when it still
-		// lived inside this card's v-else-if="ledger" block, and (because Forecast.vue
-		// mounts it under v-if) also resets SavingsLedgerDecisions' internal timeline/table
-		// toggle, which used to survive a period change.
+		// The `ledger` watcher above only fires once a response has landed, so without this
+		// the decisions card keeps the PREVIOUS period's ticks and euro deltas under the new
+		// period's label, with no label of its own to contradict them.
 		loading(value: boolean) {
 			if (value) this.$emit("update:decisions", null);
 		},
 	},
 	mounted() {
-		// the single initial fetch. data() has already put the default window in place,
-		// so this doesn't race the deep win watcher above.
+		// data() has already put the default window in place, so this does not race the
+		// deep win watcher above
 		this.fetch();
 	},
 	methods: {
@@ -530,12 +474,9 @@ export default defineComponent({
 			this.win = defaultWindow(new Date());
 		},
 		async fetch() {
-			// Every write below is gated on this request still being the newest one. Without
-			// it, paging twice quickly leaves both requests in flight; the second one's
-			// `loading = true` is a no-op (already true), so nothing re-hides the content,
-			// and whichever response lands last wins - which for ordinary HTTP can be the
-			// FIRST period's. The card then shows period A's chain, and the decisions card
-			// period A's rows, under period B's header, and nothing ever corrects it.
+			// Every write below is gated on this request still being the newest one. Paging
+			// twice quickly leaves both in flight, and without the gate whichever response
+			// lands last wins - which can be the first period's, under the second's header.
 			const seq = ++this.fetchSeq;
 			const current = () => seq === this.fetchSeq;
 			this.loading = true;
@@ -544,8 +485,8 @@ export default defineComponent({
 			try {
 				const res = await api.get<SavingsLedger | SavingsLedgerErrorBody>("savingsledger", {
 					params: { from: this.win.from.toISOString(), to: this.win.to.toISOString() },
-					// 400/422 are expected refusals (ADR-011 rule 4), not app errors - render
-					// them inline instead of letting api.ts's interceptor raise a toast.
+					// 400/422 are expected refusals rather than app errors: render them inline
+					// instead of letting api.ts's interceptor raise a toast
 					validateStatus: (status: number) => [200, 400, 422].includes(status),
 				});
 				// a superseded request must not touch state, and must not clamp the window
@@ -554,15 +495,12 @@ export default defineComponent({
 				if (res.status === 200) {
 					const ledger = res.data as SavingsLedger;
 
-					// N0: the request succeeded, but the chain may only be computable over
-					// part of it - the tariffs table can start days before the battery was
-					// commissioned, and every figure this card draws comes from the chain.
-					// Narrow the DEFAULT/present view to where the diagram can actually be
-					// drawn, under exactly the guards the ErrBeforeTariffStart clamp below
-					// uses: never a window the user explicitly paged to, and at most one
-					// attempt per navigation. clampWindowToEarliest returns null when
-					// narrowing wouldn't honestly help, in which case the divergent period
-					// is rendered as-is with diagramSubsetWarning naming the real figure.
+					// the request succeeded, but the chain may only be computable over part
+					// of the window and every figure this card draws comes from the chain.
+					// Narrow the DEFAULT view to where the diagram can be drawn, under the
+					// same guards the refusal clamp below uses. When narrowing would not
+					// honestly help the divergent period renders as-is, with
+					// diagramSubsetWarning naming the real figure.
 					if (this.isAtPresent && !this.hasClampedChain && ledger.chainEarliest) {
 						const clamped = clampWindowToEarliest(this.win, ledger.chainEarliest);
 						if (clamped) {
@@ -576,20 +514,17 @@ export default defineComponent({
 				} else {
 					const body = res.data as SavingsLedgerErrorBody | undefined;
 
-					// Auto-narrow ONLY the default/present view (isAtPresent) - a user who
-					// explicitly paged into the past and hits a genuine "before any data
-					// exists" refusal must see the honest refusal, never get silently
-					// redirected to a period they didn't ask for. Guarded to at most one
-					// attempt per explicit navigation (hasClampedTariff, reset by
-					// page()/jumpToPresent()) so a clamp that
-					// still can't produce a usable window doesn't retry forever.
+					// Auto-narrow ONLY the default/present view: a user who explicitly paged
+					// into the past and hit a genuine "before any data exists" refusal must
+					// see that refusal, never a silent redirect to a period they did not ask
+					// for. One attempt per navigation, so it cannot retry forever.
 					if (this.isAtPresent && !this.hasClampedTariff && body?.earliest) {
 						const clamped = clampWindowToEarliest(this.win, body.earliest);
 						if (clamped) {
 							this.hasClampedTariff = true;
 							// don't also set refusal/ledger here: the deep watcher on win
-							// (below) fires fetch() again for the clamped window on its
-							// own - calling fetch() a second time here would double-request.
+							// fires fetch() again for the clamped window, so calling it a
+							// second time here would double-request
 							this.win = clamped;
 							return;
 						}
@@ -605,8 +540,8 @@ export default defineComponent({
 				this.loadError = e instanceof Error ? e.message : String(e);
 			} finally {
 				// a superseded request leaves loading alone: the newer one owns it and is
-				// still running, so clearing it here would drop the loading state early and
-				// briefly show the previous period's content under the new period label
+				// still running, so clearing it here briefly shows the previous period's
+				// content under the new period's label
 				if (current()) this.loading = false;
 			}
 		},

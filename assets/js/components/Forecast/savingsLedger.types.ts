@@ -1,9 +1,6 @@
-// View-model types for the ADR-011 savings ledger (GET /api/savingsledger?from=&to=).
-//
-// Mirrors core/metrics/ledger*.go's JSON-tagged response structs field-for-field -
-// built from the Go source, not from the mockup's fake data (see savingsledger UI
-// brief). Where a Go doc comment states an honesty rule this type's shape exists to
-// carry, that's repeated here so a future edit to this file can't silently drop it.
+// View-model types for GET /api/savingsledger?from=&to=, mirroring core/metrics/ledger*.go's
+// JSON-tagged response structs field for field. Where a Go doc comment states a rule this
+// type's shape exists to carry, it is repeated here so an edit cannot silently drop it.
 
 /** core/metrics/ledger_settlement.go Settled: the same energy series priced both ways. */
 export interface LedgerSettled {
@@ -21,8 +18,8 @@ export interface LedgerCoverage {
   fraction: number;
 }
 
-/** core/metrics/ledger_settlement.go RealisedCost: the one measured number everything
- * else hangs off. Reads only the grid meter and the tariffs table (ADR-011 rule 2). */
+/** core/metrics/ledger_settlement.go RealisedCost: the one measured number everything else
+ * hangs off. Reads the grid meter and the tariffs table only. */
 export interface LedgerRealisedCost {
   settled: LedgerSettled;
   coverage: LedgerCoverage;
@@ -43,21 +40,19 @@ export interface LedgerContribution {
   settled: LedgerSettled;
 }
 
-/** core/metrics/ledger_worlds.go ControlSplit: the W2->W3 contribution split into
- * routing (period-average diff, timing removed) and timing (what's left). Full ==
- * Contributions[2].settled.perSlot. Timing is real money only under per-slot settlement -
- * see noteTimingSettlement. */
+/** core/metrics/ledger_worlds.go ControlSplit: the W2->W3 contribution split into routing
+ * (period-average diff, timing removed) and timing (what's left). Full ==
+ * Contributions[2].settled.perSlot; timing is real money only under per-slot settlement. */
 export interface LedgerControlSplit {
   full: number;
   routing: number;
   timing: number;
 }
 
-/** core/metrics/ledger_worlds.go batteryPhysics (unexported Go type, still serialised):
- * the assumptions behind the W2 counterfactual battery, each with a Source string
- * saying whether it's device-reported or derived (fallback) from history - this is the
- * ledger's only per-figure "how sure are we" signal; there is no numeric error bar in
- * the API, unlike the mockup's fabricated "+/-" figures. */
+/** core/metrics/ledger_worlds.go batteryPhysics: the assumptions behind the W2
+ * counterfactual battery, each with a Source string saying whether it is device-reported or
+ * derived from history. The ledger's only per-figure "how sure are we" signal; the API
+ * carries no numeric error bar, so nothing downstream may invent one. */
 export interface LedgerBatteryPhysics {
   capacityKWh: number;
   capacitySource: string;
@@ -70,9 +65,9 @@ export interface LedgerBatteryPhysics {
   maxDischargeKWh: number;
 }
 
-/** core/metrics/ledger_slots.go MeterResidual (the A1 diagnostic): the measured gap
- * between a period's sources and sinks, in kWh (never priced in EUR) - the noise floor
- * under every euro figure in the payload. Not expected to be zero. */
+/** core/metrics/ledger_slots.go MeterResidual: the measured gap between a period's sources
+ * and sinks, in kWh, the noise floor under every euro figure in the payload. Not expected
+ * to be zero. */
 export interface LedgerMeterResidual {
   sumKWh: number;
   absSumKWh: number;
@@ -83,11 +78,9 @@ export interface LedgerMeterResidual {
   eurBand: number;
 }
 
-/** core/metrics/ledger_worlds.go W2Drift: the counterfactual battery's energy
- * bookkeeping. carriedKWh is what it was handed across gaps in the record (the measured
- * pack's own movement across the slots the ledger could not price - which the real bill
- * receives too); finalKWh is where it ended relative to the real pack. Both unpriced -
- * see the Go doc comment. */
+/** core/metrics/ledger_worlds.go W2Drift: the counterfactual battery's energy bookkeeping.
+ * carriedKWh is what it was handed across gaps in the record, finalKWh where it ended
+ * relative to the real pack. Both unpriced. */
 export interface LedgerW2Drift {
   gaps: number;
   carriedKWh: number;
@@ -96,7 +89,7 @@ export interface LedgerW2Drift {
 
 /** core/metrics/ledger_worlds.go Chain: the full W0..W3 chain for a period, priced both
  * ways, plus the W2 battery physics and the routing/timing split when a battery is
- * configured. Notes carry ADR-011 rule 7's caveats and must be rendered, not dropped. */
+ * configured. Notes carry the payload's caveats and must be rendered, never dropped. */
 export interface LedgerChain {
   worlds: LedgerWorldCost[];
   contributions: LedgerContribution[];
@@ -108,42 +101,40 @@ export interface LedgerChain {
   notes?: string[];
 }
 
-/** core/metrics/ledger_decisions.go DecisionRow: one control_slots row, plus (when
- * computable) the euro cost of a veto. slotFlowDeltaEur is undefined - never 0 - when
- * it isn't computable (no veto, slot outside the valid set, or no battery).
+/** core/metrics/ledger_decisions.go DecisionRow: one control_slots row, plus the euro cost
+ * of a veto when computable. slotFlowDeltaEur is undefined, never 0, when it is not.
  *
- * IMPORTANT: slotFlowDeltaEur is NOT hindsight. It prices applied-vs-suggested for the
- * one vetoed slot only, at that slot's own starting SoC, and does not follow either
- * trajectory forward - a decision whose payoff only materialises in a later slot can
- * show the opposite sign here. Label it "slot-local", never "hindsight". */
+ * slotFlowDeltaEur is NOT hindsight. It prices applied-vs-suggested for the one vetoed slot
+ * only, at that slot's own starting SoC, and follows neither trajectory forward: a decision
+ * whose payoff materialises in a later slot can show the opposite sign here. Label it
+ * "slot-local", never "hindsight". */
 export interface LedgerDecisionRow {
   /** @format date-time */
   ts: string;
   appliedMode: string;
-  /** undefined - never the string "unknown" - when no optimizer run produced a suggestion
-   * for this slot. Absence is not a sentinel: see the Go field's doc comment. Legacy rows
-   * written before that distinction existed still carry the literal "unknown". */
+  /** undefined, never the string "unknown", when no optimizer run produced a suggestion for
+   * this slot: absence is not a sentinel. Legacy rows written before that distinction
+   * existed still carry the literal "unknown". */
   suggestedMode?: string;
   vetoReason?: string;
   healthOk: boolean;
-  /** True when AppliedMode (a point sample seconds into the slot) may not have held for
-   * the full 15 minutes - the slot-local delta still simulates the full slot regardless. */
+  /** True when AppliedMode (a point sample seconds into the slot) may not have held for the
+   * full 15 minutes. The slot-local delta still simulates the full slot regardless. */
   modeChanged: boolean;
   slotFlowDeltaEur?: number;
 }
 
-/** core/metrics/ledger.go Ledger: the full ADR-011 response. Chain is undefined, with
- * chainUnavailable explaining why, when only the battery-physics part of the
- * computation failed - realised and decisions are still present in that case. */
+/** core/metrics/ledger.go Ledger. Chain is undefined, with chainUnavailable explaining why,
+ * when only the battery-physics part of the computation failed: realised and decisions are
+ * still present in that case. */
 export interface SavingsLedger {
   /** @format date-time */
   from: string;
   /** @format date-time */
   to: string;
   realised: LedgerRealisedCost;
-  /** The earliest instant the chain could have a valid slot for (core/metrics'
-   * EarliestChainSlot) - NOT the same bound as an ErrBeforeTariffStart refusal's
-   * `earliest`, which is where the tariff prices start. Absent when there is none.
+  /** The earliest instant the chain could have a valid slot for. NOT the same bound as an
+   * ErrBeforeTariffStart refusal's `earliest`, which is where the tariff prices start.
    * @format date-time */
   chainEarliest?: string;
   chain?: LedgerChain;
@@ -152,9 +143,8 @@ export interface SavingsLedger {
 }
 
 /** util.ErrorAsJson: the shape of every error response this endpoint returns (400/422/500).
- * earliest (server/http_savings_ledger_handler.go's savingsLedgerErrorBody) is only ever
- * present alongside a 422 ErrBeforeTariffStart refusal whose Earliest is non-zero - see
- * savingsLedgerChain.ts's clampWindowToEarliest for how the UI uses it. */
+ * earliest is only ever present alongside a 422 ErrBeforeTariffStart refusal whose Earliest
+ * is non-zero. */
 export interface SavingsLedgerErrorBody {
   error: string;
   line?: number;

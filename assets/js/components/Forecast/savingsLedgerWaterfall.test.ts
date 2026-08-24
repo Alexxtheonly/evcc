@@ -15,20 +15,15 @@ import {
 } from "./savingsLedgerWaterfall";
 import { ZERO_EPSILON_EUR, contributionBand } from "./savingsLedgerChain";
 import type { LedgerChain } from "./savingsLedger.types";
-// A real GET /api/savingsledger response from the owner's site (2 days, 2026-08-22..24).
-// Kept as a fixture rather than hand-written numbers because it carries a negative
-// Control contribution at BOTH lenses, which is the case the diagram exists to render
-// honestly (ADR-011 rule 1) and the one hand-rolled fixtures kept getting wrong.
+// A captured API response, kept as a fixture rather than hand-written numbers because it
+// carries a negative Control contribution at both lenses.
 import liveSample from "./__fixtures__/ledgerLiveSample";
 
 const live = liveSample.chain as LedgerChain;
 
-// live's own Control (-EUR 0.326 perSlot) is smaller than that period's measured noise
-// floor (meterResidual.eurBand, EUR 0.625), so its DIRECTION is not evidence and the
-// diagram must not colour or word it as a loss. The bar-geometry and danger-colour
-// assertions therefore need a period whose Control clears its own noise floor: same
-// payload, quieter meter. Both cases are asserted - see "leaves a Control inside the
-// period's own noise floor uncoloured" below.
+// live's Control (-EUR 0.326 perSlot) is inside that period's noise floor (eurBand
+// EUR 0.625), so the geometry and danger-colour assertions need a period whose Control
+// clears it: same payload, quieter meter. Both cases are asserted.
 const liveOverspend: LedgerChain = {
   ...live,
   meterResidual: { ...live.meterResidual, sumKWh: -0.02, absSumKWh: 0.15, eurBand: 0.05 },
@@ -101,7 +96,6 @@ describe("waterfallLayout", () => {
       expect(layout.columns[1]!.level).toBeCloseTo(w(1), 12);
       expect(layout.columns[2]!.level).toBeCloseTo(w(2), 12);
       expect(layout.columns[3]!.level).toBeCloseTo(w(3), 12);
-      // every middle bar spans exactly |contribution|
       for (const c of layout.columns.filter((x) => !x.total)) {
         expect(c.span).toBeCloseTo(Math.abs(c.eur), 12);
         expect(c.base + c.span).toBeCloseTo(Math.max(c.level, c.level + c.eur), 12);
@@ -117,7 +111,6 @@ describe("waterfallLayout", () => {
     expect(control.eur).toBeLessThan(0); // the real controller lost money this period
     expect(control.overspend).toBe(true);
     expect(control.zero).toBe(false);
-    // rises: its bottom is the PREVIOUS level, its top the new (higher) one
     expect(control.base).toBeCloseTo(battery.level, 12);
     expect(control.base + control.span).toBeCloseTo(control.level, 12);
     expect(control.level).toBeGreaterThan(battery.level);
@@ -128,11 +121,11 @@ describe("waterfallLayout", () => {
     const control = layout.columns.find((c) => c.key === "control")!;
     const battery = layout.columns.find((c) => c.key === "battery")!;
 
-    // -EUR 0.326 against an eurBand of EUR 0.625: real magnitude, unusable direction
+    // real magnitude, unusable direction
     expect(control.eur).toBeLessThan(0);
     expect(control.insideNoise).toBe(true);
     expect(control.overspend).toBe(false);
-    // never rounded away or clamped - the bar keeps its full height and still rises
+    // never rounded away or clamped
     expect(control.zero).toBe(false);
     expect(control.span).toBeCloseTo(Math.abs(control.eur), 12);
     expect(control.level).toBeGreaterThan(battery.level);
@@ -239,8 +232,7 @@ describe("waterfallLayout", () => {
     expect(paid.base).toBe(-0.5); // spans [-0.5, 0], a credit hanging below the zero line
     expect(paid.span).toBe(0.5);
 
-    // every bar plots at or above the shifted zero, so nothing is clipped and no stacked
-    // bar ever needs a negative base
+    // every bar plots at or above the shifted zero, so nothing is clipped
     for (const c of layout.columns) {
       expect(plotBase(c, layout)).toBeGreaterThanOrEqual(0);
     }
@@ -255,10 +247,8 @@ describe("waterfallLayout", () => {
   });
 });
 
-// The card's "control cost you money" / "too small to call" clauses and the Control bar's
-// own colour used to be derived from two separate implementations of the same two
-// predicates. They are the layout's now, so a change to the noise band cannot make the
-// sentence and the bar directly above it disagree.
+// The card's clauses and the Control bar's colour both read the layout's flags, so a
+// change to the noise band cannot make the sentence and the bar above it disagree.
 describe("waterfallLayout Control verdict", () => {
   it("publishes the period's noise band the verdicts are measured against", () => {
     const chain = baseChain({
@@ -266,7 +256,6 @@ describe("waterfallLayout Control verdict", () => {
     });
     expect(waterfallLayout(chain, "perSlot").band).toBe(0.42);
     expect(waterfallLayout(chain, "perSlot").band).toBe(contributionBand(chain));
-    // never below the drawing threshold, even on a period with a perfect residual
     expect(waterfallLayout(baseChain(), "perSlot").band).toBe(ZERO_EPSILON_EUR);
   });
 
@@ -276,10 +265,8 @@ describe("waterfallLayout Control verdict", () => {
       "perSlot"
     );
     expect(layout.control).toBeNull();
-    // the column itself is still drawn, and its own insideNoise flag is true because an
-    // absent measure is a zero-magnitude one - which is exactly why the card must read
-    // layout.control and not that column. A site that never ran a controller is not a
-    // site whose controller was "too small to call".
+    // the column is still drawn and its insideNoise flag is true, because an absent measure
+    // is a zero-magnitude one: exactly why the card must read layout.control instead
     const column = layout.columns.find((c) => c.key === "control")!;
     expect(column.insideNoise).toBe(true);
     expect(column.overspend).toBe(false);
@@ -308,7 +295,6 @@ describe("waterfallLayout Control verdict", () => {
       contributions: [{ label: "Control", settled: settled(-(ZERO_EPSILON_EUR / 2)) }],
     });
     expect(waterfallLayout(rounding, "perSlot").control!.overspend).toBe(false);
-    // one cent, comfortably clear of the epsilon, is a loss
     const cent = baseChain({ contributions: [{ label: "Control", settled: settled(-0.01) }] });
     expect(waterfallLayout(cent, "perSlot").control!.overspend).toBe(true);
   });
@@ -317,14 +303,13 @@ describe("waterfallLayout Control verdict", () => {
 describe("plotLevels", () => {
   it("emits one connector height per column, in the shifted plotting system", () => {
     const layout = waterfallLayout(live, "periodAverage");
-    // the live payload's periodAverage worlds, in order: W0, W1, W2, W3, W3 again
+    // the periodAverage worlds in order: W0, W1, W2, W3, W3 again
     const levels = plotLevels(layout);
     expect(levels).toHaveLength(5);
     expect(levels[0]).toBeCloseTo(6.6656, 4);
     expect(levels[1]).toBeCloseTo(2.7166, 4);
     expect(levels[2]).toBeCloseTo(0.1927, 4);
-    // the last two are the same level by construction (control's level IS what was paid),
-    // so the step from the control bar to the "you paid" bar is a flat connector
+    // the last two are the same level by construction, so that connector is flat
     expect(levels[3]).toBeCloseTo(0.6019, 4);
     expect(levels[4]).toBeCloseTo(0.6019, 4);
   });
@@ -352,7 +337,6 @@ describe("plotLevels", () => {
 
 describe("waterfallAxis", () => {
   it("rounds the top up to whole-unit ticks that cover the tallest bar", () => {
-    // W0 6.6656 at the periodAverage lens: 2-euro ticks, four of them
     const axis = waterfallAxis(waterfallLayout(live, "periodAverage"));
     expect(axis.interval).toBe(2);
     expect(axis.max).toBe(8);
@@ -381,7 +365,6 @@ describe("waterfallAxis", () => {
       expect(Number.isInteger(axis.interval)).toBe(true);
       expect(axis.max / axis.interval).toBeLessThanOrEqual(5);
       expect(Number.isInteger(axis.max / axis.interval)).toBe(true);
-      // never hides a bar
       expect(axis.max).toBeGreaterThanOrEqual(top);
     }
   });
@@ -389,12 +372,10 @@ describe("waterfallAxis", () => {
 
 describe("plotSpan / minSpan", () => {
   it("floors a small-but-nonzero bar at the pixel minimum", () => {
-    // 4px of a 144px plot area, on an 8 EUR axis
     const floor = minSpan(8, 144);
     expect(floor).toBeCloseTo(0.2222, 4);
 
-    // 6 cents against an 8 EUR axis is a two-pixel sliver - above ZERO_EPSILON_EUR, so a
-    // real figure, but unreadable once the "estimated" dashed outline is drawn on it
+    // a two-pixel sliver: above ZERO_EPSILON_EUR, so a real figure, but unreadable
     const layout = waterfallLayout(
       baseChain({
         worlds: [
@@ -415,7 +396,6 @@ describe("plotSpan / minSpan", () => {
     expect(control.zero).toBe(false);
     expect(control.span).toBeLessThan(floor);
     expect(plotSpan(control, floor)).toBe(floor);
-    // a bar that is already tall enough is passed through untouched
     const pv = layout.columns.find((c) => c.key === "pv")!;
     expect(plotSpan(pv, floor)).toBe(pv.span);
   });
@@ -443,20 +423,19 @@ describe("plotSpan / minSpan", () => {
   });
 
   // The one invariant that keeps a bar from being drawn taller than the axis it sits on.
-  // waterfallAxis picks max from the true spans; the BAR_MIN_PX floor is applied AFTER
-  // that and can only push a bar UP, so the headroom has to cover the largest push. The
-  // three constants live in two files with nothing else tying them together - this is the
-  // tie. If it ever fails, a bar is being clipped and the chart is lying about a number.
+  // waterfallAxis picks max from the true spans; the BAR_MIN_PX floor is applied after
+  // that and can only push a bar UP, so the headroom has to cover the largest push.
+  // BAR_MIN_PX, PLOT_HEIGHT and AXIS_HEADROOM live in two files with nothing else tying
+  // them together. If this fails, a bar is clipped and the chart is lying about a number.
   it("keeps the minimum bar height inside the axis headroom", () => {
     expect(BAR_MIN_PX / PLOT_HEIGHT).toBeLessThan(1 - 1 / AXIS_HEADROOM);
   });
 });
 
-// The chart wiring lives in the same file as the geometry it consumes: macOS'
+// The chart wiring lives in the same file as the geometry it consumes: a
 // case-insensitive filesystem makes SavingsLedgerWaterfall.test.ts and
-// savingsLedgerWaterfall.test.ts the same path, so they cannot be separate files.
-// minimal $t/$i18n stand-ins, same pattern as SavingsLedgerCard.test.ts, so the
-// assertions below read against the real English strings
+// savingsLedgerWaterfall.test.ts the same path.
+// minimal $t/$i18n stand-ins so the assertions below read against real English strings
 const lookup = (key: string): string | undefined => {
   const v = key.split(".").reduce<any>((o, k) => o?.[k], en);
   return typeof v === "string" ? v : undefined;
@@ -470,9 +449,8 @@ config.global.mocks["$t"] = (key: string, params?: Record<string, unknown>) => {
 config.global.mocks["$i18n"] = { locale: "en-US" };
 
 // colors.* are CSS-variable-backed and read back as "" under happy-dom, so several
-// assertions below have to stub them. Restored after EVERY test in this file, including
-// one that throws: a `finally` inside a single test does not cover an assertion that
-// throws outside its try, which would leak the fake palette into every later test.
+// assertions below stub them. Restored after EVERY test, including one that throws:
+// a leaked fake palette would corrupt every later test.
 const paletteBefore = { ...colors };
 afterEach(() => Object.assign(colors, paletteBefore));
 
@@ -492,8 +470,7 @@ describe("SavingsLedgerWaterfall chart option", () => {
     expect(o.series[0].itemStyle.color).toBe("transparent");
     expect(o.series[0].silent).toBe(true);
     expect(o.series[0].stack).toBe(o.series[1].stack);
-    // pedestal and height are both non-negative, so the stack can never be split by
-    // ECharts into separate positive/negative groups
+    // both non-negative, so ECharts cannot split the stack into positive/negative groups
     for (const base of o.series[0].data) expect(base).toBeGreaterThanOrEqual(0);
     for (const d of o.series[1].data) expect(d.value).toBeGreaterThanOrEqual(0);
   });
@@ -506,12 +483,10 @@ describe("SavingsLedgerWaterfall chart option", () => {
     expect(connector.symbol).toBe("none");
     expect(connector.silent).toBe(true);
     expect(connector.tooltip.show).toBe(false);
-    // strictly below both bar series, so the vertical part of every step is hidden
-    // behind the bar that caused it
+    // below both bar series, so every vertical step hides behind the bar that caused it
     expect(connector.z).toBeLessThan(o.series[0].z);
     expect(connector.z).toBeLessThan(o.series[1].z);
-    // same shifted plotting system as the bars: the live payload's four world costs,
-    // with W3 repeated for the flat step onto the "you paid" bar
+    // same shifted plotting system as the bars, with W3 repeated for the flat step
     expect(connector.data.map((v: number) => v.toFixed(4))).toEqual([
       "6.6656",
       "2.7166",
@@ -530,7 +505,7 @@ describe("SavingsLedgerWaterfall chart option", () => {
 
   it("floors a small-but-nonzero bar at the minimum height, and leaves a true zero at zero", () => {
     const CONTROL = 3;
-    // 6 cents of Control against a ~7 EUR baseline: a real figure, but a two-pixel sliver
+    // a real figure, but a two-pixel sliver
     const sliver: LedgerChain = {
       ...live,
       worlds: [
@@ -549,10 +524,9 @@ describe("SavingsLedgerWaterfall chart option", () => {
     const layout = waterfallLayout(sliver, "perSlot");
     const axis = waterfallAxis(layout);
     expect(o.series[1].data[CONTROL].value).toBeGreaterThan(layout.columns[CONTROL]!.span);
-    // a minimum, not a restatement: still a small fraction of the chart
     expect(o.series[1].data[CONTROL].value).toBeLessThan(axis.max * 0.1);
 
-    // ...but a contribution that genuinely moved nothing is still drawn as nothing
+    // a contribution that genuinely moved nothing is still drawn as nothing
     const zeroed: LedgerChain = {
       ...sliver,
       worlds: [
@@ -599,8 +573,7 @@ describe("SavingsLedgerWaterfall chart option", () => {
   it("gives every bar label full contrast, and an overspend label the danger colour", () => {
     colors.text = "#text";
     colors.danger = "#danger";
-    // no label is ever left to inherit the bar's own colour, and the overspend label is
-    // the one that differs
+    // no label inherits the bar's own colour
     const labels = option("periodAverage", liveOverspend).series[1].data.map(
       (d: any) => d.label.color
     );
@@ -614,25 +587,20 @@ describe("SavingsLedgerWaterfall chart option", () => {
     const savedLabels = option("periodAverage", saved).series[1].data.map(
       (d: any) => d.label.color
     );
-    // control is the only column whose sign differs between the two payloads
     expect(labels[3]).not.toBe(savedLabels[3]);
     expect(savedLabels[3]).toBe(savedLabels[1]);
   });
 
   it("colours an overspend apart from the palette and dashes the estimated columns", () => {
-    // the CSS-variable-backed colours (colors.self/grid/price/danger) all read back as
-    // "" under happy-dom, so this asserts on the two that don't: the battery palette,
-    // and the fact that an overspend column is NOT drawn in its normal palette colour.
+    // the CSS-variable-backed colours read back as "" under happy-dom, so this asserts on
+    // the battery palette and on an overspend column NOT keeping its palette colour
     const styles = option("periodAverage", liveOverspend).series[1].data.map(
       (d: any) => d.itemStyle
     );
     expect(styles[1].borderType).toBeUndefined(); // solar is measured
     expect(styles[2].borderType).toBe("dashed"); // battery: EUR 2.52, tall enough
-    // Control is EUR 0.41 on an EUR 8 axis - about 7px tall. A 1px dash on all four
-    // sides leaves almost no fill, and the bar reads as a dotted rule rather than a
-    // bar (seen in the browser), so short estimated bars are drawn solid. The
-    // "estimated" marker is still on the axis label, which is what ADR-011 rule 7
-    // actually requires; the outline is the redundant second channel.
+    // about 7px tall: a 1px dash on all four sides leaves almost no fill, so short
+    // estimated bars are drawn solid. The "estimated" marker is still on the axis label.
     expect(styles[3].borderType).toBeUndefined();
     expect(styles[2].color).toBe(batteryColor(0));
     expect(styles[3].color).not.toBe(batteryColor(1)); // control cost money here
@@ -645,30 +613,24 @@ describe("SavingsLedgerWaterfall chart option", () => {
     };
     const savedStyle = option("periodAverage", saved).series[1].data[3].itemStyle;
     expect(savedStyle.color).toBe(batteryColor(1));
-    // EUR 1.00 clears the height threshold, so this one keeps its dashed outline -
-    // the gate is the bar's rendered height, not "control is never dashed"
+    // clears the height threshold, so this one keeps its dashed outline: the gate is the
+    // bar's rendered height, not "control is never dashed"
     expect(savedStyle.borderType).toBe("dashed");
   });
 
-  // The overspend branch above only calls a loss a loss once the figure clears the
-  // period's own measurement noise (contributionBand). That reasoning is symmetric and
-  // the colouring was not: on the live payload the Control step rendered in the same
-  // saturated green as the solar and battery steps while the caption directly under it
-  // read "too small to call either way". Colour has to agree with the words, in both
-  // directions.
+  // The overspend branch only calls a loss a loss once the figure clears the period's own
+  // measurement noise. That reasoning is symmetric: colour has to agree with the words in
+  // both directions, so a saving too small to call must not be drawn as one either.
   it("drops the semantic colour from a contribution inside the noise band, either way", () => {
-    // colors.* read back as "" under happy-dom, which cannot tell muted from danger -
-    // set both to distinguishable values for this assertion and restore afterwards.
+    // happy-dom cannot tell muted from danger when both read back as ""
     colors.muted = "#muted";
     colors.danger = "#danger";
     {
-      // live's Control is -EUR 0.326 against an eurBand of EUR 0.625: a loss too small
-      // to call, which must not be drawn as one - and was not
+      // a loss too small to call, which must not be drawn as one
       const lossInside = option("perSlot", live).series[1].data[3].itemStyle;
       expect(lossInside.color).toBe("#muted");
 
-      // the same magnitude the other way: a SAVING too small to call, which must not be
-      // drawn as one either. Same band, sign flipped.
+      // the same magnitude the other way: a saving too small to call
       const gainInside: LedgerChain = {
         ...live,
         contributions: live.contributions.map((c) =>
@@ -677,8 +639,7 @@ describe("SavingsLedgerWaterfall chart option", () => {
       };
       expect(option("perSlot", gainInside).series[1].data[3].itemStyle.color).toBe("#muted");
 
-      // and a step that genuinely clears the band keeps its verdict: the synthesised
-      // overspend fixture still goes red, a saving that size still goes green
+      // a step that genuinely clears the band keeps its verdict
       expect(option("perSlot", liveOverspend).series[1].data[3].itemStyle.color).toBe("#danger");
       const gainOutside: LedgerChain = {
         ...liveOverspend,
@@ -708,8 +669,7 @@ describe("SavingsLedgerWaterfall chart option", () => {
     expect(battery).toContain("↓ €2.52");
     expect(battery).toContain("estimated");
     expect(battery).toContain("charge from surplus");
-    // the battery provenance strings belong to the info modal, which carries them in
-    // full - repeating them here made the tooltip a paragraph over the bar it described
+    // the battery provenance strings belong to the info modal, which carries them in full
     expect(battery).not.toContain("device-reported capacity");
     expect(battery).not.toContain("lowest observed SoC in history");
   });
