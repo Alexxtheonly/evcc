@@ -1159,6 +1159,21 @@
     },
     "hideLine": "Linie ausblenden",
     "modalTitle": "Vorhersage",
+    "optimizer": {
+      "legendBatteryCharge": "Netzladen der Batterie",
+      "legendBatteryDischarge": "Batterieentladung",
+      "legendBatterySoc": "{title} Ladestand (Prognose)",
+      "modeCharge": "Netzladen",
+      "modeHold": "Entladesperre",
+      "modeHoldcharge": "Ladesperre",
+      "modeNormal": "Normaler Betrieb",
+      "modeUnknown": "Kein Plan",
+      "planReadyBy": "{vehicle} geladen auf {soc}",
+      "reasonDamping": "wartet auf Bestätigung",
+      "reasonForcedIdle": "Batterien uneinig",
+      "reasonLiveRate": "Preis geändert",
+      "reasonPayback": "rechnet sich nicht"
+    },
     "price": {
       "average": "Durchschnitt",
       "constant": "Preis",
