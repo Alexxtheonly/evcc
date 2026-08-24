@@ -278,12 +278,23 @@ export default defineComponent({
 			ledger: null as SavingsLedger | null,
 			refusal: null as string | null,
 			loadError: null as string | null,
-			// guards the auto-clamp in fetch() (see its doc comment) to at most one retry
-			// per explicit navigation - reset to false everywhere this.win is reassigned
-			// by an explicit user action (page(), jumpToPresent(), the $route.query
-			// watcher), so a genuinely-empty clamped period doesn't retry forever, but a
-			// fresh navigation always gets one clamp attempt of its own.
-			hasAutoClamped: false,
+			// guard the two auto-clamps in fetch() (see their doc comments) to at most
+			// one retry each per explicit navigation - reset to false everywhere
+			// this.win is reassigned by an explicit user action (page(),
+			// jumpToPresent(), the $route.query watcher), so a genuinely-empty clamped
+			// period doesn't retry forever, but a fresh navigation always gets one
+			// attempt of each.
+			//
+			// SEPARATE flags, deliberately. They used to share one, and on this site the
+			// two clamps are SEQUENTIAL: the default window starts before the tariff
+			// history, so the 422 clamp fires first and consumed the only attempt - after
+			// which the chain clamp below never ran at all, and the user was left on a
+			// window whose diagram covered 254 of 635 slots with the strip reading "you
+			// paid EUR 4.60" against a real bill of EUR 34.69. They cannot loop into each
+			// other: clampWindowToEarliest strictly advances `from` and returns null when
+			// it cannot, and each flag still bounds its own clamp to one attempt.
+			hasClampedTariff: false,
+			hasClampedChain: false,
 			// monotonic request counter - see fetch(). Only the newest request may write
 			// ledger/refusal/loadError/loading, so two overlapping fetches (the date
 			// navigator clicked twice in quick succession) cannot resolve out of order and
@@ -421,7 +432,21 @@ export default defineComponent({
 		// divergent period gets the period's real figure named here instead of implied
 		// wrongly above.
 		diagramSubsetWarning(): string {
-			if (!this.ledger?.chain || !this.chainCoverageDivergence) return "";
+			const divergence = this.chainCoverageDivergence;
+			// MATERIALLY fewer, which the comment above has always claimed and the code
+			// never checked: coverageDivergence reports any difference at all, so a single
+			// dropped PV read (chain 669 of 672 slots against realised 670) raised a
+			// standing text-warning banner whose two euro figures differed by cents. Two
+			// percentage points of the period - about a slot an hour on a 7-day window -
+			// is the line: below it "you paid" above the diagram and the period's own bill
+			// are the same statement, and the caption already carries both coverages.
+			if (
+				!this.ledger?.chain ||
+				!divergence ||
+				divergence.headlineFraction - divergence.chainFraction <= 0.02
+			) {
+				return "";
+			}
 			return this.$t("forecast.savingsLedger.diagramSubsetWarning", {
 				pct: this.chainCoveragePct,
 				amount: this.fmtMoney(
@@ -551,7 +576,7 @@ export default defineComponent({
 					(win.from.getTime() !== this.win.from.getTime() ||
 						win.to.getTime() !== this.win.to.getTime())
 				) {
-					this.hasAutoClamped = false;
+					this.hasClampedTariff = this.hasClampedChain = false;
 					this.win = win;
 				}
 			},
@@ -575,11 +600,11 @@ export default defineComponent({
 			this.headline = value === "perSlot" ? "perSlot" : "periodAverage";
 		},
 		page(dir: 1 | -1) {
-			this.hasAutoClamped = false;
+			this.hasClampedTariff = this.hasClampedChain = false;
 			this.win = shiftWindow(this.win, dir, new Date());
 		},
 		jumpToPresent() {
-			this.hasAutoClamped = false;
+			this.hasClampedTariff = this.hasClampedChain = false;
 			this.win = defaultWindow(new Date());
 		},
 		async fetch() {
@@ -616,10 +641,10 @@ export default defineComponent({
 					// attempt per navigation. clampWindowToEarliest returns null when
 					// narrowing wouldn't honestly help, in which case the divergent period
 					// is rendered as-is with diagramSubsetWarning naming the real figure.
-					if (this.isAtPresent && !this.hasAutoClamped && ledger.chainEarliest) {
+					if (this.isAtPresent && !this.hasClampedChain && ledger.chainEarliest) {
 						const clamped = clampWindowToEarliest(this.win, ledger.chainEarliest);
 						if (clamped) {
-							this.hasAutoClamped = true;
+							this.hasClampedChain = true;
 							this.win = clamped;
 							return;
 						}
@@ -633,13 +658,13 @@ export default defineComponent({
 					// explicitly paged into the past and hits a genuine "before any data
 					// exists" refusal must see the honest refusal, never get silently
 					// redirected to a period they didn't ask for. Guarded to at most one
-					// attempt per explicit navigation (hasAutoClamped, reset by
+					// attempt per explicit navigation (hasClampedTariff, reset by
 					// page()/jumpToPresent()/the $route.query watcher) so a clamp that
 					// still can't produce a usable window doesn't retry forever.
-					if (this.isAtPresent && !this.hasAutoClamped && body?.earliest) {
+					if (this.isAtPresent && !this.hasClampedTariff && body?.earliest) {
 						const clamped = clampWindowToEarliest(this.win, body.earliest);
 						if (clamped) {
-							this.hasAutoClamped = true;
+							this.hasClampedTariff = true;
 							// don't also set refusal/ledger here: the deep watcher on win
 							// (below) fires fetch() again for the clamped window on its
 							// own - calling fetch() a second time here would double-request.

@@ -133,6 +133,42 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
     expect(secondCallParams.params.to).toBe("2026-08-24T00:00:00.000Z");
   });
 
+  // D1: the two clamps are SEQUENTIAL on this site - the default window starts before the
+  // tariff history AND before the battery was commissioned. They used to share one
+  // hasAutoClamped flag, so the 422 clamp consumed the only attempt and the chain clamp
+  // never ran: the user was left on the 635-slot window with the strip reading "you paid
+  // EUR 4.60" against a real bill of EUR 34.69. Exactly the live sequence, replayed.
+  test("clamps to the tariff start on a 422 and then again to chainEarliest on the 200", async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({
+        status: 422,
+        data: {
+          error: "no tariff data before 2026-08-17T20:30:00+02:00",
+          earliest: "2026-08-17T20:30:00+02:00",
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { ...ledgerStub, chainEarliest: "2026-08-21T12:45:00+02:00" },
+      })
+      .mockResolvedValueOnce({ status: 200, data: ledgerStub });
+
+    const wrapper = mountCard({
+      from: "2026-08-17T00:00:00.000Z",
+      to: "2026-08-24T00:00:00.000Z", // == NOW, so isAtPresent is true
+    });
+
+    await flushPromises(); // 1st (422) -> clamp to the tariff start
+    await flushPromises(); // 2nd (200, chainEarliest) -> clamp to the chain start
+    await flushPromises(); // 3rd (200)
+
+    expect(api.get).toHaveBeenCalledTimes(3);
+    const from = (i: number) => (vi.mocked(api.get).mock.calls[i]![1] as any).params.from;
+    expect(from(1)).toBe("2026-08-17T18:30:00.000Z"); // tariff start
+    expect(from(2)).toBe("2026-08-21T10:45:00.000Z"); // chain start
+    expect(wrapper.find('[data-testid="savings-ledger-content"]').exists()).toBe(true);
+  });
+
   test("never narrows to chainEarliest on a window the user explicitly paged to", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({
       status: 200,
@@ -446,6 +482,24 @@ describe("SavingsLedgerCard presentation", () => {
     expect(warning.exists()).toBe(true);
     expect(warning.text()).toContain("40.0%");
     expect(warning.text()).toContain("€34.69"); // what the period actually cost
+  });
+
+  // D7: "materially fewer" was the comment, "any difference at all" was the code. One
+  // dropped PV read is a difference; it is not a reason to raise a standing warning whose
+  // two euro figures differ by cents.
+  test("says nothing about a subset over a one-slot difference", async () => {
+    const barely = JSON.parse(JSON.stringify(liveSample));
+    barely.realised.coverage = { validSlots: 670, totalSlots: 672, fraction: 670 / 672 };
+    barely.chain.coverage = { validSlots: 669, totalSlots: 672, fraction: 669 / 672 };
+
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: barely });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="savings-ledger-diagram-subset"]').exists()).toBe(false);
+    // the caption still reports BOTH coverages - nothing is hidden, only the banner is
+    // held back until the two figures actually say different things
+    expect(wrapper.find('[data-testid="savings-ledger-caption"]').text()).toContain("99.6%");
   });
 
   test("says nothing about a subset when the diagram covers the same slots as the period", async () => {

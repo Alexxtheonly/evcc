@@ -942,10 +942,20 @@ func (site *Site) updateBatteryMeters() {
 		// the savings ledger's counterfactual battery otherwise has to fall back to
 		// "the lowest SoC this battery was ever run down to", which is a behaviour of
 		// the very controller the ledger audits (see deriveBatteryPhysicsUncached).
+		//
+		// A zero minimum is UNSET, not a configured floor of 0 % - the same convention
+		// site_optimizer.go's batteryDetail already applies to maxSoc. The capability is
+		// present whenever EITHER limit is configured (meter/usage_battery.go's
+		// batterySocLimits.Decorator only declines when both are zero), so a battery with
+		// maxsoc: 95 and no minsoc reports (0, 95); persisting that 0 would hand the
+		// ledger a floor of 0 % labelled "configured minimum SoC, device-reported" and
+		// let the counterfactual battery run the pack flat. On this site's own reference
+		// window that is worth EUR 0.38 on the Control contribution, and flips its sign.
 		if bsl, ok := api.Cap[api.BatterySocLimiter](dev.Instance()); ok {
-			minSoc, _ := bsl.GetSocLimits()
-			if err := c.SetMinSoc(minSoc / 100); err != nil {
-				site.log.ERROR.Printf("persist battery %d min soc: %v", i+1, err)
+			if minSoc, _ := bsl.GetSocLimits(); minSoc > 0 {
+				if err := c.SetMinSoc(minSoc / 100); err != nil {
+					site.log.ERROR.Printf("persist battery %d min soc: %v", i+1, err)
+				}
 			}
 		}
 	}

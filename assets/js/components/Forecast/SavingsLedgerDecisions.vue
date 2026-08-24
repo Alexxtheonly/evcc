@@ -130,6 +130,18 @@
 							</div>
 						</div>
 					</template>
+					<!-- D3: "the optimizer said nothing" is not "the optimizer agreed" - the
+					     same conflation N4 removed from the tick and the table cell, left
+					     behind in the panel that reads as authoritative. 35 of 59 rows on
+					     this site's own strip were no-suggestion rows, every one of them
+					     told "Nothing was vetoed in this slot." -->
+					<div
+						v-else-if="selected.outcome === 'no-suggestion'"
+						class="dc-line text-muted small"
+						data-testid="savings-ledger-decision-no-suggestion"
+					>
+						{{ $t("forecast.savingsLedger.decisions.outcome.noSuggestion") }}
+					</div>
 					<div
 						v-else
 						class="dc-line text-muted small"
@@ -394,9 +406,17 @@ export default defineComponent({
 	background: var(--evcc-red);
 }
 /* N4: "no optimizer run produced a suggestion for this slot" is its own state, not a
-   quieter kind of agreement - a hollow tick at the steady tick's height, so it reads as
-   present-but-empty rather than as either a veto or a match. */
+   quieter kind of agreement - a hollow tick, so it reads as present-but-empty rather than
+   as either a veto or a match.
+   D8: hollow alone did not survive the size it renders at. A 1px inset ring on a 5x8 box
+   leaves a 3x6 hole, which measured 54% of .tick--steady's ink with only 18 of 40 pixels
+   differing - a slightly paler solid block, on 59% of this site's strip. Shortening it to
+   3px puts it on the channel this strip already uses for significance (24px veto, 8px
+   steady) and takes it to 28% of the ink with 30 of 40 pixels differing. The legend
+   swatch is unaffected: .legend .lg's own height outranks this rule, so the swatch stays
+   14x9 and keeps the hollow ring that distinguishes it there. */
 .tick--no-suggestion {
+	height: 3px;
 	background: transparent;
 	box-shadow: inset 0 0 0 1px var(--evcc-gray);
 }

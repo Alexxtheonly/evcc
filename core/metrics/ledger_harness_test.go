@@ -93,8 +93,8 @@ func harnessFeedInStatic() *float64 {
 //     behaviour), which hands the counterfactual however much energy the real battery
 //     had accumulated while the ledger was not looking.
 //   - GapDelta instead CARRIES the measured battery's own state change across the
-//     unmeasured stretch onto the simulated SoC, preserving the simulation's own
-//     divergence.
+//     stretch the ledger could not price onto the simulated SoC, preserving the
+//     simulation's own divergence.
 type w2Anchoring struct {
 	Day, Gap, GapDelta bool
 }
@@ -362,16 +362,21 @@ func splitCSV(s string) []string {
 // shipped computeW2 at the anchoring policy production actually uses, so the comparison
 // table the harness prints cannot quietly become a table about a different simulator.
 // The fixture deliberately contains a gap, a midnight crossing and both charge and
-// discharge slots.
+// discharge slots - and three gaps in all, because the first one's carry lands inside
+// [floor, capacity] and so pins nothing about the bound: deleting the min(max(...)) from
+// either simulator left this test green. Gap two drives the carry below the floor
+// (simulated 1.22kWh, carry -2.17kWh) and gap three above capacity (0.5 + 9.6kWh), so
+// the bound is now exercised in both directions. It is the one part of the carry that
+// can absorb energy silently.
 func TestW2VariantMatchesProduction(t *testing.T) {
 	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0.05, MaxChargeKWh: 2, MaxDischargeKWh: 2}
 
 	loc := time.Now().Location()
 	base := time.Date(2026, 8, 4, 23, 30, 0, 0, loc)
-	socs := []float64{0.40, 0.55, 0.50, 0.20, 0.30}
-	starts := []time.Time{base, base.Add(15 * time.Minute), base.Add(30 * time.Minute), base.Add(90 * time.Minute), base.Add(105 * time.Minute)}
-	loads := []float64{0.5, 0, 1.5, 3.0, 0.2}
-	pvs := []float64{0, 2.5, 0, 0, 1.0}
+	socs := []float64{0.40, 0.55, 0.50, 0.20, 0.30, 0.02, 0.98}
+	starts := []time.Time{base, base.Add(15 * time.Minute), base.Add(30 * time.Minute), base.Add(90 * time.Minute), base.Add(105 * time.Minute), base.Add(165 * time.Minute), base.Add(225 * time.Minute)}
+	loads := []float64{0.5, 0, 1.5, 3.0, 0.2, 0, 0}
+	pvs := []float64{0, 2.5, 0, 0, 1.0, 0, 0}
 
 	slots := make([]slotData, len(socs))
 	for i := range socs {
@@ -391,4 +396,10 @@ func TestW2VariantMatchesProduction(t *testing.T) {
 	require.Equal(t, drift.Gaps, got.Gaps)
 	require.InDelta(t, drift.CarriedKWh, got.AnchorDeltaKWh, 1e-12)
 	require.InDelta(t, drift.FinalKWh, got.FinalDriftKWh, 1e-12)
+
+	// the fixture must keep BINDING the bound, or the equality above goes back to pinning
+	// nothing about it. Unbounded, the three carries would be -2.583, -3.194 and +9.600
+	// (sum +3.823); bounded at [0.5, 10] they are -2.583, -0.720 and +9.500.
+	require.Equal(t, 3, drift.Gaps)
+	require.InDelta(t, 6.197, drift.CarriedKWh, 1e-3)
 }

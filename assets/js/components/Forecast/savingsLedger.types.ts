@@ -85,8 +85,9 @@ export interface LedgerMeterResidual {
 
 /** core/metrics/ledger_worlds.go W2Drift: the counterfactual battery's energy
  * bookkeeping. carriedKWh is what it was handed across gaps in the record (the measured
- * pack's own movement while unmeasured, which the real bill receives too); finalKWh is
- * where it ended relative to the real pack. Both unpriced - see the Go doc comment. */
+ * pack's own movement across the slots the ledger could not price - which the real bill
+ * receives too); finalKWh is where it ended relative to the real pack. Both unpriced -
+ * see the Go doc comment. */
 export interface LedgerW2Drift {
   gaps: number;
   carriedKWh: number;

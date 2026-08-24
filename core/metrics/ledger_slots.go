@@ -229,10 +229,27 @@ type MeterResidual struct {
 	// comparison to be done by eye and it never was: on this site's own database a
 	// 1.345kWh residual sat under a -EUR 0.0664 Control figure the card rendered, in
 	// the danger colour, as "the controller cost you money" - an assertion 7x smaller
-	// than its own uncertainty. A band, not an error bar: the residual is a measured
-	// discrepancy, not a distribution, and pricing it at the mean rate is the
-	// cheapest honest way to put it on the same axis as the euros. A caller must treat
-	// a contribution smaller than this as "inside the noise", never as a direction.
+	// than its own uncertainty.
+	//
+	// It is a WORST-CASE UPPER BOUND, not an error bar, and deliberately so. Summing
+	// the unsigned per-slot residuals counts every slot's mismatch as if it pushed the
+	// contribution the same way; an error bar for INDEPENDENT per-slot errors would
+	// instead grow like sqrt(N)*sigma, which on the reference window (252 slots) is
+	// EUR 0.08 against this bound's EUR 1.26 - about 16x narrower. The independence
+	// that would justify it is not what this site's residuals show: their net drift is
+	// 0.776kWh where independent slots of the same size would average 0.231kWh, 3.4x
+	// smaller - they carry a systematic component, and the sqrt(N) band (EUR 0.08) is
+	// narrower than the drift already measured (EUR 0.27). Between a band that can
+	// withhold a true overspend claim and one that can manufacture a false one, this
+	// ledger takes the first: a false "the controller cost you money" is the most
+	// expensive wrong answer it can give. Callers must present it as what it is - a
+	// bound - and treat a contribution smaller than it as "inside the noise", never as
+	// a direction.
+	//
+	// Always a magnitude: a period whose mean grid price is negative still has a noise
+	// floor of some size, and a negative "band" would make every comparison against it
+	// meaningless (the UI's own Math.max saved it, no other consumer of this payload
+	// has one).
 	EurBand float64 `json:"eurBand"`
 }
 
@@ -252,7 +269,7 @@ func computeMeterResidual(slots []slotData) MeterResidual {
 
 	res := MeterResidual{SumKWh: sum, AbsSumKWh: abssum, Slots: len(slots)}
 	if n := len(slots); n > 0 {
-		res.EurBand = abssum * price / float64(n)
+		res.EurBand = abssum * math.Abs(price/float64(n))
 	}
 	return res
 }

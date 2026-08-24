@@ -538,6 +538,23 @@ func TestMeterResidualCarriesAEuroBand(t *testing.T) {
 	require.InDelta(t, 0.6, res.EurBand, 1e-9)
 }
 
+// D4: a band is a magnitude. A period whose mean grid price is negative (a long enough
+// run of negative-price slots is ordinary on a dynamic tariff) used to publish a NEGATIVE
+// eurBand, under a note calling it the floor "any figure smaller than is inside the
+// noise" - which every |contribution| clears, so every contribution reads as evidence.
+// The UI's own Math.max(ZERO_EPSILON_EUR, ...) hid it; no other consumer of
+// /api/savingsledger has one.
+func TestMeterResidualBandStaysPositiveUnderNegativePrices(t *testing.T) {
+	slots := []slotData{
+		{GridImportKWh: 2, HomeKWh: 1, PriceGrid: -0.20},
+		{GridImportKWh: 1, HomeKWh: 2, PriceGrid: -0.40},
+	}
+
+	res := computeMeterResidual(slots)
+	require.InDelta(t, 2, res.AbsSumKWh, 1e-9)
+	require.InDelta(t, 0.6, res.EurBand, 1e-9)
+}
+
 // TestEarliestChainSlotIsBoundedByEveryRequiredMeter is the N0 fix: EarliestTariffSlot is
 // not the earliest instant the chain can be computed for, and treating it as one produced
 // a default window where the realised figure covered 584 slots and the diagram 254 - with

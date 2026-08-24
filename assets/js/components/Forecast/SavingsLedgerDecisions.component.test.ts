@@ -134,6 +134,32 @@ describe("SavingsLedgerDecisions absent suggestions", () => {
     expect(cells[3]!.text()).toBe("—");
   });
 
+  // D3: the tick and the table cell got N4 right; the detail panel did not. Its v-else on
+  // isVeto() caught "steady" AND "no-suggestion", so clicking any of the 35-of-59 rows
+  // that recorded no suggestion showed "Nothing was vetoed in this slot." - the very
+  // sentence a genuine agreement gets, and the conflation N4 exists to remove.
+  test("the detail panel says the suggestion was absent, not that nothing was vetoed", async () => {
+    const wrapper = mountDecisions([noSuggestionRow]);
+
+    const detail = wrapper.find('[data-testid="savings-ledger-decision-detail"]');
+    expect(detail.exists()).toBe(true);
+    expect(wrapper.find('[data-testid="savings-ledger-decision-no-veto"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="savings-ledger-decision-no-suggestion"]').text()).toBe(
+      "no suggestion recorded"
+    );
+  });
+
+  test("a genuine agreement still says nothing was vetoed", async () => {
+    const wrapper = mountDecisions([{ ...noSuggestionRow, suggestedMode: "hold" }]);
+
+    expect(wrapper.find('[data-testid="savings-ledger-decision-no-suggestion"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.find('[data-testid="savings-ledger-decision-no-veto"]').text()).toBe(
+      "Nothing was vetoed in this slot."
+    );
+  });
+
   test("the same row folded to steady while the column could not say 'absent'", async () => {
     // the pre-N4 wire shape for the identical slot: "unknown" rather than absent
     const wrapper = mountDecisions([{ ...noSuggestionRow, suggestedMode: "unknown" }]);

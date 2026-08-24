@@ -4,9 +4,13 @@ import (
 	"testing"
 
 	"github.com/evcc-io/evcc/api"
+	"github.com/evcc-io/evcc/core/metrics"
+	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockBatteryPowerLimiter struct {
@@ -116,5 +120,49 @@ func TestBatteryMaxDischargePowerWithMinSoc(t *testing.T) {
 	site.updateBatteryMeters()
 	if res := site.GetBatteryMaxDischargePower(); assert.NotNil(t, res) {
 		assert.Equal(t, 0.0, *res)
+	}
+}
+
+// D2: api.BatterySocLimiter is decorated whenever EITHER limit is configured
+// (meter/usage_battery.go's batterySocLimits.Decorator only declines when both are zero),
+// so a battery with maxsoc and no minsoc reports a minimum of 0 - absence, not a
+// configured floor of 0 %. Persisting that 0 hands the savings ledger's counterfactual
+// battery a 0 % floor labelled "configured minimum SoC, device-reported" and lets it run
+// the pack flat: on this site's own reference window, EUR 0.38 on the Control
+// contribution, enough to flip its sign.
+func TestBatteryMinSocPersistedOnlyWhenConfigured(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	minSocFrac := func(name string) *float64 {
+		var row struct {
+			MinSocFrac *float64 `gorm:"column:min_soc_frac"`
+		}
+		require.NoError(t, db.Instance.Table("entities").
+			Select("min_soc_frac").Where("name = ?", name).Scan(&row).Error)
+		return row.MinSocFrac
+	}
+
+	site := &Site{log: util.NewLogger("foo"), collectors: map[string]*metrics.Collector{}}
+
+	for _, tc := range []struct {
+		name string
+		min  float64
+		want *float64
+	}{
+		{"maxonly", 0, nil},               // maxsoc: 95, no minsoc -> unset
+		{"configured", 5, lo.ToPtr(0.05)}, // minsoc: 5 -> a real floor
+	} {
+		c, err := metrics.NewCollector(metrics.Battery, tc.name, tc.name)
+		require.NoError(t, err)
+		site.collectors[tc.name] = c
+
+		m := &mockBatterySocLimiter{Meter: &mockMeter{}, soc: 50, min: tc.min, max: 95}
+		site.batteryMeters = []config.Device[api.Meter]{
+			config.NewStaticDevice[api.Meter](config.Named{Name: tc.name}, m),
+		}
+		site.updateBatteryMeters()
+
+		assert.Equal(t, tc.want, minSocFrac(tc.name), tc.name)
 	}
 }

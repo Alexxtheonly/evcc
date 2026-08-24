@@ -614,11 +614,19 @@ var ErrBatteryRateCeilingUnavailable = errors.New("no observed charge or dischar
 // first valid slot, and simulated from there. It is NOT re-anchored afterwards - see
 // computeW2 for why a re-anchor is an unpriced energy injection rather than a
 // correction. What it does do at a gap is CARRY the measured pack's own state change
-// across the unmeasured stretch (CarriedKWh), because the excluded slots are excluded
-// from W3 too and W3 still receives that energy implicitly, through the meter: its
-// post-gap import is lower because the real pack was filled during hours nobody priced.
-// Giving W2 the same movement, and nothing else, is what keeps the two worlds
-// comparable across a hole in the record.
+// across the stretch the ledger could not price (CarriedKWh), because the excluded slots
+// are excluded from W3 too and W3 still receives that energy implicitly, through the
+// meter: its post-gap import is lower because the real pack was filled during hours
+// nobody priced. Giving W2 the same movement, and nothing else, is what keeps the two
+// worlds comparable across a hole in the record.
+//
+// A gap is a stretch this ledger could not COMPUTE over, which is not the same thing as
+// a stretch nobody measured - and the note below used to say "unmeasured", which on this
+// site was simply untrue. The longest gap the reference window ever showed (25 hours)
+// has 94 battery rows and 87 grid/home rows behind it; it was dropped for want of a
+// feed-in price, and supplying the site's static feed-in price makes it disappear
+// entirely. The pack's movement across a gap is measured either way; what a gap lacks is
+// a price.
 type W2Drift struct {
 	// Gaps is the number of breaks in the otherwise-15-minute-contiguous slot series.
 	Gaps int `json:"gaps"`
@@ -639,7 +647,7 @@ type W2Drift struct {
 // note renders W2Drift into the chain's Notes (ADR-011 rule 7) - the numbers are
 // in the payload either way, but the note is the field every caller already renders.
 func (d W2Drift) note() string {
-	return fmt.Sprintf("counterfactual battery: anchored to the measured charge once, at the period's first slot, then simulated - across %d gap(s) in the record it was handed the %+.2fkWh the real pack itself moved while unmeasured (unpriced in this world exactly as it is in what you paid), and it ends the period %+.2fkWh from the real pack, energy neither cost figure values",
+	return fmt.Sprintf("counterfactual battery: anchored to the measured charge once, at the period's first slot, then simulated - across %d gap(s) in the record it was handed the %+.2fkWh the real pack itself moved during the slots this ledger could not price (unpriced in this world exactly as it is in what you paid), and it ends the period %+.2fkWh from the real pack, energy neither cost figure values",
 		d.Gaps, d.CarriedKWh, d.FinalKWh)
 }
 
@@ -653,22 +661,28 @@ func (d W2Drift) note() string {
 // the cure was worse: each re-anchor is an unpriced energy injection. Whatever the real
 // battery had accumulated while the ledger was not looking - and, worse, whatever the
 // audited controller had achieved that the dumb rule had not - was credited to the
-// counterfactual for free, and every free kWh is a kWh W2 never has to buy. On this
-// site's own database, over 166 slots (2026-08-21 12:45 to 2026-08-24 10:45), the
-// re-anchors injected 9.685kWh net - 24% of the period's whole load - and moved the
-// Control contribution from -EUR 0.28 to -EUR 0.62. A calendar-day reset in particular
-// has no defence at all: midnight is not a measurement event, and those two resets
-// alone were worth EUR 0.036.
+// counterfactual for free, and every free kWh is a kWh W2 never has to buy.
+//
+// Measured on this site's own database over the reference window (2026-08-21 12:45 to
+// 2026-08-24 10:45), UNDER THE CONFIGURATION THE ENDPOINT ACTUALLY RUNS: the site's
+// feed-in tariff is static, so server/http_savings_ledger_handler.go's staticFeedInPrice
+// hands ComputeLedger a EUR 0.00 feed-in price and 252 of the window's 280 slots are
+// priceable (90 %), not the 166 (59 %) a run without it sees. On those 252 slots the
+// re-anchors injected 9.963kWh - 17 % of the period's 58.8kWh load - and moved the
+// Control contribution from +EUR 0.24 to -EUR 0.95. That is a sign flip, not a shading:
+// the same period reads as the controller saving money or as it losing a euro, on this
+// choice alone. A calendar-day reset in particular has no defence at all: midnight is
+// not a measurement event, and those three resets alone were worth EUR 0.036.
 //
 // The half of the old behaviour that WAS defensible is kept, in isolation: at a gap,
-// the measured pack's own state change across the unmeasured stretch is carried onto
-// the simulated SoC. Those slots are excluded from every world, including W3 - but W3
-// is a meter reading, so it receives that energy anyway: its post-gap import is lower
-// because the real pack was charged during hours nobody priced. Free-running W2 would
-// receive none of it, which penalises the counterfactual and flatters the controller by
-// exactly that amount (on the same 166 slots: 6.03kWh, moving Control to +EUR 0.48).
-// Carrying the delta - rather than resetting to the measured level - gives W2 the same
-// unmeasured movement W3 got while preserving the simulation's own divergence, which is
+// the measured pack's own state change across the stretch the ledger could not price is
+// carried onto the simulated SoC. Those slots are excluded from every world, including
+// W3 - but W3 is a meter reading, so it receives that energy anyway: its post-gap import
+// is lower because the real pack was charged during hours nobody priced. Free-running W2
+// would receive none of it, which penalises the counterfactual and flatters the
+// controller by exactly that amount (on the same 252 slots: 4.263kWh, moving Control to
+// +EUR 0.60). Carrying the delta - rather than resetting to the measured level - gives
+// W2 the same movement W3 got while preserving the simulation's own divergence, which is
 // the counterfactual's entire point.
 //
 // soc_temp is recorded at SLOT START (see meter.SocTemp), so the pack's measured state
@@ -833,7 +847,7 @@ func noteFeedInStaticFallback(slots int, price float64) string {
 
 // noteMeterResidual, always present: points a reader at meterResidual rather than
 // leaving it to be found only by knowing the field exists.
-const noteMeterResidual = "meterResidual is the measured gap between this period's sources and sinks - see its own doc comment for why it is not expected to be zero; its eurBand is that gap priced at the period's mean grid rate, and any figure above smaller than it is inside the noise, not a direction"
+const noteMeterResidual = "meterResidual is the measured gap between this period's sources and sinks - see its own doc comment for why it is not expected to be zero. Its eurBand prices that whole gap at the period's mean grid rate, counting every slot's mismatch as if it pushed the same way: a deliberate worst case, about an order of magnitude wider than an error bar that assumed the slots were independent. any contribution smaller than that bound is inside the noise, not a direction"
 
 // allFeedInZero reports whether every slot's feed-in price is exactly 0 - see
 // noteFeedInZero.
