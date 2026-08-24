@@ -24,6 +24,7 @@ const colors: {
   pricePerKWh: string | null;
   price: string | null;
   co2: string | null;
+  danger: string | null;
   temperature: string | null;
   export: string | null;
   background: string | null;
@@ -42,6 +43,7 @@ const colors: {
   pricePerKWh: null,
   price: null,
   co2: null,
+  danger: null,
   temperature: null,
   export: null,
   background: null,
@@ -151,6 +153,7 @@ export function updateCssColors() {
   colors.grid = style.getPropertyValue("--evcc-grid");
   colors.price = style.getPropertyValue("--evcc-price");
   colors.co2 = style.getPropertyValue("--evcc-co2");
+  colors.danger = style.getPropertyValue("--bs-danger");
   colors.temperature = style.getPropertyValue("--evcc-temperature");
   colors.export = style.getPropertyValue("--evcc-export-contrast");
   colors.background = style.getPropertyValue("--evcc-background");

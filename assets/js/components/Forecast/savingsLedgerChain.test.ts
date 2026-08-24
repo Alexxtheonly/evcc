@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vite-plus/test";
 import {
-  chainSegments,
-  drawnSegments,
-  chainBarLayout,
   coverageDivergence,
   isControlOverspend,
   alignToSlotStart,
@@ -13,7 +10,6 @@ import {
   clampWindowToEarliest,
   pickSettled,
   ZERO_EPSILON_EUR,
-  type ChainSegment,
 } from "./savingsLedgerChain";
 import type { LedgerChain, LedgerCoverage } from "./savingsLedger.types";
 
@@ -42,175 +38,6 @@ function baseChain(overrides: Partial<LedgerChain> = {}): LedgerChain {
   };
 }
 
-describe("chainSegments", () => {
-  it("splits Control into routing+timing at the perSlot headline, summing to Control.perSlot", () => {
-    const chain = baseChain({
-      batteryPhysics: { capacityKWh: 19.3 } as any,
-      control: { full: 3.42, routing: 0.32, timing: 3.1 },
-    });
-    const segs = chainSegments(chain, "perSlot");
-    expect(segs.map((s) => s.key)).toEqual(["pv", "battery", "routing", "timing"]);
-    const routing = segs.find((s) => s.key === "routing")!;
-    const timing = segs.find((s) => s.key === "timing")!;
-    expect(routing.eur + timing.eur).toBeCloseTo(3.42, 5);
-  });
-
-  it("does not split Control at the periodAverage headline - routing+timing don't sum to it", () => {
-    const chain = baseChain({
-      batteryPhysics: { capacityKWh: 19.3 } as any,
-      control: { full: 3.42, routing: 0.32, timing: 3.1 },
-    });
-    const segs = chainSegments(chain, "periodAverage");
-    expect(segs.map((s) => s.key)).toEqual(["pv", "battery", "control"]);
-    expect(segs.find((s) => s.key === "control")!.eur).toBeCloseTo(0.32, 5);
-  });
-
-  it("marks PV measured and Battery/Control estimated when battery physics is present", () => {
-    const chain = baseChain({
-      batteryPhysics: { capacityKWh: 19.3 } as any,
-      control: { full: 3.42, routing: 0.32, timing: 3.1 },
-    });
-    const segs = chainSegments(chain, "perSlot");
-    expect(segs.find((s) => s.key === "pv")!.kind).toBe("measured");
-    expect(segs.find((s) => s.key === "battery")!.kind).toBe("estimated");
-    expect(segs.find((s) => s.key === "routing")!.kind).toBe("estimated");
-  });
-
-  it("renders the battery segment as zero-kind, not estimated, when there is no battery", () => {
-    const chain = baseChain({
-      contributions: [
-        { label: "PV", settled: settled(30.33) },
-        { label: "Battery", settled: settled(0) },
-      ],
-    });
-    const segs = chainSegments(chain, "perSlot");
-    expect(segs).toHaveLength(2); // pv + battery, no routing/timing (no control at all)
-    expect(segs.find((s) => s.key === "battery")!.kind).toBe("zero");
-  });
-
-  it("flags overspend only below the negative zero epsilon - a NEGATIVE contribution means this measure cost money", () => {
-    const chain = baseChain({
-      contributions: [
-        { label: "PV", settled: settled(-0.5) }, // PV made things worse this period
-        { label: "Battery", settled: settled(-0.001) }, // sub-epsilon, renders as zero regardless of sign
-      ],
-    });
-    const segs = chainSegments(chain, "perSlot");
-    expect(segs.find((s) => s.key === "pv")).toMatchObject({ overspend: true, kind: "measured" });
-    expect(segs.find((s) => s.key === "battery")).toMatchObject({
-      overspend: false,
-      kind: "zero",
-    });
-    expect(Math.abs(-0.001)).toBeLessThan(ZERO_EPSILON_EUR);
-  });
-
-  it("a positive (savings) contribution is never flagged overspend", () => {
-    const chain = baseChain();
-    const segs = chainSegments(chain, "periodAverage");
-    expect(segs.every((s) => !s.overspend)).toBe(true);
-  });
-});
-
-describe("drawnSegments", () => {
-  it("excludes zero-kind segments from the bar geometry", () => {
-    const chain = baseChain({
-      contributions: [
-        { label: "PV", settled: settled(30.33) },
-        { label: "Battery", settled: settled(0) },
-      ],
-    });
-    const segs = chainSegments(chain, "perSlot");
-    expect(drawnSegments(segs).map((s) => s.key)).toEqual(["pv"]);
-  });
-});
-
-describe("chainBarLayout", () => {
-  it("all-savings period: parts sum exactly to W0, residual matches paid", () => {
-    const chain = baseChain({
-      batteryPhysics: { capacityKWh: 19.3 } as any,
-      control: { full: 3.42, routing: 0.32, timing: 3.1 },
-    });
-    const segs = chainSegments(chain, "perSlot");
-    const w0 = chain.worlds[0]!.settled.perSlot; // 44.24
-    const paid = chain.worlds[3]!.settled.perSlot; // 2.83
-    const layout = chainBarLayout(segs, w0)!;
-    expect(layout.parts).toHaveLength(4);
-    // every part is drawn forward (savings), so x0/x1 are monotonically increasing
-    let prevX1 = 0;
-    for (const p of layout.parts) {
-      expect(p.x0).toBeCloseTo(prevX1, 6);
-      expect(p.overspend).toBe(false);
-      prevX1 = p.x1;
-    }
-    expect(layout.residualX0).toBeCloseTo(prevX1, 6);
-    expect(layout.residualX0 + layout.residualWidth).toBeCloseTo(1, 6);
-    expect(layout.residualWidth * w0).toBeCloseTo(paid, 2);
-  });
-
-  it("a lossy period: the overspend segment draws backward, and everything still sums to exactly W0", () => {
-    // the mockup's own "week the control loop lost money" dataset, converted to the
-    // real API's sign convention (positive = savings): W0=44.24, PV=+30.33,
-    // Battery=+7.66, Routing=+0.15, Timing=-0.95 (a genuine overspend) -> paid=7.05
-    const chain: LedgerChain = {
-      worlds: [
-        { label: "W0", settled: settled(44.24) },
-        { label: "W1", settled: settled(13.91) },
-        { label: "W2", settled: settled(6.25) },
-        { label: "W3", settled: settled(7.05) },
-      ],
-      contributions: [
-        { label: "PV", settled: settled(30.33) },
-        { label: "Battery", settled: settled(7.66) },
-        { label: "Control", settled: settled(-0.8, 0.15) }, // full = routing+timing = 0.15-0.95
-      ],
-      coverage: { validSlots: 672, totalSlots: 672, fraction: 1 },
-      meterResidual: { sumKWh: 0, absSumKWh: 0, slots: 672 },
-      batteryPhysics: { capacityKWh: 19.3 } as any,
-      control: { full: -0.8, routing: 0.15, timing: -0.95 },
-    };
-    const segs = chainSegments(chain, "perSlot");
-    const timing = segs.find((s) => s.key === "timing")!;
-    expect(timing.overspend).toBe(true);
-
-    const w0 = 44.24;
-    const paid = 7.05;
-    const layout = chainBarLayout(segs, w0)!;
-    const timingPart = layout.parts.find((p) => p.key === "timing")!;
-    // drawn backward: its width still equals |eur|/W0, but x0 < x1 always (min/max), and
-    // it does NOT extend the cursor forward the way a savings segment would
-    expect(timingPart.x1 - timingPart.x0).toBeCloseTo(0.95 / w0, 6);
-
-    // the whole-bar identity: every drawn part's width plus the residual sums to
-    // exactly 1 (=W0), never W0 + 2x|overspend| the way the mockup's own geometry does
-    const cumulative = layout.residualX0;
-    expect(cumulative).toBeCloseTo((w0 - paid) / w0, 6);
-    expect(layout.residualWidth).toBeCloseTo(paid / w0, 6);
-    expect(cumulative + layout.residualWidth).toBeCloseTo(1, 6);
-  });
-
-  it("returns null for a non-positive W0 (no meaningful bar)", () => {
-    expect(chainBarLayout([], 0)).toBeNull();
-    expect(chainBarLayout([], -1)).toBeNull();
-  });
-
-  it("net-credit period (Σcontributions > totalCostW0, paid < 0): residualWidth clamps to 0 without throwing", () => {
-    // synthetic, not reachable from this site's real data (€0 feed-in), but the clamp
-    // at Math.max(0, 1 - cumulative) exists for exactly this case and had zero test
-    // coverage of any kind before this one - UAT-identified gap.
-    const segments: ChainSegment[] = [
-      { key: "pv", eur: 8, kind: "measured", overspend: false },
-      { key: "battery", eur: 5, kind: "estimated", overspend: false },
-    ];
-    const w0 = 10; // Σcontributions (13) > w0 (10) -> paid = w0 - 13 = -3, a net credit
-    expect(() => chainBarLayout(segments, w0)).not.toThrow();
-    const layout = chainBarLayout(segments, w0);
-    expect(layout).not.toBeNull();
-    expect(layout!.residualWidth).toBe(0);
-    // the parts themselves are untouched by the clamp - only the residual is
-    expect(layout!.residualX0).toBeCloseTo(1.3, 6);
-  });
-});
-
 describe("isControlOverspend", () => {
   it("is false when Control is positive (savings) or absent", () => {
     expect(isControlOverspend(baseChain(), "perSlot")).toBe(false);
@@ -232,6 +59,20 @@ describe("isControlOverspend", () => {
     });
     expect(isControlOverspend(chain, "perSlot")).toBe(true);
     expect(isControlOverspend(chain, "periodAverage")).toBe(true);
+  });
+
+  it("does not call a sub-epsilon negative an overspend - that is rounding, not a loss", () => {
+    const chain = baseChain({
+      contributions: [{ label: "Control", settled: settled(-(ZERO_EPSILON_EUR / 2)) }],
+    });
+    expect(isControlOverspend(chain, "perSlot")).toBe(false);
+    // one cent, comfortably clear of the epsilon, is a loss
+    expect(
+      isControlOverspend(
+        baseChain({ contributions: [{ label: "Control", settled: settled(-0.01) }] }),
+        "perSlot"
+      )
+    ).toBe(true);
   });
 });
 
@@ -310,7 +151,10 @@ describe("ceilToSlotStart", () => {
 });
 
 describe("clampWindowToEarliest", () => {
-  const win = { from: new Date("2026-08-17T00:00:00.000Z"), to: new Date("2026-08-24T00:00:00.000Z") };
+  const win = {
+    from: new Date("2026-08-17T00:00:00.000Z"),
+    to: new Date("2026-08-24T00:00:00.000Z"),
+  };
 
   it("clamps from forward to the ceiling-aligned earliest, keeping to unchanged", () => {
     const clamped = clampWindowToEarliest(win, "2026-08-21T12:30:00+02:00");

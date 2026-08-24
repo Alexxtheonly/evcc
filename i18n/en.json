@@ -1182,32 +1182,48 @@
     },
     "priceZoom": "zoom in",
     "savingsLedger": {
+      "axis": {
+        "baseline": "baseline",
+        "battery": "battery",
+        "control": "control",
+        "paid": "you paid",
+        "pv": "solar"
+      },
       "chain": {
+        "baseline": {
+          "label": "Without solar, battery or control",
+          "sub": "every kWh the home used, priced at the grid tariff for the slot it was used in"
+        },
         "battery": {
           "label": "Battery, dumb rule",
           "sub": "charge from surplus, discharge to house load, never from grid"
         },
         "control": {
           "label": "Control",
-          "sub": "the real controller against the dumb-rule default, at the period-average price"
+          "sub": "the real controller against the dumb-rule default"
+        },
+        "paid": {
+          "label": "You paid",
+          "sub": "grid import at the settled price - the only figure your invoice can confirm"
         },
         "pv": {
           "label": "PV, used directly and exported",
           "sub": "self-consumption priced at each slot's own rate, export at the realised feed-in price"
         },
         "routing": {
-          "label": "Routing",
-          "sub": "which sink the surplus went to, against the dumb-rule default"
+          "label": "Routing"
         },
         "timing": {
-          "label": "Price timing",
-          "sub": "when energy was bought, sold or shifted, priced per slot"
+          "label": "Price timing"
         }
       },
-      "chainCaption": "Every euro below is the same euro. Each measure removes a slice from the top; what is left at the bottom is the bill.",
       "chainUnavailable": "The battery-vs-baseline comparison isn't available for this period: {reason}",
-      "coverage": "Computed over {pct} of slots ({valid} of {total}). Excluded slots are dropped, never scaled up to cover the gap.",
-      "coverageChainDiverges": "The chart below is computed over {pct} of slots - fewer than the headline above, because it also needs battery and vehicle data the grid-only figure doesn't.",
+      "chartAria": "Waterfall diagram: {start} without solar, battery or control, stepping down through what each measure did, to {end} actually paid.",
+      "controlOverspendShort": "control cost {amount} against its baseline",
+      "coverageChainDiverges": "The diagram is computed over {pct} of slots - fewer than the headline figures, because it also needs battery and vehicle data the grid-only figure doesn't.",
+      "coverageChainDivergesShort": "diagram over {pct}",
+      "coverageExcluded": "Excluded slots are dropped, never scaled up to cover the gap.",
+      "coverageShort": "{pct} of slots ({valid} of {total})",
       "decisions": {
         "applied": "Applied",
         "delta": "Slot-local delta",
@@ -1237,24 +1253,36 @@
         "title": "Per-slot decisions",
         "unhealthyCount": "{count} of these vetoes were recorded while the optimizer was unhealthy."
       },
+      "details": {
+        "cost": "cost you",
+        "saved": "saved",
+        "wouldHaveCost": "would have cost",
+        "youPaid": "you paid"
+      },
       "estimated": "estimated",
+      "estimatedCaption": "battery and control are estimated",
+      "evTimingShort": "Moving a car charge to a cheaper hour counts as nothing here.",
       "headline": {
         "label": "Settlement",
         "periodAverage": "period average",
         "perSlot": "per-slot"
       },
-      "headlineFootnote": "At {otherLabel} settlement this period would have been {other}.",
-      "heroLabel": "Grid bill for this period, at the {headline} price",
+      "info": {
+        "end": "The last bar is what was actually paid to the grid.",
+        "estimates": "Solar is measured. Battery and control are estimated: they simulate what a plain \"charge from surplus, discharge to the house\" battery would have done over the same measured energy, on these assumptions.",
+        "physicsCapacity": "Capacity {value} - {source}.",
+        "physicsEta": "One-way efficiency {charge} charging, {discharge} discharging - {source}.",
+        "physicsFloor": "Discharge floor {value} - {source}.",
+        "start": "The first bar is what this period's electricity would have cost with no solar, no battery and no control: every kWh the home used, priced at the grid tariff for the slot it was used in.",
+        "steps": "Each step after it removes what one measure saved, so the bar descends. A step that raised the bill is drawn upward and coloured red - shown, never clamped to zero. On the three middle bars, ↓ is what the measure took off the bill and ↑ is what it added; the first and last bars are totals, printed plain.",
+        "title": "How this is worked out"
+      },
       "loading": "Loading the savings ledger…",
-      "lossBanner": "This period the control loop cost more than the dumb-rule baseline it's compared against. Shown, not clamped.",
       "measured": "measured",
-      "notesTitle": "Notes",
+      "notesTitle": "Technical notes",
       "periodJumpToPresent": "Jump to now",
       "refuseTitle": "No figure for this period",
-      "stillPaid": "Still paid",
-      "stillPaidSub": "grid import at the settled price - the only figure your invoice can confirm",
-      "title": "What the system did with your money",
-      "withoutAnything": "Without PV, battery or control"
+      "title": "What the system did with your money"
     },
     "showLine": "show line",
     "solar": {
