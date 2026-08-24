@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -755,7 +756,7 @@ func (site *Site) updatePvMeters() {
 	}
 
 	mm, failed := site.collectMeters("pv", site.pvMeters)
-	anyFailed := lo.Contains(failed, true)
+	anyFailed := slices.Contains(failed, true)
 
 	for i, dev := range site.pvMeters {
 		meter := dev.Instance()
@@ -822,7 +823,7 @@ func (site *Site) updateBatteryMeters() {
 	}
 
 	mm, failed := site.collectMeters("battery", site.batteryMeters)
-	anyFailed := lo.Contains(failed, true)
+	anyFailed := slices.Contains(failed, true)
 
 	var maxDischargePower float64
 	for i, dev := range site.batteryMeters {

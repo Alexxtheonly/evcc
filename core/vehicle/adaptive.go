@@ -7,7 +7,6 @@ import (
 
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/keys"
-	"github.com/evcc-io/evcc/core/session"
 	"github.com/evcc-io/evcc/server/db/settings"
 )
 
@@ -130,61 +129,6 @@ func (v *adapter) SetAdaptivePlanLearning(enabled bool) error {
 
 	if !enabled {
 		return v.SetAdaptivePlans(nil)
-	}
-
-	v.publish()
-
-	return nil
-}
-
-// expectedArrivalStore is the persisted learned expected-arrival prediction. The
-// timestamp is always stamped server-side on write, mirroring adaptivePlanStore.
-type expectedArrivalStore struct {
-	Updated time.Time `json:"updated"`
-	session.ExpectedArrival
-}
-
-// SetExpectedArrival stores the learned expected-arrival prediction; the zero value
-// clears it.
-func (v *adapter) SetExpectedArrival(arrival session.ExpectedArrival) error {
-	if err := settings.SetJson(v.key()+keys.ExpectedArrival, expectedArrivalStore{
-		Updated:         time.Now(),
-		ExpectedArrival: arrival,
-	}); err != nil {
-		return err
-	}
-
-	v.publish()
-
-	return nil
-}
-
-// GetExpectedArrival returns the stored expected-arrival prediction and its update time
-func (v *adapter) GetExpectedArrival() (session.ExpectedArrival, time.Time) {
-	var store expectedArrivalStore
-
-	if err := settings.Json(v.key()+keys.ExpectedArrival, &store); err != nil {
-		return session.ExpectedArrival{}, time.Time{}
-	}
-
-	return store.ExpectedArrival, store.Updated
-}
-
-// GetExpectedArrivalLearning returns whether an absent vehicle's return is predicted
-// from session history
-func (v *adapter) GetExpectedArrivalLearning() bool {
-	res, err := settings.Bool(v.key() + keys.ExpectedArrivalLearning)
-	return err == nil && res
-}
-
-// SetExpectedArrivalLearning enables or disables predicting an absent vehicle's return
-// from session history. Disabling clears the stored prediction so it stops influencing
-// the optimizer immediately.
-func (v *adapter) SetExpectedArrivalLearning(enabled bool) error {
-	settings.SetBool(v.key()+keys.ExpectedArrivalLearning, enabled)
-
-	if !enabled {
-		return v.SetExpectedArrival(session.ExpectedArrival{})
 	}
 
 	v.publish()
