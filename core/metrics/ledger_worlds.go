@@ -557,7 +557,17 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 //     headroom, the grid. Never discharges.
 //   - holdcharge: hold's "never discharge" combined with charge's "still absorb
 //     surplus", but never draws from the grid - the charge half is surplus-only.
-func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow, chargeKWh, dischargeKWh float64) {
+//
+// ok is false when mode is not one of the four modeled above, in which case every
+// other return value is zero and MUST NOT be priced. There is no "close enough"
+// fallback here on purpose: a fifth api.BatteryMode, or a typo on the write path,
+// silently replayed as normal would produce a confident euro figure for a decision
+// this model does not understand - and two DIFFERENT unrecognised modes would both
+// fall through to the same branch and report exactly EUR 0.00, rendering "we cannot
+// price this" as "this cost nothing" (ADR-011 rule 3, see DecisionRow's doc comment).
+// Callers that fold "" / "unknown" into normal must do so before calling (see
+// effectiveMode); this function only understands the four real modes.
+func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryPhysics) (newSocKWh float64, flow worldFlow, chargeKWh, dischargeKWh float64, ok bool) {
 	surplus := max(0, pvKWh-homeKWh)
 	deficit := max(0, homeKWh-pvKWh)
 	floorKWh := phys.FloorFrac * phys.CapacityKWh
@@ -566,29 +576,32 @@ func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryP
 
 	switch mode {
 	case batteryModeHold:
-		return socKWh, worldFlow{ImportKWh: deficit, ExportKWh: surplus}, 0, 0
+		return socKWh, worldFlow{ImportKWh: deficit, ExportKWh: surplus}, 0, 0, true
 
 	case batteryModeCharge:
 		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC)
 		fromSurplus := min(chargeAC, surplus)
 		fromGrid := chargeAC - fromSurplus
 		newSoc := socKWh + chargeAC*phys.EtaC
-		return newSoc, worldFlow{ImportKWh: deficit + fromGrid, ExportKWh: max(0, surplus-fromSurplus)}, chargeAC, 0
+		return newSoc, worldFlow{ImportKWh: deficit + fromGrid, ExportKWh: max(0, surplus-fromSurplus)}, chargeAC, 0, true
 
 	case batteryModeHoldCharge:
 		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
 		newSoc := socKWh + chargeAC*phys.EtaC
-		return newSoc, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, chargeAC, 0
+		return newSoc, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, chargeAC, 0, true
 
-	default: // batteryModeNormal, and the fallback for any unrecognised mode string
+	case batteryModeNormal:
 		if surplus > 0 {
 			chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
 			newSoc := socKWh + chargeAC*phys.EtaC
-			return newSoc, worldFlow{ExportKWh: surplus - chargeAC}, chargeAC, 0
+			return newSoc, worldFlow{ExportKWh: surplus - chargeAC}, chargeAC, 0, true
 		}
 		dischargeAC := min(phys.MaxDischargeKWh, availableKWh*phys.EtaD, deficit)
 		newSoc := socKWh - dischargeAC/phys.EtaD
-		return newSoc, worldFlow{ImportKWh: deficit - dischargeAC}, 0, dischargeAC
+		return newSoc, worldFlow{ImportKWh: deficit - dischargeAC}, 0, dischargeAC, true
+
+	default:
+		return 0, worldFlow{}, 0, 0, false
 	}
 }
 
@@ -716,7 +729,8 @@ func computeW2(slots []slotData, phys batteryPhysics) ([]worldFlow, W2Drift, err
 			socKWh = carried
 		}
 
-		newSoc, flow, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
+		// mode is a package constant, so ok is always true here
+		newSoc, flow, _, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
 		socKWh = newSoc
 		out[i] = flow
 		prevStart = s.Start

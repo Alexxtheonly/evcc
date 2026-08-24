@@ -245,7 +245,8 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	phys := batteryPhysics{CapacityKWh: 10, EtaC: 0.9, EtaD: 0.9, FloorFrac: 0, MaxChargeKWh: 100, MaxDischargeKWh: 100}
 
 	t.Run("hold never moves energy", func(t *testing.T) {
-		soc, flow, charge, discharge := simulateSlotStep(batteryModeHold, 2, 5, 5, phys)
+		soc, flow, charge, discharge, ok := simulateSlotStep(batteryModeHold, 2, 5, 5, phys)
+		require.True(t, ok)
 		require.InDelta(t, 5, soc, 1e-9)
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
 		require.InDelta(t, 3, flow.ExportKWh, 1e-9) // 5-2 surplus goes straight to export
@@ -254,7 +255,8 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	})
 
 	t.Run("normal charges from surplus only", func(t *testing.T) {
-		soc, flow, charge, discharge := simulateSlotStep(batteryModeNormal, 1, 3, 5, phys)
+		soc, flow, charge, discharge, ok := simulateSlotStep(batteryModeNormal, 1, 3, 5, phys)
+		require.True(t, ok)
 		require.InDelta(t, 5+2*0.9, soc, 1e-9) // 2kWh surplus, all absorbed (headroom is 5kWh)
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
 		require.InDelta(t, 0, flow.ExportKWh, 1e-9)
@@ -263,7 +265,8 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	})
 
 	t.Run("normal discharges to cover a deficit only", func(t *testing.T) {
-		soc, flow, charge, discharge := simulateSlotStep(batteryModeNormal, 4, 1, 5, phys)
+		soc, flow, charge, discharge, ok := simulateSlotStep(batteryModeNormal, 4, 1, 5, phys)
+		require.True(t, ok)
 		// deficit 3kWh, available 5kWh*0.9=4.5kWh AC deliverable, so fully covered
 		require.InDelta(t, 5-3/0.9, soc, 1e-9)
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
@@ -272,7 +275,8 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	})
 
 	t.Run("charge forces grid import beyond surplus", func(t *testing.T) {
-		soc, flow, charge, discharge := simulateSlotStep(batteryModeCharge, 1, 0, 0, phys)
+		soc, flow, charge, discharge, ok := simulateSlotStep(batteryModeCharge, 1, 0, 0, phys)
+		require.True(t, ok)
 		// no surplus at all, but charge mode still fills headroom (10kWh) from grid -
 		// the AC-side charge is headroom/eta so that, after eta, the DC store lands
 		// exactly at capacity; the 1kWh deficit is still bought separately
@@ -285,10 +289,47 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	})
 
 	t.Run("holdcharge never draws from the grid", func(t *testing.T) {
-		_, flow, charge, discharge := simulateSlotStep(batteryModeHoldCharge, 1, 0, 0, phys)
+		_, flow, charge, discharge, ok := simulateSlotStep(batteryModeHoldCharge, 1, 0, 0, phys)
+		require.True(t, ok)
 		require.InDelta(t, 1, flow.ImportKWh, 1e-9) // the deficit is bought, nothing more
 		require.Zero(t, charge)
 		require.Zero(t, discharge)
+	})
+
+	// an unrecognised mode used to land in the same branch as normal and be priced as
+	// if it were normal. Two DIFFERENT unrecognised modes therefore produced identical
+	// flows and a delta of exactly zero - "we do not understand this decision" rendered
+	// as "this decision cost nothing". Refusing is the only honest answer.
+	t.Run("an unmodelled mode is refused, not replayed as normal", func(t *testing.T) {
+		soc, flow, charge, discharge, ok := simulateSlotStep("supercharge", 1, 3, 5, phys)
+		require.False(t, ok)
+		require.Zero(t, soc)
+		require.Equal(t, worldFlow{}, flow)
+		require.Zero(t, charge)
+		require.Zero(t, discharge)
+
+		// and it must NOT coincide with what normal would have produced, which is
+		// exactly how the old default branch hid itself. An empty pack with a 4kWh
+		// deficit is the clearest separator: normal buys the deficit, the refusal
+		// returns a zero flow that must never reach settleFlows.
+		_, normalFlow, _, _, normalOk := simulateSlotStep(batteryModeNormal, 4, 0, 0, phys)
+		require.True(t, normalOk)
+		require.InDelta(t, 4, normalFlow.ImportKWh, 1e-9)
+
+		_, refusedFlow, _, _, refusedOk := simulateSlotStep("supercharge", 4, 0, 0, phys)
+		require.False(t, refusedOk)
+		require.NotEqual(t, normalFlow, refusedFlow)
+	})
+
+	// callers fold ""/"unknown" to normal before calling (see effectiveMode); this
+	// function itself models the four real modes and nothing else
+	t.Run("the absence spellings are the callers' job to fold, not this function's", func(t *testing.T) {
+		for _, mode := range []string{"", batteryModeUnknown} {
+			_, _, _, _, ok := simulateSlotStep(mode, 1, 3, 5, phys)
+			require.False(t, ok, mode)
+		}
+		require.Equal(t, batteryModeNormal, effectiveMode(""))
+		require.Equal(t, batteryModeNormal, effectiveMode(batteryModeUnknown))
 	})
 }
 

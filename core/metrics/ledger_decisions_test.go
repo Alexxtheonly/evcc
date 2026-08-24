@@ -303,3 +303,67 @@ func TestDecisionDeltasDecodesLegacyUnknownSuggestion(t *testing.T) {
 	require.Nil(t, rows[1].SuggestedMode, `a stored "unknown" is the legacy spelling of absence, not a mode`)
 	require.Nil(t, rows[1].SlotFlowDeltaEUR, "there is no rejected alternative to price here either")
 }
+
+// TestDecisionDeltasRefusesUnmodelledModes pins the failure the fold used to hide.
+// DecisionDeltas gated on effectiveMode (folded) but simulated on the raw column, and
+// simulateSlotStep's default branch priced anything it did not recognise as normal.
+// Two different unrecognised modes therefore produced identical flows and a delta of
+// exactly EUR 0.00 - a confident figure asserting the veto was free, on a decision
+// nothing in the package can model. A fifth api.BatteryMode, or a typo on the write
+// path, would land here on a live site. ADR-011 rule 3: absence is never a sentinel.
+func TestDecisionDeltasRefusesUnmodelledModes(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	base := time.Date(2026, 8, 17, 12, 0, 0, 0, loc)
+	g, f := 0.40, 0.05
+	socPct := 50.0
+
+	// slot 0: both sides unrecognised AND different - the case that reported EUR 0.00.
+	// slot 1: only the suggestion is unrecognised. slot 2: only the applied mode is.
+	// slot 3: a real veto, the control that must still be priced.
+	modes := [][2]string{
+		{"supercharge", "megahold"},
+		{batteryModeHold, "supercharge"},
+		{"supercharge", batteryModeCharge},
+		{batteryModeHold, batteryModeCharge},
+	}
+	for i, m := range modes {
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+		require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+		require.NoError(t, persist(bat, ts, 0, 0, &socPct, false, false))
+		require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+		require.NoError(t, PersistControlSlot(ts, m[0], ptrMode(m[1]), "", true, nil))
+	}
+
+	from, to := base, base.Add(time.Hour)
+	set, err := buildLedgerSlots(context.Background(), from, to, true, true, nil)
+	require.NoError(t, err)
+	phys, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+
+	rows, err := DecisionDeltas(context.Background(), from, to, set, &phys)
+	require.NoError(t, err)
+	require.Len(t, rows, 4)
+
+	require.Nil(t, rows[0].SlotFlowDeltaEUR, "two unmodelled modes must not settle at EUR 0.00")
+	require.Nil(t, rows[1].SlotFlowDeltaEUR, "an unmodelled suggestion has no priceable alternative")
+	require.Nil(t, rows[2].SlotFlowDeltaEUR, "an unmodelled applied mode has no priceable baseline")
+
+	// the rows themselves are still returned, verbatim - refusing to price a decision
+	// is not refusing to report that it happened
+	require.Equal(t, "supercharge", rows[0].AppliedMode)
+	require.Equal(t, ptrMode("megahold"), rows[0].SuggestedMode)
+
+	// control: the modelled veto is untouched by any of this
+	require.NotNil(t, rows[3].SlotFlowDeltaEUR)
+	require.NotZero(t, *rows[3].SlotFlowDeltaEUR)
+}

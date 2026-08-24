@@ -190,7 +190,7 @@ func simulateW2(slots []slotData, phys batteryPhysics, a w2Anchoring) w2Stats {
 		// assumption.
 		prevEndMeasured = measured + s.BatteryChargeKWh*phys.EtaC - s.BatteryDischargeKWh/phys.EtaD
 
-		newSoc, flow, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
+		newSoc, flow, _, _, _ := simulateSlotStep(batteryModeNormal, s.modelledLoadKWh(), s.PVKWh, socKWh, phys)
 		socKWh = newSoc
 		out.Flows[i] = flow
 		prevStart = s.Start
