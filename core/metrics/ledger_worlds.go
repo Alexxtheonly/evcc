@@ -35,6 +35,7 @@ import (
 // choice control_slots.go already made for AppliedMode/SuggestedMode - importing the
 // api package here just to re-derive four constants isn't worth the coupling.
 const (
+	batteryModeUnknown    = "unknown"
 	batteryModeNormal     = "normal"
 	batteryModeHold       = "hold"
 	batteryModeCharge     = "charge"

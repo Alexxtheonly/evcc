@@ -56,6 +56,25 @@ type DecisionRow struct {
 	SlotFlowDeltaEUR *float64 `json:"slotFlowDeltaEur,omitempty"`
 }
 
+// effectiveMode folds the two spellings of "evcc held no override this slot" into
+// one. api.BatteryUnknown at site level means "no change required", which on a site
+// with a battery is the same fact as api.BatteryNormal - persistControlSlot records
+// Normal for such a site since core/site_optimizer.go's fix, but every row written
+// before it does not, and an empty column is the same absence again.
+//
+// Folding here only ever REMOVES a SlotFlowDeltaEUR that would otherwise have been
+// computed for a slot where the two modes are the same fact spelled differently - it
+// can never invent one, because two genuinely different modes never fold together.
+// The row's own AppliedMode/SuggestedMode are still emitted verbatim: on a site with
+// no battery "unknown" means "there is no battery", and rewriting that to "normal"
+// would assert a battery mode for a battery that does not exist.
+func effectiveMode(mode string) string {
+	if mode == "" || mode == batteryModeUnknown {
+		return batteryModeNormal
+	}
+	return mode
+}
+
 // DecisionDeltas replays every control_slots row in [from,to). set and phys should
 // come from the same request's ComputeChain/buildLedgerSlots call so the replay uses
 // the identical slot data and battery assumptions the chain was priced with; phys may
@@ -83,7 +102,7 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 			ModeChanged:   r.ModeChanged,
 		}
 
-		if phys != nil && r.AppliedMode != r.SuggestedMode {
+		if phys != nil && effectiveMode(r.AppliedMode) != effectiveMode(r.SuggestedMode) {
 			if s, ok := bySlot[r.Timestamp]; ok && s.BatterySocFrac != nil {
 				socKWh := *s.BatterySocFrac * phys.CapacityKWh
 				load := s.modelledLoadKWh()

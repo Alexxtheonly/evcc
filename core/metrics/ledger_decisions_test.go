@@ -187,3 +187,63 @@ func TestSlotFlowDeltaIsSlotLocalNotForwardHindsight(t *testing.T) {
 	})
 	require.True(t, found, "chain.Notes must disclose that the per-decision delta only prices the vetoed slot itself, not any later slot the decision would have affected")
 }
+
+// TestDecisionDeltasFoldsUnknownAgainstNormal covers the F3 finding: the 11 rows the
+// live database had at the time carried applied "unknown" against suggested "normal"
+// - two spellings of "evcc held no override", not a veto - and the raw string
+// comparison priced every one of them as a veto worth EUR 0.00. Absence must not
+// serialise as a figure (ADR-011 rule 3), and every consumer of /api/savingsledger
+// sees this field, not only the one Vue component that knew to fold the modes itself.
+func TestDecisionDeltasFoldsUnknownAgainstNormal(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	base := time.Date(2026, 8, 6, 12, 0, 0, 0, loc)
+	g, f := 0.40, 0.05
+	socPct := 50.0
+
+	// three slots, all fully measured so a delta IS computable if anything asks for
+	// one: a legacy row ("unknown" vs "normal"), an empty applied mode (the same
+	// absence spelled a third way), and a real veto as the control.
+	modes := [][2]string{
+		{batteryModeUnknown, batteryModeNormal},
+		{"", batteryModeNormal},
+		{batteryModeHold, batteryModeCharge},
+	}
+	for i, m := range modes {
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		require.NoError(t, persist(grid, ts, 1.0, 0, nil, false, false))
+		require.NoError(t, persist(home, ts, 1.0, 0, nil, false, false))
+		require.NoError(t, persist(bat, ts, 0, 0, &socPct, false, false))
+		require.NoError(t, PersistTariffs(ts, &g, &f, nil, nil))
+		require.NoError(t, PersistControlSlot(ts, m[0], m[1], "", true, nil))
+	}
+
+	from, to := base, base.Add(45*time.Minute)
+	set, err := buildLedgerSlots(context.Background(), from, to, true, true)
+	require.NoError(t, err)
+	phys, err := deriveBatteryPhysics(context.Background())
+	require.NoError(t, err)
+
+	rows, err := DecisionDeltas(context.Background(), from, to, set, &phys)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+
+	require.Nil(t, rows[0].SlotFlowDeltaEUR, `applied "unknown" against suggested "normal" is not a veto - must carry no delta`)
+	require.Nil(t, rows[1].SlotFlowDeltaEUR, `an empty applied mode against "normal" is not a veto either`)
+
+	// the raw wire words are still what was recorded: on a site with no battery
+	// "unknown" means "there is no battery", so the fold stays a comparison rule.
+	require.Equal(t, batteryModeUnknown, rows[0].AppliedMode)
+	require.Equal(t, batteryModeNormal, rows[0].SuggestedMode)
+
+	// control: a genuine veto is untouched by the fold
+	require.NotNil(t, rows[2].SlotFlowDeltaEUR)
+}
