@@ -3,8 +3,11 @@ FROM --platform=$BUILDPLATFORM node:26-alpine AS node
 
 RUN apk update && apk add --no-cache make curl bash && curl -fsSL https://vite.plus | bash
 
-# the installer only wires vp into interactive shell rc files, which RUN steps don't source
-ENV PATH="/root/.vite-plus/bin:${PATH}"
+# the installer only wires vp into interactive shell rc files, which RUN steps don't source.
+# install path moved from ~/.vite-plus/bin to ~/.local/share/vite-plus/bin upstream (found
+# 2026-08-24 building without Docker layer cache - the old path had been silently masked by a
+# cached `vp` layer on every prior build host).
+ENV PATH="/root/.local/share/vite-plus/bin:${PATH}"
 
 WORKDIR /build
 
