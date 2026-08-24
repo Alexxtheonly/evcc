@@ -57,6 +57,10 @@ describe("SavingsLedgerDecisions table view", () => {
   // only on nullness - so a legacy row rendered Applied "Normal operation" | Suggested
   // "—" | Δ "€0.00": a priced veto in the same row as a column saying there was no veto.
   test("a steady row prints no delta, whatever the payload put in slotFlowDeltaEur", async () => {
+    // legacyPricedRow spreads legacyRows[0]; if a re-capture ever drops the legacy rows
+    // that spread yields a row with no ts or mode at all, and every assertion below fails
+    // pointing at the renderer rather than at the fixture.
+    expect(legacyRows.length).toBeGreaterThan(0);
     const wrapper = mountDecisions([legacyPricedRow]);
     await showTable(wrapper);
 

@@ -173,27 +173,36 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
     vi.mocked(api.get)
       .mockResolvedValueOnce({ status: 200, data: ledgerStub }) // the mount fetch
       .mockResolvedValueOnce({
+        // 2026-08-14 sits INSIDE the paged 08-10..08-17 window, so clamping to it would
+        // succeed and isAtPresent is the only thing declining it
         status: 200,
-        data: { ...ledgerStub, chainEarliest: "2026-08-21T12:45:00+02:00" },
+        data: { ...ledgerStub, chainEarliest: "2026-08-14T02:00:00+02:00" },
       });
 
     const wrapper = mountCard();
     await flushPromises();
     await pageBack(wrapper); // now well before NOW -> isAtPresent is false
 
-    // no third request: a chainEarliest inside a window the user chose is left alone
+    // no third request: the window the user chose is rendered as-is, with
+    // diagramSubsetWarning naming the real figure, rather than silently narrowed
     expect(api.get).toHaveBeenCalledTimes(2);
+    const secondCallParams = vi.mocked(api.get).mock.calls[1]![1] as any;
+    expect(secondCallParams.params.from).toBe("2026-08-10T00:00:00.000Z");
     expect(wrapper.find('[data-testid="savings-ledger-content"]').exists()).toBe(true);
   });
 
+  // A user who paged weeks back into a genuine ErrBeforeTariffStart refusal must see that
+  // refusal, not get silently teleported to a period they never asked for. The clamp here
+  // WOULD succeed - 2026-08-14 is inside the paged 08-10..08-17 window - so isAtPresent is
+  // the only thing preventing it.
   test("a 422 with earliest while paged into the past renders the plain refusal and does not clamp", async () => {
     vi.mocked(api.get)
       .mockResolvedValueOnce({ status: 200, data: ledgerStub }) // the mount fetch
       .mockResolvedValueOnce({
         status: 422,
         data: {
-          error: "no tariff data before 2026-08-21T12:30:00+02:00",
-          earliest: "2026-08-21T12:30:00+02:00",
+          error: "no tariff data before 2026-08-14T02:00:00+02:00",
+          earliest: "2026-08-14T02:00:00+02:00",
         },
       });
 
@@ -204,7 +213,7 @@ describe("SavingsLedgerCard auto-clamp on the default/present window", () => {
     expect(api.get).toHaveBeenCalledTimes(2); // no auto-retry
     expect(wrapper.find('[data-testid="savings-ledger-refuse"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="savings-ledger-refuse-body"]').text()).toBe(
-      "no tariff data before 2026-08-21T12:30:00+02:00"
+      "no tariff data before 2026-08-14T02:00:00+02:00"
     );
     expect(wrapper.find('[data-testid="savings-ledger-content"]').exists()).toBe(false);
   });
