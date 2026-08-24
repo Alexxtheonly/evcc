@@ -86,8 +86,12 @@ type RealisedCost struct {
 // from precedes the earliest priced tariff slot. Deliberately independent of
 // ComputeChain, so a caller can get the realised figure even when the battery-physics
 // derivation ComputeChain needs for W2 fails, or the site has no battery at all.
-func ComputeRealisedCost(ctx context.Context, from, to time.Time) (*RealisedCost, error) {
-	set, err := buildLedgerSlots(ctx, from, to, false, false)
+//
+// feedInStatic is passed straight to buildLedgerSlots - see its doc comment. It must
+// be the same value ComputeChain/ComputeLedger get, or this figure and the chain would
+// be computed over different slot sets.
+func ComputeRealisedCost(ctx context.Context, from, to time.Time, feedInStatic *float64) (*RealisedCost, error) {
+	set, err := buildLedgerSlots(ctx, from, to, false, false, feedInStatic)
 	if err != nil {
 		return nil, err
 	}

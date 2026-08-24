@@ -33,7 +33,7 @@ func TestComputeLedgerHappyPath(t *testing.T) {
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 	require.NoError(t, PersistControlSlot(base, batteryModeNormal, batteryModeNormal, "", true, nil))
 
-	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute))
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.NotNil(t, ledger.Chain)
@@ -74,7 +74,7 @@ func TestChainNotesCarryLabellingCaveats(t *testing.T) {
 	require.NoError(t, PersistTariffs(slot1, &g, &f, nil, nil))
 	// no battery row for slot1
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(30*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(30*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.Contains(t, chain.Notes, noteInvoiceComparability)
@@ -106,7 +106,7 @@ func TestComputeLedgerDegradesOnBatteryPhysicsRefusal(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute))
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err, "a battery-physics refusal must degrade, not fail the whole request")
 
 	require.Nil(t, ledger.Chain)
@@ -159,7 +159,7 @@ func TestComputeLedgerDegradesOnRateCeilingRefusal(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute))
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err, "a rate-ceiling refusal must degrade, not fail the whole request")
 
 	require.Nil(t, ledger.Chain)
@@ -167,7 +167,7 @@ func TestComputeLedgerDegradesOnRateCeilingRefusal(t *testing.T) {
 	require.InDelta(t, 2.0*0.30, ledger.Realised.Settled.PerSlot, 1e-9,
 		"the realised-cost figure must survive a chain-only refusal")
 
-	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	_, err = ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.ErrorIs(t, err, ErrBatteryRateCeilingUnavailable)
 }
 
@@ -196,7 +196,7 @@ func TestChainNotesEVTimingUnattributed(t *testing.T) {
 	g, f := 0.18, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.InDelta(t, 0.0, chain.Contributions[2].Settled.PerSlot, 1e-9,
@@ -232,7 +232,7 @@ func TestChainNotesFeedInZeroExplained(t *testing.T) {
 	g, f := 0.30, 0.0
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.InDelta(t, 0.0, chain.Worlds[3].Settled.PerSlot-0.0, 1e-9) // export priced at 0 either way, sanity check
@@ -274,7 +274,7 @@ func TestChainPublishesMeterResidual(t *testing.T) {
 	g, f := 0.30, 0.05
 	require.NoError(t, PersistTariffs(base, &g, &f, nil, nil))
 
-	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute))
+	chain, err := ComputeChain(context.Background(), base, base.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, chain.MeterResidual.Slots)

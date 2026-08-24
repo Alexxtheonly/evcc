@@ -676,6 +676,15 @@ const noteEVTimingUnattributed = "EV charge timing is not attributed to any meas
 // from a computation that silently lost every export unless this is said plainly.
 const noteFeedInZero = "feed-in price is EUR 0.00 for every slot in this period, so every export credit in this payload is EUR 0.00 - that reflects the configured/observed feed-in rate, not a computation error"
 
+// noteFeedInStaticFallback, present whenever at least one included slot's feed-in
+// price came from the site's configured static tariff instead of the tariffs table:
+// those slots would otherwise have been excluded entirely, so the coverage figure
+// beside it depends on the substitution and a reader has to be able to see it. See
+// feedInFallback for the guard that has to hold before this is allowed at all.
+func noteFeedInStaticFallback(slots int, price float64) string {
+	return fmt.Sprintf("no feed-in price was recorded for %d of this period's slots; they were priced at the site's currently configured static feed-in rate of EUR %.4f/kWh - accepted only because that tariff declares its price time-invariant AND every feed-in price actually recorded in this period equals it, and those slots would have been excluded outright had any recorded price differed", slots, price)
+}
+
 // noteMeterResidual, always present: points a reader at meterResidual rather than
 // leaving it to be found only by knowing the field exists.
 const noteMeterResidual = "meterResidual (kWh, not EUR) is the measured gap between this period's sources and sinks - see its own doc comment for why it is not expected to be zero; treat it as the noise floor under every euro figure above"
@@ -705,8 +714,8 @@ func notePeriodAverageCoverage(c Coverage) string {
 // ComputeChain runs the full ADR-011 world chain for [from,to). See buildLedgerSlots
 // for what counts as a valid slot and ErrBeforeTariffStart/ErrSocGap for the two ways
 // this refuses rather than fabricates.
-func ComputeChain(ctx context.Context, from, to time.Time) (*Chain, error) {
-	set, err := buildLedgerSlots(ctx, from, to, true, true)
+func ComputeChain(ctx context.Context, from, to time.Time, feedInStatic *float64) (*Chain, error) {
+	set, err := buildLedgerSlots(ctx, from, to, true, true, feedInStatic)
 	if err != nil {
 		return nil, err
 	}
@@ -784,6 +793,9 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	}
 	if allFeedInZero(set.Slots) {
 		notes = append(notes, noteFeedInZero)
+	}
+	if set.FeedInFallbackSlots > 0 {
+		notes = append(notes, noteFeedInStaticFallback(set.FeedInFallbackSlots, set.FeedInFallbackPrice))
 	}
 
 	return &Chain{

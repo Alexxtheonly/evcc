@@ -53,3 +53,33 @@ func TestPersistTariffs(t *testing.T) {
 	require.InDelta(t, 250, *res.Co2, 0.001)
 	require.InDelta(t, 21.5, *res.Temperature, 0.001)
 }
+
+// TestPersistTariffsFillsMissingUsageLater covers the write-path half of the ledger
+// coverage bug: a slot written while one tariff was unavailable left that column NULL,
+// and clause.OnConflict{DoNothing} meant nothing ever filled it again. A single UI
+// config edit that briefly removed the feed-in tariff therefore left 86 permanently
+// feed-in-less slots, all of them dropped from the savings ledger.
+func TestPersistTariffsFillsMissingUsageLater(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.AutoMigrate(new(tariffValue)))
+
+	slot := time.Date(2026, 4, 15, 16, 15, 0, 0, time.UTC)
+
+	// first write: the feed-in tariff was unavailable
+	grid := 0.30
+	require.NoError(t, PersistTariffs(slot, &grid, nil, nil, nil))
+
+	// retry once it is back - and with a different grid price, which must NOT win
+	otherGrid, feedin := 0.40, 0.0786
+	require.NoError(t, PersistTariffs(slot, &otherGrid, &feedin, nil, nil))
+
+	var count int64
+	require.NoError(t, db.Instance.Model(new(tariffValue)).Count(&count).Error)
+	require.Equal(t, int64(1), count, "the retry must update the existing row, not add a second one")
+
+	var res tariffValue
+	require.NoError(t, db.Instance.First(&res).Error)
+	require.InDelta(t, 0.30, *res.Grid, 1e-9, "a value already on record is never overwritten")
+	require.NotNil(t, res.FeedIn, "a NULL left by an unavailable tariff must be fillable later")
+	require.InDelta(t, 0.0786, *res.FeedIn, 1e-9)
+}

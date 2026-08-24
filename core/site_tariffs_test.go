@@ -264,3 +264,42 @@ func TestScaleAndPruneByLead(t *testing.T) {
 	assert.InDelta(t, 7.5, got[1], 0.001)
 	assert.InDelta(t, 5, got[2], 0.001)
 }
+
+// TestPersistTariffsRetriesPreviousSlot: persistTariffs used to write each slot once
+// and never look back, so a usage whose tariff was unavailable at that moment (a
+// device being recreated by a UI config edit) left a NULL nothing ever returned for.
+// The retry closes the hole while the rate is still readable for that slot; the
+// upsert underneath only ever fills NULLs, so a value already on record is safe.
+func TestPersistTariffsRetriesPreviousSlot(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	feedIn, err := tariff.NewFixedFromConfig(map[string]any{"price": 0.0786})
+	require.NoError(t, err)
+
+	site := &Site{log: util.NewLogger("foo"), tariffs: &tariff.Tariffs{FeedIn: feedIn}}
+
+	slot := time.Now().Truncate(tariff.SlotDuration)
+	previous := slot.Add(-tariff.SlotDuration)
+
+	// the previous slot was written while the feed-in tariff was unavailable
+	grid := 0.25
+	require.NoError(t, metrics.PersistTariffs(previous, &grid, nil, nil, nil))
+
+	site.tariffSlot = previous
+	site.persistTariffs()
+
+	var rows []struct {
+		Ts     int64
+		Grid   *float64
+		FeedIn *float64 `gorm:"column:feedin"`
+	}
+	require.NoError(t, db.Instance.Table("tariffs").Select("ts, grid, feedin").Order("ts").Scan(&rows).Error)
+	require.Len(t, rows, 2, "both the previous and the current slot must be on record")
+
+	require.Equal(t, previous.Unix(), rows[0].Ts)
+	require.NotNil(t, rows[0].FeedIn, "the previous slot's NULL feed-in must be filled on the retry")
+	require.InDelta(t, 0.0786, *rows[0].FeedIn, 1e-9)
+	require.NotNil(t, rows[0].Grid)
+	require.InDelta(t, 0.25, *rows[0].Grid, 1e-9, "the recorded grid price must survive the retry")
+}

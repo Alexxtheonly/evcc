@@ -163,6 +163,14 @@ func (site *Site) publishTariffs(greenShareHome float64, greenShareLoadpoints fl
 
 // persistTariffs stores tariff values once per 15min boundary. Like the meter
 // collectors it is driven by the update loop, skipping the partial boot slot.
+//
+// It also re-attempts the previous slot. A usage whose tariff was unavailable at the
+// moment that slot was written (a tariff device being recreated by a UI config edit, a
+// provider request that failed) left a NULL behind that nothing ever came back for -
+// metrics.PersistTariffs only ever fills NULLs and never overwrites a recorded value,
+// so the retry is free of risk and closes the hole while the rate is still readable
+// for that slot. tariff.At returns an error for a slot outside the tariff's rate
+// window, which leaves that usage nil rather than substituting a later price.
 func (site *Site) persistTariffs() {
 	slot := time.Now().Truncate(tariff.SlotDuration)
 
@@ -174,21 +182,26 @@ func (site *Site) persistTariffs() {
 		return
 	}
 
-	value := func(u api.TariffUsage) *float64 {
-		if r, err := tariff.At(site.GetTariff(u), slot); err == nil {
-			return &r.Value
+	persist := func(ts time.Time) {
+		value := func(u api.TariffUsage) *float64 {
+			if r, err := tariff.At(site.GetTariff(u), ts); err == nil {
+				return &r.Value
+			}
+			return nil
 		}
-		return nil
+
+		if err := metrics.PersistTariffs(ts,
+			value(api.TariffUsageGrid),
+			value(api.TariffUsageFeedIn),
+			value(api.TariffUsageCo2),
+			value(api.TariffUsageTemperature),
+		); err != nil {
+			site.log.ERROR.Printf("persist tariffs: %v", err)
+		}
 	}
 
-	if err := metrics.PersistTariffs(slot,
-		value(api.TariffUsageGrid),
-		value(api.TariffUsageFeedIn),
-		value(api.TariffUsageCo2),
-		value(api.TariffUsageTemperature),
-	); err != nil {
-		site.log.ERROR.Printf("persist tariffs: %v", err)
-	}
+	persist(last)
+	persist(slot)
 }
 
 // forecastSlotEnergy is the energy expected in the slot covering now, integrated

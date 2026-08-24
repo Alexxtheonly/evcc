@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/metrics"
+	"github.com/evcc-io/evcc/core/site"
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
 	"github.com/evcc-io/evcc/util"
@@ -27,31 +29,52 @@ import (
 // abandoned request (client gone, or metrics.ErrLedgerRangeTooLarge rejecting the
 // range up front) doesn't run to completion queued behind persist()/control-slot
 // writes for no reader.
-func savingsLedgerHandler(w http.ResponseWriter, r *http.Request) {
-	if db.Instance == nil {
-		jsonError(w, http.StatusBadRequest, errors.New("database offline"))
-		return
+func savingsLedgerHandler(site site.API) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if db.Instance == nil {
+			jsonError(w, http.StatusBadRequest, errors.New("database offline"))
+			return
+		}
+
+		from, to, err := timeRange(r)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		ledger, err := metrics.ComputeLedger(r.Context(), from, to, staticFeedInPrice(site.GetTariff(api.TariffUsageFeedIn)))
+		if err != nil {
+			w.WriteHeader(savingsLedgerErrorStatus(err))
+			jsonWrite(w, savingsLedgerErrorBody(err))
+			return
+		}
+
+		// data only changes at the next slot boundary - same header /history/energy sets
+		// (server/http_history_handler.go)
+		maxAge := time.Until(time.Now().Truncate(tariff.SlotDuration).Add(tariff.SlotDuration))
+		w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", int(maxAge.Seconds())))
+
+		jsonWrite(w, ledger)
+	}
+}
+
+// staticFeedInPrice returns the feed-in tariff's currently configured price, but ONLY
+// when that tariff declares itself api.TariffTypePriceStatic - a declaration that the
+// price does not vary with time. That lets the ledger price a slot whose feed-in value
+// was never recorded (see core/metrics' feedInFallback, which additionally requires the
+// period's own record to corroborate the value before using it). Any other tariff type
+// varies with time, so today's value says nothing about a past slot: nil, and those
+// slots stay excluded.
+func staticFeedInPrice(t api.Tariff) *float64 {
+	if t == nil || t.Type() != api.TariffTypePriceStatic {
+		return nil
 	}
 
-	from, to, err := timeRange(r)
+	v, err := tariff.Now(t)
 	if err != nil {
-		jsonError(w, http.StatusBadRequest, err)
-		return
+		return nil
 	}
-
-	ledger, err := metrics.ComputeLedger(r.Context(), from, to)
-	if err != nil {
-		w.WriteHeader(savingsLedgerErrorStatus(err))
-		jsonWrite(w, savingsLedgerErrorBody(err))
-		return
-	}
-
-	// data only changes at the next slot boundary - same header /history/energy sets
-	// (server/http_history_handler.go)
-	maxAge := time.Until(time.Now().Truncate(tariff.SlotDuration).Add(tariff.SlotDuration))
-	w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", int(maxAge.Seconds())))
-
-	jsonWrite(w, ledger)
+	return &v
 }
 
 // savingsLedgerErrorBody builds the JSON error body for a ComputeLedger error. Pulled
