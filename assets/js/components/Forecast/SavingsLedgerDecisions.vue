@@ -214,12 +214,19 @@
 										: modeLabel(slot.row.suggestedMode)
 								}}
 							</td>
+							<!-- D6, same rule as the detail panel above: the delta prices a veto
+							     against the suggestion it rejected, so a steady slot has nothing for
+							     it to measure and must not print one. Keyed on the outcome, not on
+							     nullness - a legacy row carrying applied "unknown" against suggested
+							     "normal" IS steady (the same mode spelled two ways), and used to
+							     render "€0.00" here beside a suggested column already saying
+							     "—": a priced veto next to "there was no veto". -->
 							<td
 								class="num"
-								:class="{ 'text-loss': (slot.row.slotFlowDeltaEur ?? 0) > 0 }"
+								:class="{ 'text-loss': slot.outcome === 'vetoed-cost' }"
 							>
 								{{
-									slot.row.slotFlowDeltaEur != null
+									slot.outcome !== "steady" && slot.row.slotFlowDeltaEur != null
 										? fmtMoney(slot.row.slotFlowDeltaEur, currency, true, true)
 										: "—"
 								}}

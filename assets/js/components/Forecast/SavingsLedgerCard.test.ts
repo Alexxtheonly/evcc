@@ -198,6 +198,58 @@ describe("SavingsLedgerCard presentation", () => {
     expect(emitted![1]![0]).toHaveLength(liveSample.decisions.length);
   });
 
+  // F2: control_slots is written whenever the optimizer is enabled and sponsored, with
+  // no battery check, so a PV-and-loadpoint site records rows too - all of them
+  // "unknown"/"unknown", because batteryModeCandidate has no controllable battery to
+  // iterate. Rendering them told such a site its nonexistent battery was in "Normal
+  // operation". chain.batteryPhysics is present exactly when there IS a battery
+  // (computeChainFromSlots derives it only under set.HasBattery), so that is the test.
+  test("emits no decisions for a site whose chain shows it has no battery", async () => {
+    const noBattery = JSON.parse(JSON.stringify(liveSample));
+    delete noBattery.chain.batteryPhysics;
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: noBattery });
+
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    const emitted = wrapper.emitted("update:decisions")!;
+    expect(noBattery.decisions.length).toBeGreaterThan(0); // the rows were there to emit
+    expect(emitted[emitted.length - 1]![0]).toBeNull();
+    // the card itself is unaffected: a battery-less chain is still a real chain
+    expect(wrapper.find('[data-testid="savings-ledger-content"]').exists()).toBe(true);
+  });
+
+  // the converse: an absent chain is chainUnavailable, a site that HAS a battery whose
+  // physics could not be derived. Those rows are real decisions and must still show.
+  test("still emits decisions when the chain itself is unavailable", async () => {
+    const noChain = JSON.parse(JSON.stringify(liveSample));
+    delete noChain.chain;
+    noChain.chainUnavailable = "not enough battery history to derive capacity";
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: noChain });
+
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    const emitted = wrapper.emitted("update:decisions")!;
+    expect(emitted[emitted.length - 1]![0]).toHaveLength(noChain.decisions.length);
+  });
+
+  // F6: the three figures used to be bottom-aligned by a full-height flex column whose
+  // label absorbed the slack - which only holds while all three values are one line
+  // tall, and the third ("EUR 1,234.56 (91%)") is the longest of the three in a col-4 at
+  // 390px. Labels and values are now two passes over the same list, so .row's own wrap
+  // puts every label on one grid line and every value on the next: alignment survives a
+  // value that wraps. Asserted as DOM order, the thing the CSS depends on.
+  test("every label precedes every value, so the figures share one grid row", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ status: 200, data: liveSample });
+    const wrapper = mountCard(PRESENT_WINDOW);
+    await flushPromises();
+
+    const cols = wrapper.find('[data-testid="savings-ledger-details"]').element.children;
+    const hasValue = [...cols].map((c) => c.querySelector("[data-testid]") !== null);
+    expect(hasValue).toEqual([false, false, false, true, true, true]);
+  });
+
   test("takes the decisions card down while the next period is still loading", async () => {
     vi.mocked(api.get)
       .mockResolvedValueOnce({ status: 200, data: liveSample })

@@ -48,11 +48,20 @@ import type { LedgerChain } from "./savingsLedger.types";
 // nothing to the person reading this modal, so any clause naming a .go file is dropped.
 // The provenance itself ("constant (0.9), not derived" - a fixed constant, not measured
 // from this battery) survives untouched: nothing is softened, only the code pointer goes.
+//
+// F5: dropping clauses can drop all of them - a single-clause string naming a .go file
+// would leave "", and the i18n template around it renders "Capacity 10.0 kWh - .".
+// Absence rendered as punctuation is still a claim about the provenance. No string sent
+// today hits this, but the fallback is one expression: show the original, code pointer
+// and all, rather than nothing. Note this filter is clause-granular, so real provenance
+// sharing a clause with a file reference goes with it - acceptable for the strings that
+// exist, and the fallback now bounds the worst case at "too much" instead of "none".
 function readableSource(source: string): string {
-	return source
+	const readable = source
 		.split(" - ")
 		.filter((clause) => !clause.includes(".go"))
 		.join(" - ");
+	return readable || source;
 }
 
 export default defineComponent({
