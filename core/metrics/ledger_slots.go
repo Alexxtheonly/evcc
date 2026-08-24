@@ -295,6 +295,15 @@ func queryTariffSlots(ctx context.Context, from, to time.Time) (map[int64]tariff
 	return m, nil
 }
 
+// minFeedInWitnessSlots is how many recorded feed-in prices the tariffs table must
+// hold before any of them count as corroboration. A single agreeing row proves only
+// that the configured rate held at one instant, which says nothing about the slots
+// the fallback is about to price; one full day of 15-minute slots is the smallest
+// record that can be read as a history of the rate rather than a snapshot of it.
+// Below that the fallback refuses and the affected slots stay excluded, which is the
+// honest outcome for a site whose feed-in record is younger than the gap it has.
+const minFeedInWitnessSlots = 96
+
 // feedInFallback returns the price a slot with no recorded feed-in value may be
 // priced at, or nil to keep excluding such slots.
 //
@@ -307,31 +316,39 @@ func queryTariffSlots(ctx context.Context, from, to time.Time) (map[int64]tariff
 // applying today's configured value to a past slot asserts that it also held then,
 // and that assertion breaks silently the moment the owner edits the rate (e.g. from
 // the placeholder EUR 0.00 to the real EEG rate). So the fallback additionally
-// requires the period's own record to corroborate it: at least one slot in [from,to)
-// must have a recorded feed-in price, and every recorded feed-in price in the period
-// must equal the configured one. A period with no recorded price at all cannot
-// corroborate anything, and a period that disagrees anywhere is evidence the rate
-// changed - both keep the affected slots excluded, which is the honest outcome.
-func feedInFallback(rows map[int64]tariffSlot, static *float64) *float64 {
+// requires the record to corroborate it: the tariffs table must hold at least
+// minFeedInWitnessSlots recorded feed-in prices, and every one of them - MIN and MAX
+// alike - must equal the configured value.
+//
+// The corroboration deliberately reads the WHOLE table, not the requested window.
+// Window-scoped evidence is exactly as narrow as the caller makes it: a caller
+// picking a window that starts after a rate change sees only post-change values,
+// agrees with the current config, and imputes the new rate into slots billed at the
+// old one - the failure this guard exists to prevent, reachable straight from the
+// endpoint's query string. A rate change anywhere in the recorded history now makes
+// MIN != MAX and the fallback refuses everywhere, which is the only reading the
+// history-less configs table supports.
+func feedInFallback(ctx context.Context, static *float64) (*float64, error) {
 	if static == nil {
-		return nil
+		return nil, nil
 	}
 
-	var recorded bool
-	for _, r := range rows {
-		if r.FeedIn == nil {
-			continue
-		}
-		if *r.FeedIn != *static {
-			return nil
-		}
-		recorded = true
+	var res struct {
+		N      int64
+		Lo, Hi sql.NullFloat64
+	}
+	// COUNT/MIN/MAX all skip NULLs, so no WHERE is needed - and must not be added:
+	// the point is to see every feed-in price the site ever recorded.
+	if err := db.Instance.WithContext(ctx).Model(new(tariffValue)).
+		Select("COUNT(feedin) AS n, MIN(feedin) AS lo, MAX(feedin) AS hi").
+		Scan(&res).Error; err != nil {
+		return nil, err
 	}
 
-	if !recorded {
-		return nil
+	if res.N < minFeedInWitnessSlots || res.Lo.Float64 != *static || res.Hi.Float64 != *static {
+		return nil, nil
 	}
-	return static
+	return static, nil
 }
 
 // ErrLoadpointNoChargeMeter means a configured loadpoint has never written a single
@@ -396,7 +413,8 @@ func verifyLoadpointChargeMeters(ctx context.Context, ids []int) error {
 // feedInStatic is the site's currently configured feed-in price, non-nil only when
 // that tariff declares itself time-invariant. It lets a slot with a recorded grid
 // price but no recorded feed-in price still be included - but only if feedInFallback's
-// guard holds; see that function for why the declaration alone is not sufficient.
+// guard holds; see that function for why the declaration alone is not sufficient, and
+// why the corroboration reads the whole tariffs table rather than this window.
 //
 // from must not precede the earliest priced tariff slot; see ErrBeforeTariffStart. The
 // window is also capped at MaxLedgerRangeDays (ErrLedgerRangeTooLarge), and every query
@@ -472,7 +490,10 @@ func buildLedgerSlots(ctx context.Context, from, to time.Time, includeLoadpoint,
 		return nil, err
 	}
 
-	fallback := feedInFallback(tariffRows, feedInStatic)
+	fallback, err := feedInFallback(ctx, feedInStatic)
+	if err != nil {
+		return nil, err
+	}
 
 	total := int(to.Sub(from) / tariff.SlotDuration)
 

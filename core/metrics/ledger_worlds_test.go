@@ -835,6 +835,8 @@ func TestChainNotesFeedInStaticFallback(t *testing.T) {
 		}
 	}
 
+	seedFeedInWitnesses(t, base.Add(24*time.Hour), 0, minFeedInWitnessSlots)
+
 	static := 0.0
 	chain, err := ComputeChain(context.Background(), base, base.Add(30*time.Minute), &static)
 	require.NoError(t, err)
@@ -842,7 +844,7 @@ func TestChainNotesFeedInStaticFallback(t *testing.T) {
 
 	var found string
 	for _, n := range chain.Notes {
-		if strings.HasPrefix(n, "no feed-in price was recorded for 1 of this period's slots") {
+		if strings.HasPrefix(n, "no feed-in price was recorded for 1 of the slots behind this figure") {
 			found = n
 		}
 	}

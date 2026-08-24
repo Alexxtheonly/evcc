@@ -88,9 +88,15 @@ func PersistTariffs(ts time.Time, grid, feedin, co2, temperature *float64) error
 		return nil
 	}
 
+	// COALESCE(<table>.col, excluded.col) is what makes this fill-only rather than
+	// overwrite. `excluded` is the sqlite/postgres name for the row that failed to
+	// insert; mysql spells it differently, so this upsert is dialect-specific - fine
+	// while server/db/db.go only opens sqlite, and the reason the table name is read
+	// off the model instead of being spelled out a second time here.
+	table := tariffValue{}.TableName()
 	fillNulls := make(map[string]any, len(tariffUsages))
 	for _, u := range tariffUsages {
-		fillNulls[u] = gorm.Expr("COALESCE(tariffs." + u + ", excluded." + u + ")")
+		fillNulls[u] = gorm.Expr(fmt.Sprintf("COALESCE(%s.%s, excluded.%s)", table, u, u))
 	}
 
 	return db.Instance.Clauses(clause.OnConflict{

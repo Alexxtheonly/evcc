@@ -78,7 +78,12 @@ type RealisedCost struct {
 	Coverage Coverage `json:"coverage"`
 	// Note states the invoice-comparability caveat (ADR-011 rule 7) in the payload
 	// itself: this is the one figure the ledger exists to compare against a real
-	// invoice, and it only ever prices the grid tariff rate.
+	// invoice, and it only ever prices the grid tariff rate. When THIS figure's slot
+	// set took the static feed-in fallback it also carries that disclosure, appended -
+	// the chain's own note counts the chain's slots, which is a different, smaller set
+	// (see ComputeRealisedCost), so quoting the chain's number here would understate
+	// how much of the headline rests on an imputed price. One string rather than a
+	// list because the UI reads a single realised.note.
 	Note string `json:"note"`
 }
 
@@ -96,9 +101,14 @@ func ComputeRealisedCost(ctx context.Context, from, to time.Time, feedInStatic *
 		return nil, err
 	}
 
+	note := noteInvoiceComparability
+	if set.FeedInFallbackSlots > 0 {
+		note += "; " + noteFeedInStaticFallback(set.FeedInFallbackSlots, set.FeedInFallbackPrice)
+	}
+
 	return &RealisedCost{
 		Settled:  settleFlows(set.Slots, actualFlows(set.Slots)),
 		Coverage: set.coverage(),
-		Note:     noteInvoiceComparability,
+		Note:     note,
 	}, nil
 }

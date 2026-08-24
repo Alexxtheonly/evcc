@@ -303,3 +303,42 @@ func TestPersistTariffsRetriesPreviousSlot(t *testing.T) {
 	require.NotNil(t, rows[0].Grid)
 	require.InDelta(t, 0.25, *rows[0].Grid, 1e-9, "the recorded grid price must survive the retry")
 }
+
+// TestPersistTariffsRetriesOnlyTheImmediatelyPreviousSlot bounds the retry. site.tariffSlot
+// is the last slot actually PERSISTED, not slot-1, so a stalled update loop used to make
+// the retry reach arbitrarily far back - and the value it writes is tariff.At evaluated at
+// that past instant, which for a static tariff is regenerated from the CURRENT config.
+// Reaching back further therefore asserts today's rate over more history than the one slot
+// the retry is meant to close. Anything older than slot-1 must be left alone.
+func TestPersistTariffsRetriesOnlyTheImmediatelyPreviousSlot(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, metrics.SetupSchema())
+
+	feedIn, err := tariff.NewFixedFromConfig(map[string]any{"price": 0.0786})
+	require.NoError(t, err)
+
+	site := &Site{log: util.NewLogger("foo"), tariffs: &tariff.Tariffs{FeedIn: feedIn}}
+
+	slot := time.Now().Truncate(tariff.SlotDuration)
+	stale := slot.Add(-4 * tariff.SlotDuration)
+
+	// the loop stalled: the last slot persisted is four slots back, and it has a hole
+	grid := 0.25
+	require.NoError(t, metrics.PersistTariffs(stale, &grid, nil, nil, nil))
+
+	site.tariffSlot = stale
+	site.persistTariffs()
+
+	var rows []struct {
+		Ts     int64
+		FeedIn *float64 `gorm:"column:feedin"`
+	}
+	require.NoError(t, db.Instance.Table("tariffs").Select("ts, feedin").Order("ts").Scan(&rows).Error)
+	require.Len(t, rows, 2, "only the stale row and the current slot must exist - no slot in between may be invented")
+
+	require.Equal(t, stale.Unix(), rows[0].Ts)
+	require.Nil(t, rows[0].FeedIn,
+		"a slot four ticks old must not be repriced from the current static configuration")
+	require.Equal(t, slot.Unix(), rows[1].Ts)
+	require.NotNil(t, rows[1].FeedIn, "the current slot is still persisted normally")
+}

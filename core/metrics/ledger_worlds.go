@@ -681,8 +681,15 @@ const noteFeedInZero = "feed-in price is EUR 0.00 for every slot in this period,
 // those slots would otherwise have been excluded entirely, so the coverage figure
 // beside it depends on the substitution and a reader has to be able to see it. See
 // feedInFallback for the guard that has to hold before this is allowed at all.
+//
+// slots/price must come from the SAME slot set as the figure the note is attached to.
+// The chain and the realised cost build different sets (ComputeRealisedCost excludes
+// the battery and loadpoint requirements, so it keeps slots the chain drops) and so
+// have different fallback counts - on this site's own database, 416 imputed slots
+// behind the realised figure against 86 behind the chain. Quoting one set's count
+// beside the other's euros understates the imputation by 5x.
 func noteFeedInStaticFallback(slots int, price float64) string {
-	return fmt.Sprintf("no feed-in price was recorded for %d of this period's slots; they were priced at the site's currently configured static feed-in rate of EUR %.4f/kWh - accepted only because that tariff declares its price time-invariant AND every feed-in price actually recorded in this period equals it, and those slots would have been excluded outright had any recorded price differed", slots, price)
+	return fmt.Sprintf("no feed-in price was recorded for %d of the slots behind this figure; they were priced at the site's currently configured static feed-in rate of EUR %.4f/kWh - accepted only because that tariff declares its price time-invariant AND every feed-in price ever recorded by this site equals it, and those slots would have been excluded outright had any recorded price differed", slots, price)
 }
 
 // noteMeterResidual, always present: points a reader at meterResidual rather than

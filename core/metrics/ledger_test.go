@@ -286,3 +286,98 @@ func TestChainPublishesMeterResidual(t *testing.T) {
 	})
 	require.True(t, found, "chain.Notes must point a reader at meterResidual")
 }
+
+// TestRealisedNoteDisclosesItsOwnFallbackCount is the regression test on the P1
+// disclosure. ComputeRealisedCost and the chain build DIFFERENT slot sets - the
+// realised figure keeps slots the chain drops for a missing battery SoC (see
+// buildLedgerSlots' includeBattery gate) - so they have different feed-in-fallback
+// counts. Only the chain's count was ever emitted, so the realised euros were
+// disclosed against a slot set they were not computed on: on this site's own database
+// a EUR 35.70 headline over 547 slots, 416 of them imputed, sat beside a note saying
+// 86. Each figure must quote the imputation its own slot set actually used.
+func TestRealisedNoteDisclosesItsOwnFallbackCount(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+	loc := time.Now().Location()
+	seedBatteryCalibration(t, bat, time.Date(2026, 7, 1, 0, 0, 0, 0, loc))
+
+	base := time.Date(2026, 8, 15, 0, 0, 0, 0, loc)
+	g := 0.30
+	soc := 50.0
+
+	// both slots are priced from the fallback; only slot 0 has a battery SoC, so the
+	// chain keeps one slot and the realised figure keeps two
+	require.NoError(t, persist(grid, base, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(bat, base, 0, 0, &soc, false, false))
+	require.NoError(t, PersistTariffs(base, &g, nil, nil, nil))
+
+	slot1 := base.Add(15 * time.Minute)
+	require.NoError(t, persist(grid, slot1, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(home, slot1, 2.0, 0, nil, false, false))
+	require.NoError(t, PersistTariffs(slot1, &g, nil, nil, nil))
+
+	seedFeedInWitnesses(t, base.Add(24*time.Hour), 0, minFeedInWitnessSlots)
+
+	static := 0.0
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(30*time.Minute), &static)
+	require.NoError(t, err)
+
+	require.Equal(t, 2, ledger.Realised.Coverage.ValidSlots)
+	require.NotNil(t, ledger.Chain)
+	require.Equal(t, 1, ledger.Chain.Coverage.ValidSlots)
+
+	require.Contains(t, ledger.Realised.Note, "no feed-in price was recorded for 2 of the slots behind this figure",
+		"the realised figure must disclose the imputation ITS OWN slot set used, not the chain's smaller count")
+
+	var chainNote string
+	for _, n := range ledger.Chain.Notes {
+		if strings.HasPrefix(n, "no feed-in price was recorded") {
+			chainNote = n
+		}
+	}
+	require.Contains(t, chainNote, "for 1 of the slots behind this figure",
+		"the chain must keep quoting its own count")
+}
+
+// TestRealisedFallbackNoteSurvivesChainRefusal: a battery-physics refusal leaves Chain
+// nil, and with it every note the chain carries. RealisedCost is documented as
+// independent of the chain and is still returned - so if the fallback disclosure only
+// lived on the chain, the one figure the ledger exists to publish would be priced with
+// imputed values and say nothing about it. ErrBatteryRateCeilingUnavailable is derived
+// from the battery's whole history, so a freshly commissioned battery makes this the
+// DEFAULT state for every window, not an edge case.
+func TestRealisedFallbackNoteSurvivesChainRefusal(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+
+	grid := mustCreateEntity(t, Grid, Grid)
+	home := mustCreateEntity(t, Home, Home)
+	bat := mustCreateEntity(t, Battery, "bat1")
+
+	loc := time.Now().Location()
+	base := time.Date(2026, 8, 15, 0, 0, 0, 0, loc)
+
+	require.NoError(t, persist(grid, base, 2.0, 0, nil, false, false))
+	require.NoError(t, persist(home, base, 2.0, 0, nil, false, false))
+	soc := 50.0
+	require.NoError(t, persist(bat, base, 0, 0, &soc, false, false)) // no charge/discharge evidence
+	g := 0.30
+	require.NoError(t, PersistTariffs(base, &g, nil, nil, nil))
+
+	seedFeedInWitnesses(t, base.Add(24*time.Hour), 0, minFeedInWitnessSlots)
+
+	static := 0.0
+	ledger, err := ComputeLedger(context.Background(), base, base.Add(15*time.Minute), &static)
+	require.NoError(t, err)
+
+	require.Nil(t, ledger.Chain)
+	require.NotEmpty(t, ledger.ChainUnavailable)
+	require.Equal(t, 1, ledger.Realised.Coverage.ValidSlots)
+	require.Contains(t, ledger.Realised.Note, "no feed-in price was recorded for 1 of the slots behind this figure",
+		"the disclosure must not disappear with the chain that used to carry it")
+}
