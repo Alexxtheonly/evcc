@@ -10,7 +10,7 @@ needed.
 Build from this directory:
 
 ```sh
-docker buildx build --platform linux/amd64 --load -t evcc-optimizer:energy-v1 .
+docker buildx build --platform linux/amd64 --load -t evcc-optimizer:energy-v2 .
 ```
 
 Run on the evcc stack's private network, with evcc's `OPTIMIZER_URI` pointing to
@@ -65,6 +65,14 @@ solve returns a usable-looking empty schedule. Inputs are bounded to 384 slots
 and 16 batteries. All series must have equal lengths, all numeric data must be
 finite, and durations must be positive. Optional extension fields must be omitted
 rather than supplied as null.
+
+Fixed first-step energy is normalized only for float64 arithmetic roundoff at a
+computed power or storage limit: at most four ULPs, additionally capped at
+`1e-9 Wh`. Accepted excess is clamped to the bound; full/empty cancellation may
+move the action inward by at most four representable float64 steps. Negative
+inputs, simultaneous charge/discharge and unavailable actions remain strict.
+Float32 solver-output precision is not an input tolerance: controllers must
+reconstruct executable full-power actions from their original request limits.
 
 The extended OpenAPI contract is tracked in `upstream.patch` and installed at
 `/app/openapi.yaml` in the image. evcc checks capabilities before transmitting

@@ -197,10 +197,10 @@ index a355b2d..a4ee785 100644
  class Health(Resource):
 diff --git a/src/optimizer/energy_extension.py b/src/optimizer/energy_extension.py
 new file mode 100644
-index 0000000..a0cf3cd
+index 0000000..f9e8cca
 --- /dev/null
 +++ b/src/optimizer/energy_extension.py
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,113 @@
 +"""Validation for the local energy planning API."""
 +
 +import math
@@ -228,6 +228,16 @@ index 0000000..a0cf3cd
 +    if value == 0:
 +        raise ValueError(f'{name} must be positive')
 +    return value
++
++
++def bounded_energy(value, name: str, maximum: float) -> float:
++    value = finite(value, name, 0)
++    finite(maximum, name + ' limit', 0)
++    # Normalize only arithmetic roundoff, never solver/float32 output precision.
++    tolerance = min(4 * math.ulp(maximum), 1e-9) if maximum > 0 else 0
++    if value > maximum and value - maximum > tolerance:
++        raise ValueError(f'{name} must be at most {maximum}')
++    return min(value, maximum)
 +
 +
 +def validate_input(data: dict) -> None:
@@ -282,15 +292,28 @@ index 0000000..a0cf3cd
 +        raise ValueError('both first_step_charge and first_step_discharge are required together')
 +    if charge is None:
 +        return
-+    finite(charge, 'first_step_charge', 0, battery['c_max'] * durations[0] / 3600)
-+    finite(discharge, 'first_step_discharge', 0, battery['d_max'] * durations[0] / 3600)
++    finite(charge, 'first_step_charge', 0)
++    finite(discharge, 'first_step_discharge', 0)
 +    if charge > 0 and discharge > 0:
 +        raise ValueError('first step cannot charge and discharge simultaneously')
 +    if availability is not None and not availability[0] and charge + discharge > 0:
 +        raise ValueError('first step action requires battery availability')
-+    final = battery['s_initial'] + eta_c * charge - discharge / eta_d
-+    if not 0 <= final <= capacity:
-+        raise ValueError('first step action exceeds physical storage capacity')
++    charge = bounded_energy(charge, 'first_step_charge', min(
++        battery['c_max'] * durations[0] / 3600, (capacity - battery['s_initial']) / eta_c))
++    discharge = bounded_energy(discharge, 'first_step_discharge', min(
++        battery['d_max'] * durations[0] / 3600, battery['s_initial'] * eta_d))
++    # Exact-boundary multiplication/division can still round across full/empty.
++    for _ in range(5):
++        final = battery['s_initial'] + eta_c * charge - discharge / eta_d
++        if 0 <= final <= capacity:
++            battery['first_step_charge'] = charge
++            battery['first_step_discharge'] = discharge
++            return
++        if final > capacity:
++            charge = math.nextafter(charge, 0.0)
++        else:
++            discharge = math.nextafter(discharge, 0.0)
++    raise ValueError('first step action exceeds physical storage capacity')
 diff --git a/src/optimizer/optimizer.py b/src/optimizer/optimizer.py
 index 77c2353..4d896ef 100644
 --- a/src/optimizer/optimizer.py
