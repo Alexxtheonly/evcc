@@ -39,10 +39,10 @@ func snapshotPhysics(s *OptimizerSnapshot, fallback batteryPhysics) (batteryPhys
 	if e.WearPerKWh != nil && (!finite(*e.WearPerKWh) || *e.WearPerKWh < 0) {
 		return fallback, "invalid_snapshot_wear", false
 	}
-	return batteryPhysics{CapacityKWh: e.CapacityKWh, CapacitySource: "snapshot", EtaC: e.EtaC, EtaD: e.EtaD, EtaSource: e.Source, FloorFrac: e.FloorFrac, FloorSource: "snapshot", MaxChargeKWh: e.MaxChargeKWh, MaxDischargeKWh: e.MaxDischargeKWh, HasChargeEvidence: true, HasDischargeEvidence: true, WearPerKWh: e.WearPerKWh}, "optimizer_snapshot", true
+	return batteryPhysics{CapacityKWh: e.CapacityKWh, CapacitySource: "snapshot", EtaC: e.EtaC, EtaD: e.EtaD, EtaSource: e.Source, FloorFrac: e.FloorFrac, FloorSource: "snapshot", MaxChargeKWh: e.MaxChargeKWh, MaxDischargeKWh: e.MaxDischargeKWh, HasChargeEvidence: true, HasDischargeEvidence: true, WearPerKWh: e.WearPerKWh, MeasurementPlane: e.MeasurementPlane}, "optimizer_snapshot", true
 }
 
-func replayOutcome(index int, rows []controlSlot, slots map[int64]slotData, phys batteryPhysics, source string, to time.Time) *DecisionOutcome {
+func replayOutcome(index int, rows []controlSlot, slots map[int64]slotData, phys batteryPhysics, source string, to time.Time, snapshots map[uint64]*OptimizerSnapshot) *DecisionOutcome {
 	out := &DecisionOutcome{Status: "unpriced", AssumptionsSource: source}
 	first := rows[index]
 	s, ok := slots[first.Timestamp]
@@ -63,6 +63,10 @@ func replayOutcome(index int, rows []controlSlot, slots map[int64]slotData, phys
 	cash, wear, inventory := 0., 0., 0.
 	out.Status = "pending"
 	for i := index; i < len(rows); i++ {
+		if i-index >= 192 {
+			out.Reason = "48_hour_replay_limit"
+			break
+		}
 		r := rows[i]
 		expected := first.Timestamp + int64(i-index)*int64(tariff.SlotDuration.Seconds())
 		s, ok := slots[r.Timestamp]
@@ -71,8 +75,7 @@ func replayOutcome(index int, rows []controlSlot, slots map[int64]slotData, phys
 			out.Reason = "gap_or_unrecorded_mode_transition"
 			break
 		}
-		if i > index && !sameSnapshot(first.OptimizerSnapshotID, r.OptimizerSnapshotID) {
-			// New snapshots may change capacity, efficiency or control semantics mid-trajectory.
+		if i > index && !sameEconomics(first.OptimizerSnapshotID, r.OptimizerSnapshotID, snapshots) {
 			out.Status = "interrupted"
 			out.Reason = "planning_assumptions_changed"
 			break
@@ -106,7 +109,7 @@ func replayOutcome(index int, rows []controlSlot, slots map[int64]slotData, phys
 		out.Status = "unpriced"
 		return out
 	}
-	if out.Status == "pending" && out.Through.Before(to.Truncate(tariff.SlotDuration)) {
+	if out.Status == "pending" && out.Reason == "" && out.Through.Before(to.Truncate(tariff.SlotDuration)) {
 		out.Status = "interrupted"
 		out.Reason = "missing_subsequent_control"
 	}
@@ -122,4 +125,13 @@ func replayOutcome(index int, rows []controlSlot, slots map[int64]slotData, phys
 	return out
 }
 
-func sameSnapshot(a, b *uint64) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+func sameEconomics(a, b *uint64, snapshots map[uint64]*OptimizerSnapshot) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	x, y := snapshots[*a], snapshots[*b]
+	if x == nil || y == nil {
+		return false
+	}
+	return x.Version == y.Version && x.ControllerVersion == y.ControllerVersion && string(x.Economics) == string(y.Economics)
+}

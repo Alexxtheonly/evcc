@@ -25,15 +25,16 @@ type OptimizerSnapshot struct {
 
 // SnapshotBatteryEconomics describes the assumptions used for one stable device identity.
 type SnapshotBatteryEconomics struct {
-	Name            string   `json:"name"`
-	CapacityKWh     float64  `json:"capacityKWh"`
-	EtaC            float64  `json:"etaC"`
-	EtaD            float64  `json:"etaD"`
-	FloorFrac       float64  `json:"floorFrac"`
-	MaxChargeKWh    float64  `json:"maxChargeKWh"`
-	MaxDischargeKWh float64  `json:"maxDischargeKWh"`
-	WearPerKWh      *float64 `json:"wearPerKWh,omitempty"`
-	Source          string   `json:"source"`
+	MeasurementPlane string   `json:"measurementPlane,omitempty"`
+	Name             string   `json:"name"`
+	CapacityKWh      float64  `json:"capacityKWh"`
+	EtaC             float64  `json:"etaC"`
+	EtaD             float64  `json:"etaD"`
+	FloorFrac        float64  `json:"floorFrac"`
+	MaxChargeKWh     float64  `json:"maxChargeKWh"`
+	MaxDischargeKWh  float64  `json:"maxDischargeKWh"`
+	WearPerKWh       *float64 `json:"wearPerKWh,omitempty"`
+	Source           string   `json:"source"`
 }
 
 // SaveOptimizerSnapshot bounds payload size and retention without rewriting prior runs.

@@ -92,9 +92,10 @@ func computeW1(slots []slotData) []worldFlow {
 // package (Settled, Coverage, ...); without tags they serialise as PascalCase amid
 // lowerCamel siblings.
 type batteryPhysics struct {
-	WearPerKWh     *float64 `json:"wearPerKWh,omitempty"`
-	CapacityKWh    float64  `json:"capacityKWh"`
-	CapacitySource string   `json:"capacitySource"`
+	MeasurementPlane string   `json:"measurementPlane,omitempty"`
+	WearPerKWh       *float64 `json:"wearPerKWh,omitempty"`
+	CapacityKWh      float64  `json:"capacityKWh"`
+	CapacitySource   string   `json:"capacitySource"`
 
 	EtaC      float64 `json:"etaC"`
 	EtaD      float64 `json:"etaD"`
@@ -796,11 +797,12 @@ type ControlSplit struct {
 // assumptions behind W2 (nil if the site has no battery, in which case W2 collapses
 // to W1 and the battery contribution is honestly zero rather than omitted).
 type Chain struct {
-	Worlds         []WorldCost     `json:"worlds"`
-	Contributions  []Contribution  `json:"contributions"`
-	Coverage       Coverage        `json:"coverage"`
-	BatteryPhysics *batteryPhysics `json:"batteryPhysics,omitempty"`
-	Control        *ControlSplit   `json:"control,omitempty"`
+	InventoryAdjusted *InventoryAdjustedChain `json:"inventoryAdjusted,omitempty"`
+	Worlds            []WorldCost             `json:"worlds"`
+	Contributions     []Contribution          `json:"contributions"`
+	Coverage          Coverage                `json:"coverage"`
+	BatteryPhysics    *batteryPhysics         `json:"batteryPhysics,omitempty"`
+	Control           *ControlSplit           `json:"control,omitempty"`
 	// MeterResidual (ledger_slots.go) is the noise floor under every euro figure
 	// above, published rather than left implicit - see its own doc comment for why it
 	// is not expected to be zero.
@@ -985,15 +987,25 @@ func computeChainFromSlots(ctx context.Context, set *ledgerSlotSet) (*Chain, err
 	if set.FeedInFallbackSlots > 0 {
 		notes = append(notes, noteFeedInStaticFallback(set.FeedInFallbackSlots, set.FeedInFallbackPrice))
 	}
+	var adjusted *InventoryAdjustedChain
+	if phys != nil {
+		var err error
+		adjusted, err = computeInventoryAdjusted(ctx, set, *phys)
+		if err != nil {
+			return nil, err
+		}
+		notes = append(notes, "inventoryAdjusted is the estimated aggregate comparison including retained battery energy and configured wear; cash-only worlds above do not value terminal inventory. Decision outcomes overlap and must never be summed. Conditional decision replay holds subsequent recorded controls fixed; it is not a fully reoptimized counterfactual.")
+	}
 
 	return &Chain{
-		Worlds:         worlds,
-		Contributions:  contributions,
-		Coverage:       coverage,
-		BatteryPhysics: phys,
-		Control:        control,
-		MeterResidual:  computeMeterResidual(set.Slots),
-		W2Drift:        drift,
-		Notes:          notes,
+		InventoryAdjusted: adjusted,
+		Worlds:            worlds,
+		Contributions:     contributions,
+		Coverage:          coverage,
+		BatteryPhysics:    phys,
+		Control:           control,
+		MeterResidual:     computeMeterResidual(set.Slots),
+		W2Drift:           drift,
+		Notes:             notes,
 	}, nil
 }

@@ -23,6 +23,7 @@ type meter struct {
 }
 
 type entity struct {
+	MeasurementPlane  string   `gorm:"column:measurement_plane"`
 	Id                int      `gorm:"column:id;primarykey"`
 	Group             string   `gorm:"column:group;uniqueIndex:entities_group_name"`
 	Name              string   `gorm:"column:name;uniqueIndex:entities_group_name"`

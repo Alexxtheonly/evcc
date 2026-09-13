@@ -3,10 +3,12 @@ package metrics
 import (
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -117,6 +119,9 @@ func buildHomeProfile(rows []meter, at time.Time) ([2][96]HomeForecastSlot, Prof
 				continue
 			}
 			left, right := pooled[(i+95)%96], pooled[(i+1)%96]
+			if l, r := typed[d][(i+95)%96], typed[d][(i+1)%96]; len(l.values) >= 2 && len(r.values) >= 2 {
+				left, right = l, r
+			}
 			if len(left.values) == 0 || len(right.values) == 0 {
 				q.Source = "unavailable"
 				q.Reason = "missing adjacent time buckets cannot be interpolated"
@@ -142,7 +147,7 @@ func HomeForecast(from, to time.Time) (*HomeForecastResult, error) {
 		return nil, fmt.Errorf("invalid household forecast horizon")
 	}
 	var rows []meter
-	if err := db.Instance.Where("meter = ? AND ts >= ? AND ts < ?", 1, from.AddDate(0, 0, -37).Unix(), from.Unix()).Order("ts").Find(&rows).Error; err != nil {
+	if err := db.Instance.Select("meter, ts, COALESCE(energy,-1) AS energy, recovered, incomplete").Where("meter = ? AND ts >= ? AND ts < ?", 1, from.AddDate(0, 0, -37).Unix(), from.Unix()).Order("ts").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	cut := from.AddDate(0, 0, -30).Unix()
@@ -270,18 +275,44 @@ func nearestLead(d time.Duration) int {
 
 // SolarForecastRange returns a measured-error envelope or an explicit uncalibrated spread.
 func SolarForecastRange(from time.Time, leadMinutes int, baseWh float64) (low, high float64, samples int, err error) {
-	rows, err := QueryLeadTimeSamples(from.AddDate(0, 0, -90))
+	if !finite(baseWh) || baseWh < 0 {
+		return 0, 0, 0, fmt.Errorf("invalid solar forecast energy")
+	}
+	residuals, err := solarResiduals(from, nearestLead(time.Duration(leadMinutes)*time.Minute))
 	if err != nil {
 		return 0, 0, 0, err
-	}
-	var residuals []float64
-	for _, r := range rows {
-		if r.LeadMinutes == nearestLead(time.Duration(leadMinutes)*time.Minute) && finite(r.Actual) && finite(r.Forecast) {
-			residuals = append(residuals, (r.Actual-r.Forecast)*1e3)
-		}
 	}
 	if len(residuals) < 30 {
 		return baseWh * .5, baseWh * 1.5, len(residuals), nil
 	}
 	return max(0, min(baseWh, baseWh+Percentile(residuals, .1))), max(baseWh, baseWh+Percentile(residuals, .9)), len(residuals), nil
+}
+
+var solarResidualCache struct {
+	sync.Mutex
+	database *gorm.DB
+	cutoff   int64
+	byLead   map[int][]float64
+}
+
+func solarResiduals(from time.Time, lead int) ([]float64, error) {
+	solarResidualCache.Lock()
+	defer solarResidualCache.Unlock()
+	cutoff := from.Truncate(tariff.SlotDuration).Unix()
+	if solarResidualCache.database != db.Instance || solarResidualCache.cutoff != cutoff {
+		rows, err := QueryLeadTimeSamples(from.AddDate(0, 0, -90))
+		if err != nil {
+			return nil, err
+		}
+		byLead := make(map[int][]float64)
+		for _, r := range rows {
+			if r.Slot < cutoff && finite(r.Actual) && finite(r.Forecast) {
+				byLead[r.LeadMinutes] = append(byLead[r.LeadMinutes], (r.Actual-r.Forecast)*1e3)
+			}
+		}
+		solarResidualCache.database = db.Instance
+		solarResidualCache.cutoff = cutoff
+		solarResidualCache.byLead = byLead
+	}
+	return solarResidualCache.byLead[lead], nil
 }

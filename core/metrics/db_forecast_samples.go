@@ -90,6 +90,7 @@ func ArchiveForecastSample(now time.Time, energyAt func(from, to time.Time) (flo
 // LeadTimeSample pairs one archived forecast reading with the actual PV energy
 // measured for the same slot, for a per-lead-time forecast bias calculation.
 type LeadTimeSample struct {
+	Slot        int64
 	LeadMinutes int
 	Forecast    float64 // archived forecast energy for the slot, kWh
 	Actual      float64 // measured PV energy for the same slot, kWh
@@ -106,7 +107,7 @@ func QueryLeadTimeSamples(from time.Time) ([]LeadTimeSample, error) {
 	var res []LeadTimeSample
 
 	err := db.Instance.Table("forecast_samples fs").
-		Select(`fs.lead_minutes AS lead_minutes, fs.energy AS forecast, SUM(m.energy) AS actual`).
+		Select(`fs.slot AS slot, fs.lead_minutes AS lead_minutes, fs.energy AS forecast, SUM(m.energy) AS actual`).
 		Joins(`JOIN meters m ON m.ts = fs.slot`).
 		Joins(`JOIN entities e ON e.id = m.meter AND e."group" = ?`, PV).
 		Where("fs.slot >= ? AND COALESCE(m.recovered,0)=0 AND COALESCE(m.incomplete,0)=0", from.Unix()).

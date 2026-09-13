@@ -115,6 +115,19 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 	for _, s := range set.Slots {
 		bySlot[s.Start.Unix()] = s
 	}
+	snapshots := make(map[uint64]*OptimizerSnapshot)
+	for _, r := range rows {
+		if r.OptimizerSnapshotID != nil {
+			id := *r.OptimizerSnapshotID
+			if _, ok := snapshots[id]; !ok {
+				s, err := GetOptimizerSnapshot(id)
+				if err != nil {
+					return nil, err
+				}
+				snapshots[id] = s
+			}
+		}
+	}
 
 	out := make([]DecisionRow, 0, len(rows))
 	for i, r := range rows {
@@ -167,14 +180,10 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 		if phys != nil && suggested != nil && effectiveMode(r.AppliedMode) != effectiveMode(*suggested) {
 			p, source, valid := *phys, "legacy_assumed_efficiency_and_observed_limits", true
 			if r.OptimizerSnapshotID != nil {
-				snapshot, err := GetOptimizerSnapshot(*r.OptimizerSnapshotID)
-				if err != nil {
-					return nil, err
-				}
-				p, source, valid = snapshotPhysics(snapshot, p)
+				p, source, valid = snapshotPhysics(snapshots[*r.OptimizerSnapshotID], p)
 			}
 			if valid {
-				dr.Outcome = replayOutcome(i, rows, bySlot, p, source, to)
+				dr.Outcome = replayOutcome(i, rows, bySlot, p, source, to, snapshots)
 			} else {
 				dr.Outcome = &DecisionOutcome{Status: "unpriced", Reason: source, AssumptionsSource: source}
 			}

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
@@ -9,6 +10,8 @@ import (
 
 // BatteryEfficiencyCandidate is an estimate, never an automatic setting change.
 type BatteryEfficiencyCandidate struct {
+	MeasurementPlane    string    `json:"measurementPlane"`
+	Applicable          bool      `json:"applicable"`
 	Name                string    `json:"name"`
 	ChargeEfficiency    *float64  `json:"chargeEfficiency,omitempty"`
 	DischargeEfficiency *float64  `json:"dischargeEfficiency,omitempty"`
@@ -29,13 +32,24 @@ func BatteryEfficiencyCandidates(from time.Time) ([]BatteryEfficiencyCandidate, 
 	}
 	res := make([]BatteryEfficiencyCandidate, 0, len(entities))
 	for _, e := range entities {
-		c := BatteryEfficiencyCandidate{Name: e.Name, Source: "capacity_unavailable"}
+		plane := e.MeasurementPlane
+		if plane == "" {
+			plane = "unknown"
+		}
+		c := BatteryEfficiencyCandidate{Name: e.Name, Source: "capacity_unavailable", MeasurementPlane: plane}
 		if e.CapacityKWh == nil || !finite(*e.CapacityKWh) || *e.CapacityKWh <= 0 {
 			res = append(res, c)
 			continue
 		}
 		c.CapacityKWh = *e.CapacityKWh
-		c.Source = "configured_capacity_soc"
+		c.Source = "soc_to_meter_energy_unverified_plane"
+		if plane == "ac" {
+			c.Source = "configured_capacity_ac_meter_soc"
+			c.Applicable = true
+		}
+		if plane == "dc" {
+			c.Source = "dc_meter_pack_efficiency_not_ac_conversion"
+		}
 		var rows []meter
 		if err := db.Instance.Where("meter = ? AND ts >= ?", e.Id, from.Unix()).Order("ts").Find(&rows).Error; err != nil {
 			return nil, err
@@ -86,4 +100,15 @@ func BatteryEfficiencyCandidates(from time.Time) ([]BatteryEfficiencyCandidate, 
 		res = append(res, c)
 	}
 	return res, nil
+}
+
+// SetBatteryMeasurementPlane records an explicit meter-plane declaration for calibration.
+func SetBatteryMeasurementPlane(name, plane string) error {
+	if plane != "ac" && plane != "dc" && plane != "unknown" {
+		return fmt.Errorf("invalid battery measurement plane %q", plane)
+	}
+	if db.Instance == nil {
+		return fmt.Errorf("metrics database unavailable")
+	}
+	return db.Instance.Model(new(entity)).Where(`"group" = ? AND name = ?`, Battery, name).Update("measurement_plane", plane).Error
 }
