@@ -210,6 +210,13 @@
 				<div v-if="item.calibrationReason">{{ item.calibrationReason }}</div>
 			</div>
 		</details>
+		<p
+			v-for="note in insights?.arrivalNotes || []"
+			:key="note.name"
+			class="small text-warning mt-2"
+		>
+			{{ note.name }}: {{ note.reason }}
+		</p>
 		<EnergySettings :settings="insights?.settings" :devices="settingsDevices" />
 	</Card>
 </template>

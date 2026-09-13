@@ -53,6 +53,7 @@ export interface EnergyInsights {
   };
   forecast?: EnergyForecastSlot[];
   devices?: EnergyDevice[];
+  arrivalNotes?: { name: string; reason: string }[];
   economics?: {
     name: string;
     chargeEfficiency: number;

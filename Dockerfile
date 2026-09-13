@@ -67,8 +67,12 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG TARGETVARIANT
 ARG GOARM=${TARGETVARIANT#v}
+ARG EVCC_VERSION
+ARG EVCC_COMMIT
 
 RUN --mount=type=cache,target=${GOCACHE} --mount=type=cache,target=${GOMODCACHE} \
+    if [ -n "$EVCC_VERSION" ]; then export TAG_NAME="$EVCC_VERSION"; fi; \
+    if [ -n "$EVCC_COMMIT" ]; then export SHA="$EVCC_COMMIT"; fi; \
     RELEASE=${RELEASE} GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${GOARM} make build
 
 
