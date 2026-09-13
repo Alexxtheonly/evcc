@@ -4,6 +4,13 @@
 		:class="{ 'empty-container': !forecastAvailable }"
 	>
 		<TopHeader :title="$t('forecast.modalTitle')" />
+		<EnergyPlanCard
+			v-if="optimizerEnabled || optimizerInsights"
+			:insights="optimizerInsights"
+			:health="optimizerHealth"
+			:automatic="optimizerAutomatic"
+			:currency="currency"
+		/>
 		<div v-if="!forecastAvailable" class="flex-grow-1 d-flex">
 			<div class="empty-box d-flex flex-column p-5">
 				<ul class="list-unstyled mb-4">
@@ -111,6 +118,7 @@
 
 				<SavingsLedgerCard
 					:currency="currency"
+					:settlement="optimizerInsights?.settings"
 					@update:decisions="ledgerDecisions = $event"
 				/>
 
@@ -166,6 +174,7 @@ import PriceChart from "../components/Forecast/PriceChart.vue";
 import GridDetails from "../components/Forecast/GridDetails.vue";
 import SavingsLedgerCard from "../components/Forecast/SavingsLedgerCard.vue";
 import SavingsLedgerDecisions from "../components/Forecast/SavingsLedgerDecisions.vue";
+import EnergyPlanCard from "../components/Forecast/EnergyPlanCard.vue";
 import ValueChart, { type ValueChartType } from "../components/Forecast/ValueChart.vue";
 import ValueDetails from "../components/Forecast/ValueDetails.vue";
 import formatter from "@/mixins/formatter";
@@ -192,6 +201,7 @@ export default defineComponent({
 		GridDetails,
 		SavingsLedgerCard,
 		SavingsLedgerDecisions,
+		EnergyPlanCard,
 		ValueChart,
 		ValueDetails,
 	},
@@ -288,6 +298,15 @@ export default defineComponent({
 		},
 		optimizerAutomatic() {
 			return !!store.state?.optimizerAutomatic;
+		},
+		optimizerEnabled() {
+			return store.state?.optimizer;
+		},
+		optimizerInsights() {
+			return store.state?.optimizerInsights;
+		},
+		optimizerHealth() {
+			return store.state?.optimizerHealth;
 		},
 		solarAdjusted() {
 			return store.state?.solarAdjusted;

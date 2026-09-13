@@ -68,6 +68,31 @@
 		</div>
 
 		<div v-else-if="ledger" data-testid="savings-ledger-content">
+			<p class="small text-muted" data-testid="ledger-settlement-basis">
+				{{ settlementLabel }}
+			</p>
+			<div
+				v-if="ledger.chain?.inventoryAdjusted"
+				class="mb-3"
+				data-testid="ledger-inventory-benefit"
+			>
+				<div>{{ $t("forecast.energy.inventory") }}</div>
+				<strong
+					v-if="inventoryBenefit != null"
+					class="fs-4"
+					:class="{ 'text-danger': inventoryBenefit < 0 }"
+					>{{ money(inventoryBenefit) }}</strong
+				>
+				<span v-else>{{ $t("forecast.savingsLedger.decisions.deltaUnknown") }}</span>
+				<p class="small text-muted mb-1">{{ $t("forecast.energy.inventoryNote") }}</p>
+				<p v-if="ledger.chain.inventoryAdjusted.reason" class="small text-warning mb-1">
+					{{ ledger.chain.inventoryAdjusted.reason }}
+				</p>
+				<p class="small text-muted mb-1">
+					{{ ledger.chain.inventoryAdjusted.assumptionsSource }} ·
+					{{ ledger.chain.inventoryAdjusted.valuation }}
+				</p>
+			</div>
 			<SavingsLedgerWaterfall
 				v-if="ledger.chain"
 				:chain="ledger.chain"
@@ -172,6 +197,7 @@ import DateNavigatorButton from "../Sessions/DateNavigatorButton.vue";
 import SavingsLedgerWaterfall from "./SavingsLedgerWaterfall.vue";
 import SavingsLedgerInfoModal from "./SavingsLedgerInfoModal.vue";
 import type { SavingsLedger, SavingsLedgerErrorBody } from "./savingsLedger.types";
+import type { EnergySettings } from "./energyIntelligence";
 import {
 	defaultWindow,
 	shiftWindow,
@@ -205,6 +231,7 @@ export default defineComponent({
 	mixins: [formatter],
 	props: {
 		currency: { type: String as PropType<CURRENCY> },
+		settlement: { type: Object as PropType<EnergySettings>, default: undefined },
 	},
 	// the decisions strip is its own card in Forecast.vue but shares this card's single
 	// response, emitted upward rather than fetched again: one request per period change.
@@ -235,6 +262,24 @@ export default defineComponent({
 		};
 	},
 	computed: {
+		inventoryBenefit(): number | undefined {
+			const adjusted = this.ledger?.chain?.inventoryAdjusted;
+			if (adjusted?.status === "unavailable") return undefined;
+			return this.headline === "perSlot"
+				? adjusted?.control?.full
+				: adjusted?.control?.routing;
+		},
+		settlementLabel(): string {
+			const start = this.settlement?.settlementFrom;
+			const billed =
+				this.settlement?.settlementMode === "interval" &&
+				start &&
+				this.ledger &&
+				new Date(this.ledger.from) >= new Date(start);
+			return this.$t(
+				billed ? "forecast.energy.periodInterval" : "forecast.energy.periodSimulation"
+			);
+		},
 		title(): string {
 			return this.$t("forecast.savingsLedger.title") as string;
 		},

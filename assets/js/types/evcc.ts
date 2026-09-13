@@ -1,3 +1,5 @@
+import type { EnergyInsights } from "../components/Forecast/energyIntelligence";
+
 // react-native-webview
 interface WebView {
   postMessage: (message: string) => void;
@@ -180,6 +182,7 @@ export interface State {
   optimizerDiagnostics?: OptimizerDiagnostics;
   /** @internal */
   optimizerHealth?: OptimizerHealth;
+  optimizerInsights?: EnergyInsights;
   /** Running evcc version. */
   version?: string;
   /** Latest available evcc version. */

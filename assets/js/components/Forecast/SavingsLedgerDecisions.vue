@@ -1,5 +1,14 @@
 <template>
 	<div class="savings-ledger-decisions" data-testid="savings-ledger-decisions">
+		<p v-if="missingCount" class="text-warning" data-testid="decision-missing-coverage">
+			{{
+				$t("forecast.energy.missing", {
+					count: missingCount,
+					total: slots.length,
+					percent: Math.round((missingCount / slots.length) * 100),
+				})
+			}}
+		</p>
 		<!-- no heading of its own: this strip is mounted as its own Card in
 		     views/Forecast.vue, whose header renders decisions.title. -->
 		<div v-if="slots.length" class="section-head">
@@ -103,6 +112,55 @@
 				{{ $t("forecast.savingsLedger.decisions.deltaNote") }}
 			</p>
 		</div>
+		<div v-if="slots.length" class="mt-4">
+			<label for="energy-past-decision" class="form-label">{{
+				$t("forecast.energy.selectDecision")
+			}}</label>
+			<select id="energy-past-decision" v-model="selectedTs" class="form-select">
+				<option value="" disabled>{{ $t("forecast.energy.selectDecision") }}</option>
+				<option v-for="slot in slots" :key="slot.row.ts" :value="slot.row.ts">
+					{{ fmtDayTime(new Date(slot.row.ts)) }} · {{ suggestedLabel(slot) }} →
+					{{ modeLabel(slot.row.appliedMode) }}
+				</option>
+			</select>
+			<div v-if="selectedDecision" class="mt-3" data-testid="decision-outcome">
+				<h4 class="fs-6">
+					{{ $t("forecast.energy.outcome") }}:
+					{{ $t(`forecast.energy.${selectedDecision.outcome?.status ?? "unpriced"}`) }}
+				</h4>
+				<p v-if="selectedDecision.vetoReason" class="small">
+					{{ $t("forecast.savingsLedger.decisions.reason") }}:
+					{{ selectedDecision.vetoReason }}
+				</p>
+				<p v-if="selectedDecision.outcome?.reason" class="small">
+					{{ selectedDecision.outcome.reason }}
+				</p>
+				<dl v-if="selectedDecision.outcome" class="row small">
+					<template v-for="item in outcomeValues" :key="item.label"
+						><dt class="col-8">{{ $t(item.label) }}</dt>
+						<dd class="col-4 text-end">
+							{{
+								item.value == null
+									? $t("forecast.savingsLedger.decisions.deltaUnknown")
+									: fmtMoney(item.value, currency, true, true)
+							}}
+						</dd></template
+					>
+				</dl>
+				<p v-if="selectedDecision.outcome?.through" class="small text-muted">
+					{{
+						$t("forecast.energy.through", {
+							time: fmtDayTime(new Date(selectedDecision.outcome.through)),
+						})
+					}}
+				</p>
+				<p v-if="selectedDecision.outcome?.assumptionsSource" class="small text-muted">
+					{{ $t("forecast.energy.assumptions") }}:
+					{{ selectedDecision.outcome.assumptionsSource }}
+				</p>
+				<p class="small text-muted">{{ $t("forecast.energy.replayNote") }}</p>
+			</div>
+		</div>
 	</div>
 </template>
 
@@ -196,6 +254,7 @@ export default defineComponent({
 	},
 	data() {
 		return {
+			selectedTs: "",
 			view: "timeline" as "timeline" | "table",
 			// the rendered chart width, so badge spacing can be reasoned about in pixels;
 			// seeded with the desktop card width until the chart reports its own
@@ -203,6 +262,21 @@ export default defineComponent({
 		};
 	},
 	computed: {
+		missingCount() {
+			return this.slots.filter((slot) => slot.state === "unrecorded").length;
+		},
+		selectedDecision() {
+			return this.decisions.find((row) => row.ts === this.selectedTs);
+		},
+		outcomeValues() {
+			const outcome = this.selectedDecision?.outcome;
+			return [
+				{ label: "forecast.energy.cash", value: outcome?.cashDeltaEur },
+				{ label: "forecast.energy.wearDelta", value: outcome?.wearDeltaEur },
+				{ label: "forecast.energy.terminal", value: outcome?.terminalValueDeltaEur },
+				{ label: "forecast.energy.net", value: outcome?.netDeltaEur },
+			];
+		},
 		chartHeight(): number {
 			return CHART_HEIGHT;
 		},
@@ -462,7 +536,7 @@ export default defineComponent({
 		},
 		seamColor(direction: DeltaDirection): string {
 			if (direction === "cost") return colors.danger || "";
-			if (direction === "saved") return colors.self || "";
+			if (direction === "saved") return colors.muted || "";
 			// a computed wash and a missing figure are different facts, and neither is a
 			// saving: solid grey for "made no difference", faded for "not priced"
 			return setAlpha(colors.muted, direction === "neutral" ? "cc" : "66") || "";
@@ -487,7 +561,7 @@ export default defineComponent({
 				const money = this.fmtMoney(Math.abs(delta), this.currency, true, true);
 				const mid = (run.start + run.end) / 2;
 				const label: MarkPointLabelItem["label"] = {
-					backgroundColor: cost ? colors.danger || "" : colors.self || "",
+					backgroundColor: cost ? colors.danger || "" : colors.muted || "",
 				};
 				// markPointLabel nudges a badge in the first 5 % of the range right so the
 				// canvas edge can't cut it; clip:false means the last 5 % needs the mirror

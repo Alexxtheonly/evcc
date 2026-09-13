@@ -175,7 +175,7 @@ describe("SavingsLedgerDecisions timeline", () => {
     const net = wrapper.find('[data-testid="savings-ledger-decisions-net"]');
     // the figure covers one of the two, and says so in the singular: "those overrides
     // cost EUR 0.04" would attribute one slot's effect to both
-    expect(net.text()).toContain("the priced override cost €0.04 in its own slot");
+    expect(net.text()).toContain("the priced override increased immediate cost by €0.04");
     expect(net.text()).not.toContain("{amount}");
     expect(net.classes()).toContain("text-danger");
   });

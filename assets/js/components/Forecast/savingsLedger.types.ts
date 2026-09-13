@@ -99,6 +99,15 @@ export interface LedgerChain {
   meterResidual: LedgerMeterResidual;
   w2Drift?: LedgerW2Drift;
   notes?: string[];
+  inventoryAdjusted?: {
+    status: "estimated" | "partial" | "unavailable";
+    reason?: string;
+    control?: LedgerControlSplit;
+    terminalAdjustment?: LedgerSettled;
+    wearAdjustment?: number;
+    assumptionsSource: string;
+    valuation: string;
+  };
 }
 
 /** core/metrics/ledger_decisions.go DecisionRow: one control_slots row, plus the euro cost
@@ -122,6 +131,19 @@ export interface LedgerDecisionRow {
    * full 15 minutes. The slot-local delta still simulates the full slot regardless. */
   modeChanged: boolean;
   slotFlowDeltaEur?: number;
+  snapshotId?: string;
+  outcome?: {
+    status: "pending" | "completed" | "interrupted" | "unpriced";
+    reason?: string;
+    through?: string;
+    slots: number;
+    cashDeltaEur?: number;
+    wearDeltaEur?: number;
+    terminalEnergyDeltaKWh?: number;
+    terminalValueDeltaEur?: number;
+    netDeltaEur?: number;
+    assumptionsSource: string;
+  };
 }
 
 /** core/metrics/ledger.go Ledger. Chain is undefined, with chainUnavailable explaining why,
