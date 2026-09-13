@@ -283,6 +283,16 @@ export default defineComponent({
 			this.request++;
 			this.loaded = false;
 		},
+		invalidBattery(name: string, field: string, message: string) {
+			this.error = `${this.devices.find((device) => device.name === name)?.title ?? name}: ${this.$t(message)}`;
+			this.activeSection = "batteries";
+			this.$nextTick(() => {
+				const input = document.getElementById(`energy-${field}-${name}`);
+				const details = input?.closest("details");
+				if (details) details.open = true;
+				input?.focus();
+			});
+		},
 		initializeDevices() {
 			for (const device of this.devices) {
 				this.planes[device.name] ||= "unknown";
@@ -375,8 +385,7 @@ export default defineComponent({
 				if (text === "") continue;
 				const value = Number(text);
 				if (!Number.isFinite(value) || value < 0 || value > 100) {
-					this.error = this.$t("forecast.energy.invalidWear");
-					this.activeSection = "batteries";
+					this.invalidBattery(name, "wear", "forecast.energy.invalidWear");
 					return;
 				}
 				batteryWear[name] = value;
@@ -391,8 +400,13 @@ export default defineComponent({
 						(value) => Number.isFinite(value) && value > 0 && value <= 1
 					)
 				) {
-					this.error = this.$t("forecast.energy.invalidEfficiency");
-					this.activeSection = "batteries";
+					const field =
+						Number.isFinite(chargeEfficiency) &&
+						chargeEfficiency > 0 &&
+						chargeEfficiency <= 1
+							? "dischargeEfficiency"
+							: "chargeEfficiency";
+					this.invalidBattery(name, field, "forecast.energy.invalidEfficiency");
 					return;
 				}
 				batteryEfficiency[name] = { chargeEfficiency, dischargeEfficiency };

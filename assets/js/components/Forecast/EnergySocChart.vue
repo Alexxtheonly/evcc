@@ -15,7 +15,7 @@
 					<line x1="0" x2="665" :y1="y(soc)" :y2="y(soc)" class="grid-line" />
 				</g>
 				<polygon v-if="envelope" :points="envelope" class="soc-envelope" />
-				<polyline :points="points(timeline)" class="soc-line" />
+				<polyline v-if="timeline.length" :points="points(timeline)" class="soc-line" />
 				<line
 					v-if="selectedEnd"
 					:x1="x(selectedEnd)"
@@ -69,7 +69,9 @@ export default defineComponent({
 			if (this.low?.length !== this.slots.length || this.high?.length !== this.slots.length)
 				return undefined;
 			const atEnds = (values: number[]) => [
-				{ time: this.slots[0]!.start, soc: this.device.initialSoc },
+				...(this.device.initialSoc != null && Number.isFinite(this.device.initialSoc)
+					? [{ time: this.slots[0]!.start, soc: this.device.initialSoc }]
+					: []),
 				...values.map((soc, index) => ({ time: this.slots[index]!.end, soc })),
 			];
 			return `${this.points(atEnds(this.low!))} ${this.points(atEnds(this.high!).reverse())}`;

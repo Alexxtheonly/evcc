@@ -46,17 +46,15 @@
 				<div v-for="item in deviceSummaries" :key="item.device.key" class="col-md-6">
 					<div class="device-summary border rounded p-3 h-100">
 						<div class="fw-semibold">{{ item.device.title }}</div>
-						<div class="small mb-2">
+						<div v-if="item.device.capacityKWh > 0" class="small mb-2">
 							{{
 								$t("forecast.energy.levelJourney", {
 									start: percent(item.device.initialSoc),
-									end:
-										item.endSoc == null
-											? $t("forecast.energy.noPlan")
-											: percent(item.endSoc),
+									end: percent(item.endSoc),
 								})
 							}}
 						</div>
+						<div v-else class="small mb-2">{{ $t("forecast.energy.energyOnly") }}</div>
 						<button
 							v-if="item.next"
 							type="button"
@@ -159,11 +157,15 @@
 					<span>{{ device.title }}</span>
 					<span
 						>{{ action(device)
-						}}<small v-if="deviceSlot(device)" class="d-block text-end">{{
-							$t("forecast.energy.levelAtEnd", {
-								soc: percent(deviceSlot(device)!.soc),
-							})
-						}}</small></span
+						}}<small
+							v-if="deviceSlot(device) && device.capacityKWh > 0"
+							class="d-block text-end"
+							>{{
+								$t("forecast.energy.levelAtEnd", {
+									soc: percent(deviceSlot(device)!.soc),
+								})
+							}}</small
+						></span
 					>
 				</div>
 			</div>
@@ -381,7 +383,9 @@ export default defineComponent({
 		kwh(value: number) {
 			return `${value.toLocaleString(this.$i18n.locale, { maximumFractionDigits: 2 })} kWh`;
 		},
-		percent(value: number) {
+		percent(value: number | undefined) {
+			if (value == null || !Number.isFinite(value))
+				return this.$t("forecast.energy.unknownLevel");
 			return `${value.toLocaleString(this.$i18n.locale, { maximumFractionDigits: 1 })} %`;
 		},
 		money(value: number) {

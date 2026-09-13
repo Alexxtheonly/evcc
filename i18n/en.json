@@ -1145,6 +1145,8 @@
   },
   "forecast": {
     "energy": {
+      "energyOnly": "Energy plan only. Charge level is unavailable.",
+      "unknownLevel": "Unknown charge level",
       "configure": "Configure",
       "previewNote": "Preview only. Devices continue to follow their current settings.",
       "estimatedRange": "Estimate range {low} – {high}",
@@ -1240,7 +1242,7 @@
       "chargeEfficiency": "Declared charge efficiency (%)",
       "dischargeEfficiency": "Declared discharge efficiency (%)",
       "efficiencyNote": "Declare both directions, or leave both blank to retain fallback or eligible learned values. Declarations override learning.",
-      "invalidEfficiency": "Enter both efficiencies above 0 and at most 100%, or leave both blank.",
+      "invalidEfficiency": "Enter both efficiencies above 0 and at most 100%, or select Automatic to use planner values.",
       "periodSimulation": "Interval-price comparison is simulated for all or part of this period.",
       "periodInterval": "Interval billing basis · savings remain a modelled comparison.",
       "outcome": "Later outcome",

@@ -1145,6 +1145,8 @@
   },
   "forecast": {
     "energy": {
+      "energyOnly": "Nur Energieplanung. Kein Ladestand verfügbar.",
+      "unknownLevel": "Unbekannter Ladestand",
       "configure": "Einrichten",
       "previewNote": "Nur Vorschau. Geräte folgen weiterhin ihren bisherigen Einstellungen.",
       "estimatedRange": "Geschätzter Bereich {low} – {high}",
@@ -1240,7 +1242,7 @@
       "chargeEfficiency": "Festgelegter Ladewirkungsgrad (%)",
       "dischargeEfficiency": "Festgelegter Entladewirkungsgrad (%)",
       "efficiencyNote": "Beide Richtungen festlegen oder beide leer lassen, um Standardwerte oder geeignete gelernte Werte zu nutzen. Festlegungen haben Vorrang.",
-      "invalidEfficiency": "Beide Wirkungsgrade über 0 bis einschließlich 100 % eingeben oder beide leer lassen.",
+      "invalidEfficiency": "Beide Wirkungsgrade über 0 bis einschließlich 100 % eingeben oder Automatisch für die Planerwerte auswählen.",
       "periodSimulation": "Der Vergleich mit Intervallpreisen ist für diesen Zeitraum ganz oder teilweise simuliert.",
       "periodInterval": "Intervallabrechnung · Einsparungen bleiben ein Modellvergleich.",
       "outcome": "Spätere Wirkung",

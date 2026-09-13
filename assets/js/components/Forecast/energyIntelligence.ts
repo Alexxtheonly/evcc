@@ -27,10 +27,10 @@ export interface EnergyDevice {
   title: string;
   kind: "battery" | "vehicle" | "expectedVehicle";
   capacityKWh: number;
-  initialSoc: number;
+  initialSoc?: number;
   arrival?: string;
   departure?: string;
-  plan: { start: string; chargeWh: number; dischargeWh: number; soc: number }[];
+  plan: { start: string; chargeWh: number; dischargeWh: number; soc?: number }[];
 }
 
 export interface EnergyInsights {
@@ -78,12 +78,16 @@ export interface EnergyInsights {
 }
 
 export const socTimeline = (device: EnergyDevice, slots: EnergyForecastSlot[]) => {
-  if (!slots.length) return [];
+  if (!slots.length || device.capacityKWh <= 0) return [];
   return [
-    { time: slots[0]!.start, soc: device.initialSoc },
+    ...(device.initialSoc != null && Number.isFinite(device.initialSoc)
+      ? [{ time: slots[0]!.start, soc: device.initialSoc }]
+      : []),
     ...device.plan.flatMap((point) => {
       const slot = slots.find((slot) => slot.start === point.start);
-      return slot ? [{ time: slot.end, soc: point.soc }] : [];
+      return slot && point.soc != null && Number.isFinite(point.soc)
+        ? [{ time: slot.end, soc: point.soc }]
+        : [];
     }),
   ];
 };

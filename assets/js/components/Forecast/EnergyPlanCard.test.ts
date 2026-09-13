@@ -33,6 +33,48 @@ const global = {
 };
 
 describe("energy plan", () => {
+  test("energy-only loadpoint JSON has no initial SoC and does not claim a zero charge level", () => {
+    const device = JSON.parse(
+      '{"key":"loadpoint:1","name":"heater","title":"Heating","kind":"vehicle","capacityKWh":0,"plan":[{"start":"2026-09-13T12:00:00Z","chargeWh":1500,"dischargeWh":0,"soc":0}]}'
+    );
+    const insights: EnergyInsights = {
+      updated: slot.start,
+      automatic: false,
+      status: "ready",
+      settings,
+      forecast: [slot],
+      devices: [device],
+    };
+    const wrapper = shallowMount(EnergyPlanCard, { props: { insights }, global });
+    expect(wrapper.text()).toContain("forecast.energy.energyOnly");
+    expect(wrapper.text()).toContain("forecast.energy.charging");
+    expect(wrapper.text()).not.toContain("forecast.energy.levelJourney");
+    expect(wrapper.text()).not.toContain("forecast.energy.levelAtEnd");
+  });
+
+  test("missing initial and terminal charge levels are unknown, never zero", () => {
+    const device = JSON.parse(
+      '{"key":"storage","name":"storage","title":"Storage","kind":"battery","capacityKWh":10,"plan":[{"start":"2026-09-13T12:00:00Z","chargeWh":1500,"dischargeWh":0}]}'
+    );
+    const insights: EnergyInsights = {
+      updated: slot.start,
+      automatic: false,
+      status: "ready",
+      settings,
+      forecast: [slot],
+      devices: [device],
+    };
+    const wrapper = shallowMount(EnergyPlanCard, { props: { insights }, global });
+    expect(wrapper.text()).toContain("forecast.energy.unknownLevel");
+    expect(wrapper.text()).not.toContain("NaN");
+    expect(socTimeline(device, [slot])).toEqual([]);
+    const chart = shallowMount(EnergySocChart, {
+      props: { device, slots: [slot], low: [30], high: [50] },
+      global,
+    });
+    expect(chart.find("polyline").exists()).toBe(false);
+    expect(chart.find("polygon").attributes("points")).not.toContain("NaN");
+  });
   test("chart positions unequal intervals by elapsed time, not array index", () => {
     const slots = [slot, { ...slot, start: slot.end, end: "2026-09-13T13:00:00Z" }];
     const device = {

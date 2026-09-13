@@ -213,3 +213,31 @@ test("partial custom efficiencies and failed writes keep the form editable", asy
   expect(wrapper.get('[role="alert"]').text()).toContain("write unavailable");
   expect(wrapper.get('button[type="submit"]').attributes("disabled")).toBeUndefined();
 });
+
+test("invalid wear reveals and focuses the named battery field even from Planning", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  const wrapper = mount(EnergySettings, {
+    attachTo: document.body,
+    props: {
+      devices: [
+        { name: "first", title: "First battery" },
+        { name: "second", title: "Second battery" },
+      ],
+    },
+    global,
+  });
+  try {
+    await open(wrapper);
+    const input = wrapper.get("#energy-wear-second");
+    await input.setValue("-1");
+    expect((input.element.closest("details") as HTMLDetailsElement).open).toBe(false);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("Second battery");
+    expect((input.element.closest("details") as HTMLDetailsElement).open).toBe(true);
+    expect(document.activeElement).toBe(input.element);
+    expect(api.put).not.toHaveBeenCalled();
+  } finally {
+    wrapper.unmount();
+  }
+});
