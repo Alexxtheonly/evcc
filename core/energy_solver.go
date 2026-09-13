@@ -222,6 +222,7 @@ func executableFirstActions(req energyRequest, details requestDetails, base opti
 	index := -1
 	net := float64(req.TimeSeries.Gt[0] - req.TimeSeries.Ft[0])
 	hours := float64(req.TimeSeries.Dt[0]) / 3600
+	first := fixedFirstAction(req, base)
 	for i, detail := range details.BatteryDetails {
 		if detail.Type == batteryTypeBattery {
 			if index >= 0 {
@@ -231,12 +232,25 @@ func executableFirstActions(req energyRequest, details requestDetails, base opti
 			continue
 		}
 		charge := float64(base.Batteries[i].ChargingPower[0])
+		full := float64(req.Batteries[i].CMax) * float64(req.TimeSeries.Dt[0]) / 3600
 		// Full power and stop have a stable EV command. A partial command can
 		// instead invoke PV tracking, phase switching or minimum-current gates.
-		if charge > .1 && charge < float64(req.Batteries[i].CMax)*hours-.1 {
+		if charge > .1 && base.Batteries[i].ChargingPower[0] != float32(full) {
 			return nil, errors.New("robust dispatch cannot fix a partial EV first action: PV tracking and current gates remain authoritative")
 		}
-		net += charge - float64(base.Batteries[i].DischargingPower[0])
+		if base.Batteries[i].DischargingPower[0] > .1 {
+			return nil, errors.New("robust dispatch cannot command EV discharge")
+		}
+		// Reconstruct the command from its request limit, not rounded float32
+		// response energy, which can exceed the exact physical power boundary.
+		if charge > .1 {
+			charge = full
+		} else {
+			charge = 0
+		}
+		discharge := 0.0
+		first.Batteries[i].FirstStepCharge, first.Batteries[i].FirstStepDischarge = &charge, &discharge
+		net += charge
 	}
 	if index < 0 {
 		return nil, errors.New("robust battery-mode evaluation requires a home battery")
@@ -282,7 +296,8 @@ func executableFirstActions(req energyRequest, details requestDetails, base opti
 		if duplicate {
 			continue
 		}
-		fixed := fixedFirstAction(req, base)
+		fixed := first
+		fixed.Batteries = slices.Clone(first.Batteries)
 		fixed.Batteries[index].FirstStepCharge, fixed.Batteries[index].FirstStepDischarge = &charge, &discharge
 		actions = append(actions, energyFirstAction{mode, fixed})
 	}

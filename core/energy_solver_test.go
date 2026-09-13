@@ -74,6 +74,43 @@ func TestRobustFirstActionUsesExecutableModes(t *testing.T) {
 	assert.Equal(t, 0.0, *actions[1].request.Batteries[0].FirstStepCharge)
 }
 
+func TestRobustFullEVActionReconstructedFromRequest(t *testing.T) {
+	req := energyRequest{OptimizationInput: optimizer.OptimizationInput{EtaC: 1, EtaD: 1, TimeSeries: optimizer.TimeSeries{Dt: []int{613}, Gt: []float32{0}, Ft: []float32{0}, PN: []float32{.0002}, PE: []float32{0}}}, Batteries: []energyBattery{
+		{BatteryConfig: optimizer.BatteryConfig{SInitial: 10000, SMax: 20000, DMax: 30000}},
+		{BatteryConfig: optimizer.BatteryConfig{SInitial: 0, SMax: 75000, CMax: 11040, ChargeFromGrid: true}},
+	}}
+	details := requestDetails{BatteryDetails: []batteryDetail{{Type: batteryTypeBattery}, {Type: batteryTypeVehicle}}}
+	exact := float64(req.Batteries[1].CMax) * float64(req.TimeSeries.Dt[0]) / 3600
+	base := optimizer.OptimizationResult{Batteries: []optimizer.BatteryResult{
+		{ChargingPower: []float32{0}, DischargingPower: []float32{0}},
+		{ChargingPower: []float32{float32(exact)}, DischargingPower: []float32{0}},
+	}}
+	require.Greater(t, float64(base.Batteries[1].ChargingPower[0]), exact)
+	actions, err := executableFirstActions(req, details, base)
+	require.NoError(t, err)
+	require.NotEmpty(t, actions)
+	for _, action := range actions {
+		assert.Equal(t, exact, *action.request.Batteries[1].FirstStepCharge)
+		if action.name == "normal" {
+			assert.Equal(t, exact, *action.request.Batteries[0].FirstStepDischarge)
+		}
+	}
+	if url := os.Getenv("EVCC_ENERGY_SOLVER_TEST_URL"); url != "" {
+		client, err := optimizer.NewClientWithResponses(url)
+		require.NoError(t, err)
+		site := &Site{log: util.NewLogger("full-ev-test"), optimizerClient: client}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, action := range actions {
+			_, err := site.solveEnergy(ctx, action.request)
+			require.NoError(t, err, action.name)
+		}
+	}
+	base.Batteries[1].ChargingPower[0] = float32(exact - .01)
+	_, err = executableFirstActions(req, details, base)
+	assert.Error(t, err, "a genuinely partial EV action must not be rounded up to full power")
+}
+
 func TestRobustPartialDischargeIntegration(t *testing.T) {
 	url := os.Getenv("EVCC_ENERGY_SOLVER_TEST_URL")
 	if url == "" {
