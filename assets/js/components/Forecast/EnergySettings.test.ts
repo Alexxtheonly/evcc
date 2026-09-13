@@ -321,3 +321,28 @@ test("invalid wear survives blur after an earlier validation rerender and can be
     expect.objectContaining({ batteryWear: {} })
   );
 });
+
+test("focus returns to the invoker only after the modal has finished closing", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  const invoker = document.createElement("button");
+  invoker.textContent = "Configure";
+  document.body.append(invoker);
+  const wrapper = mount(EnergySettings, { attachTo: document.body, global });
+  try {
+    invoker.focus();
+    await open(wrapper);
+    const cancel = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "forecast.energy.cancel")!;
+    (cancel.element as HTMLButtonElement).focus();
+    wrapper.getComponent(GenericModal).vm.$emit("close");
+    await flushPromises();
+    expect(document.activeElement).not.toBe(invoker);
+    wrapper.getComponent(GenericModal).vm.$emit("closed");
+    await flushPromises();
+    expect(document.activeElement).toBe(invoker);
+  } finally {
+    wrapper.unmount();
+    invoker.remove();
+  }
+});

@@ -5,8 +5,9 @@
 		:title="$t('forecast.energy.settings')"
 		:uncloseable="saving"
 		:prevent-dismiss="saving"
-		@open="load"
-		@close="closed"
+		@open="opened"
+		@close="invalidateDraft"
+		@closed="restoreFocus"
 	>
 		<form ref="form" novalidate @submit.prevent="save">
 			<p class="small">{{ $t("forecast.energy.settingsNote") }}</p>
@@ -261,6 +262,7 @@ export default defineComponent({
 		loaded: false,
 		error: "",
 		request: 0,
+		invoker: null as HTMLElement | null,
 		badInputs: {} as Record<string, boolean>,
 		activeSection: "planning",
 		sections: ["planning", "billing", "batteries"],
@@ -291,13 +293,27 @@ export default defineComponent({
 		},
 	},
 	methods: {
+		open(event?: Event) {
+			this.invoker = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+			const element = document.getElementById("energySettingsModal");
+			if (element) Modal.getOrCreateInstance(element).show();
+		},
 		cancel() {
 			const element = document.getElementById("energySettingsModal");
 			if (element) Modal.getInstance(element)?.hide();
 		},
-		closed() {
+		async opened() {
+			this.invoker ||=
+				document.activeElement instanceof HTMLElement ? document.activeElement : null;
+			await this.load();
+		},
+		invalidateDraft() {
 			this.request++;
 			this.loaded = false;
+		},
+		restoreFocus() {
+			if (this.invoker?.isConnected) this.invoker.focus();
+			this.invoker = null;
 		},
 		invalidBattery(name: string, field: string, message: string) {
 			this.error = `${this.devices.find((device) => device.name === name)?.title ?? name}: ${this.$t(message)}`;

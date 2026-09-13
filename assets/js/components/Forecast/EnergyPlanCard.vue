@@ -7,12 +7,7 @@
 					$t(automatic ? "forecast.energy.automatic" : "forecast.energy.advisory")
 				}}</span>
 			</div>
-			<button
-				type="button"
-				class="btn btn-outline-secondary"
-				data-bs-toggle="modal"
-				data-bs-target="#energySettingsModal"
-			>
+			<button type="button" class="btn btn-outline-secondary" @click="openSettings">
 				{{ $t("forecast.energy.configure") }}
 			</button>
 		</div>
@@ -369,6 +364,9 @@ export default defineComponent({
 		},
 	},
 	methods: {
+		openSettings(event: Event) {
+			(this.$refs["settings"] as unknown as InstanceType<typeof EnergySettings>).open(event);
+		},
 		dateTime(value: string) {
 			return new Date(value).toLocaleString(this.$i18n.locale, {
 				weekday: "short",
