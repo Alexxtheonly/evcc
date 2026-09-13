@@ -106,7 +106,7 @@
 				</p>
 			</div>
 			<SavingsLedgerWaterfall
-				v-if="ledger.chain"
+				v-if="ledger.chain && active"
 				:chain="ledger.chain"
 				:headline="headline"
 				:currency="currency"
@@ -242,11 +242,11 @@ export default defineComponent({
 	},
 	mixins: [formatter],
 	props: {
+		active: { type: Boolean, default: true },
 		currency: { type: String as PropType<CURRENCY> },
 		settlement: { type: Object as PropType<EnergySettings>, default: undefined },
 	},
-	// the decisions strip is its own card in Forecast.vue but shares this card's single
-	// response, emitted upward rather than fetched again: one request per period change.
+	// The decisions card shares this response: one request per period change.
 	emits: ["update:decisions"],
 	data() {
 		return {
@@ -282,6 +282,7 @@ export default defineComponent({
 				: adjusted?.control?.routing;
 		},
 		settlementLabel(): string {
+			if (!this.settlement) return this.$t("forecast.energy.settlementUnavailable");
 			const start = this.settlement?.settlementFrom;
 			const billed =
 				this.settlement?.settlementMode === "interval" &&
@@ -482,7 +483,7 @@ export default defineComponent({
 			},
 			deep: true,
 		},
-		// hand the decisions rows to Forecast.vue, which mounts them as their own card.
+		// Hand decisions to the parent, which mounts them as their own card.
 		// Watching `ledger` rather than emitting from fetch() means a refusal or an error
 		// nulls it, emits null, and takes that card down with it.
 		ledger(value: SavingsLedger | null) {

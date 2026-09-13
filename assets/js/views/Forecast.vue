@@ -4,14 +4,14 @@
 		:class="{ 'empty-container': !forecastAvailable }"
 	>
 		<TopHeader :title="$t('forecast.modalTitle')" />
-		<EnergyPlanCard
-			v-if="optimizerEnabled || optimizerInsights"
-			:insights="optimizerInsights"
-			:health="optimizerHealth"
-			:automatic="optimizerAutomatic"
-			:currency="currency"
-			:configured-batteries="configuredBatteries"
-		/>
+		<nav class="d-flex flex-wrap gap-2 mb-4" :aria-label="$t('forecast.energy.pageTitle')">
+			<router-link to="/optimize" class="btn btn-sm btn-outline-secondary">{{
+				$t("forecast.energy.viewPlan")
+			}}</router-link>
+			<router-link to="/optimize?tab=results" class="btn btn-sm btn-outline-secondary">{{
+				$t("forecast.energy.viewResults")
+			}}</router-link>
+		</nav>
 		<div v-if="!forecastAvailable" class="flex-grow-1 d-flex">
 			<div class="empty-box d-flex flex-column p-5">
 				<ul class="list-unstyled mb-4">
@@ -117,26 +117,6 @@
 					/>
 				</Card>
 
-				<SavingsLedgerCard
-					:currency="currency"
-					:settlement="optimizerInsights?.settings"
-					@update:decisions="ledgerDecisions = $event"
-				/>
-
-				<!-- own card, fed by SavingsLedgerCard's single /api/savingsledger request
-				     (emitted upward, never re-fetched) so the ledger card above stays one
-				     diagram and nothing is lost. Null while that request is loading, has
-				     been refused, or failed - which is exactly when there is nothing to
-				     show here either. -->
-				<Card
-					v-if="ledgerDecisions"
-					:title="$t('forecast.savingsLedger.decisions.title')"
-					edge-to-edge
-					class="box-pull-out mb-4"
-				>
-					<SavingsLedgerDecisions :decisions="ledgerDecisions" :currency="currency" />
-				</Card>
-
 				<Card
 					v-for="t in valueForecastTypes"
 					:key="t"
@@ -173,9 +153,6 @@ import SolarChart from "../components/Forecast/SolarChart.vue";
 import SolarDetails from "../components/Forecast/SolarDetails.vue";
 import PriceChart from "../components/Forecast/PriceChart.vue";
 import GridDetails from "../components/Forecast/GridDetails.vue";
-import SavingsLedgerCard from "../components/Forecast/SavingsLedgerCard.vue";
-import SavingsLedgerDecisions from "../components/Forecast/SavingsLedgerDecisions.vue";
-import EnergyPlanCard from "../components/Forecast/EnergyPlanCard.vue";
 import ValueChart, { type ValueChartType } from "../components/Forecast/ValueChart.vue";
 import ValueDetails from "../components/Forecast/ValueDetails.vue";
 import formatter from "@/mixins/formatter";
@@ -185,7 +162,6 @@ import store from "../store";
 import { adjustedSolar, ForecastType, isStaticTariff } from "@/utils/forecast";
 import vehicleList from "@/utils/vehicleList";
 import { deviceColorMap } from "@/colors";
-import type { LedgerDecisionRow } from "../components/Forecast/savingsLedger.types";
 
 const MIN_HOURS = 76;
 const MAX_HOURS = 96;
@@ -200,9 +176,6 @@ export default defineComponent({
 		SolarDetails,
 		PriceChart,
 		GridDetails,
-		SavingsLedgerCard,
-		SavingsLedgerDecisions,
-		EnergyPlanCard,
 		ValueChart,
 		ValueDetails,
 	},
@@ -212,17 +185,12 @@ export default defineComponent({
 			ForecastType,
 			scrollLeft: 0,
 			isScrolling: false,
-			// per-slot decision rows handed up by SavingsLedgerCard
-			ledgerDecisions: null as LedgerDecisionRow[] | null,
 		};
 	},
 	head() {
 		return { title: this.$t("forecast.modalTitle") };
 	},
 	computed: {
-		configuredBatteries() {
-			return store.state.battery?.devices || [];
-		},
 		forecast() {
 			return store.uiForecast.value;
 		},
@@ -302,15 +270,6 @@ export default defineComponent({
 		},
 		optimizerAutomatic() {
 			return !!store.state?.optimizerAutomatic;
-		},
-		optimizerEnabled() {
-			return store.state?.optimizer;
-		},
-		optimizerInsights() {
-			return store.state?.optimizerInsights;
-		},
-		optimizerHealth() {
-			return store.state?.optimizerHealth;
 		},
 		solarAdjusted() {
 			return store.state?.solarAdjusted;

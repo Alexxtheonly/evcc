@@ -9,8 +9,6 @@
 				})
 			}}
 		</p>
-		<!-- no heading of its own: this strip is mounted as its own Card in
-		     views/Forecast.vue, whose header renders decisions.title. -->
 		<div v-if="slots.length" class="section-head">
 			<SelectGroup
 				id="savingsLedgerDecisionsView"
@@ -35,6 +33,7 @@
 			     announce its own summary rather than read as an empty div. The table view
 			     is the per-slot detail for anyone the graphic doesn't serve. -->
 			<div
+				v-if="active"
 				ref="chartEl"
 				class="timeline"
 				role="img"
@@ -249,6 +248,7 @@ export default defineComponent({
 	components: { SelectGroup, LegendList },
 	mixins: [formatter, echartsChart],
 	props: {
+		active: { type: Boolean, default: true },
 		decisions: { type: Array as PropType<LedgerDecisionRow[]>, default: () => [] },
 		currency: { type: String as PropType<CURRENCY> },
 	},
@@ -475,6 +475,9 @@ export default defineComponent({
 		},
 	},
 	watch: {
+		active() {
+			this.$nextTick(() => this.initChart());
+		},
 		// the chart element only exists in the timeline view; the mixin re-inits from
 		// chartOption changes, which switching views does not produce
 		view() {

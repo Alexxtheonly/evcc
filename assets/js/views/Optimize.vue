@@ -1,142 +1,196 @@
 <template>
 	<div class="container px-4 safe-area-inset">
-		<TopHeader title="Optimize Debug 🧪" />
-		<Card edge-to-edge class="box-pull-out mt-4 mb-4">
-			<OptimizeHeader
-				:updated="evopt?.updated"
-				:status="evopt?.res?.status"
-				:net-cost="netCost"
-				:horizon-hours="horizonHours"
-				:currency="currency"
-				:charging-strategies="chargingStrategies"
-				:selected-strategy="optimizerChargingStrategy"
-				:pending="pending"
-				@optimize="optimizeNow"
-				@change-strategy="changeChargingStrategy"
-			/>
-			<AutomaticModeStrip
+		<TopHeader :title="$t('forecast.energy.pageTitle')" />
+		<nav class="d-flex flex-wrap gap-2 mb-4" :aria-label="$t('forecast.energy.pageTitle')">
+			<router-link
+				v-for="tab in tabs"
+				:key="tab"
+				:to="{ path: '/optimize', query: { ...$route.query, tab } }"
+				class="btn btn-sm"
+				:class="activeTab === tab ? 'btn-primary' : 'btn-outline-secondary'"
+				:aria-current="activeTab === tab ? 'page' : undefined"
+				>{{ $t(`forecast.energy.tabs.${tab}`) }}</router-link
+			>
+		</nav>
+		<section v-show="activeTab === 'plan'" :aria-label="$t('forecast.energy.tabs.plan')">
+			<p v-if="!optimizerEnabled" class="alert alert-info">
+				{{ $t("forecast.energy.optimizerDisabled") }}
+				<router-link to="/config#integrations">{{ $t("config.main.title") }}</router-link>
+			</p>
+			<EnergyPlanCard
+				:insights="optimizerInsights"
+				:health="optimizerHealth"
 				:automatic="optimizerAutomatic"
-				:is-sponsor="isSponsor"
-				@change="changeAutomatic"
-				@learn-more="openOptimizerModal"
+				:currency="currency"
+				:configured-batteries="configuredBatteries"
 			/>
-		</Card>
-		<div class="row">
-			<main class="col-12">
-				<div v-if="evopt">
-					<h2 class="mt-2 mb-4">Optimizer Plan</h2>
+		</section>
+		<section
+			v-if="resultsVisited"
+			v-show="activeTab === 'results'"
+			:aria-label="$t('forecast.energy.tabs.results')"
+		>
+			<p>{{ $t("forecast.energy.resultsNote") }}</p>
+			<SavingsLedgerCard
+				:currency="currency"
+				:settlement="optimizerInsights?.settings"
+				:active="activeTab === 'results'"
+				@update:decisions="ledgerDecisions = $event"
+			/>
+			<Card
+				v-if="ledgerDecisions"
+				:title="$t('forecast.savingsLedger.decisions.title')"
+				edge-to-edge
+				class="box-pull-out mb-4"
+			>
+				<SavingsLedgerDecisions
+					:decisions="ledgerDecisions"
+					:currency="currency"
+					:active="activeTab === 'results'"
+				/>
+			</Card>
+		</section>
+		<section
+			v-if="activeTab === 'diagnostics'"
+			:aria-label="$t('forecast.energy.tabs.diagnostics')"
+		>
+			<Card edge-to-edge class="box-pull-out mt-4 mb-4">
+				<OptimizeHeader
+					:updated="evopt?.updated"
+					:status="evopt?.res?.status"
+					:net-cost="netCost"
+					:horizon-hours="horizonHours"
+					:currency="currency"
+					:charging-strategies="chargingStrategies"
+					:selected-strategy="optimizerChargingStrategy"
+					:pending="pending"
+					@optimize="optimizeNow"
+					@change-strategy="changeChargingStrategy"
+				/>
+				<AutomaticModeStrip
+					:automatic="optimizerAutomatic"
+					:is-sponsor="isSponsor"
+					@change="changeAutomatic"
+					@learn-more="openOptimizerModal"
+				/>
+			</Card>
+			<div class="row">
+				<main class="col-12">
+					<div v-if="evopt">
+						<h2 class="mt-2 mb-4">Optimizer Plan</h2>
 
-					<Card
-						title="Charging Plan"
-						subtitle="kW"
-						edge-to-edge
-						class="box-pull-out mb-4"
-					>
-						<ChargeChart
-							:evopt="evopt"
-							:battery-details="evopt.details.batteryDetails"
-							:timestamp="evopt.details.timestamp[0]"
-							:battery-colors="batteryColors"
-							:device-colors="deviceColors"
-						/>
-					</Card>
-
-					<Card
-						v-if="socEntries.length"
-						title="SoC Projections"
-						subtitle="%"
-						edge-to-edge
-						class="box-pull-out mb-4"
-					>
-						<div
-							v-for="(entry, idx) in socEntries"
-							:key="entry.index"
-							:class="{ 'mb-3': idx < socEntries.length - 1 }"
+						<Card
+							title="Charging Plan"
+							subtitle="kW"
+							edge-to-edge
+							class="box-pull-out mb-4"
 						>
-							<SocChart
+							<ChargeChart
 								:evopt="evopt"
-								:entry="entry"
+								:battery-details="evopt.details.batteryDetails"
 								:timestamp="evopt.details.timestamp[0]"
-								:show-x-axis="idx === socEntries.length - 1"
+								:battery-colors="batteryColors"
+								:device-colors="deviceColors"
 							/>
-						</div>
-					</Card>
+						</Card>
 
-					<Card
-						title="Timeline"
-						:subtitle="timeSeriesSubtitle"
-						edge-to-edge
-						class="box-pull-out mb-4"
-					>
-						<TimeSeriesDataTable
-							:evopt="evopt"
-							mode="response"
-							:battery-details="evopt.details.batteryDetails"
-							:timestamps="evopt.details.timestamp"
-							:currency="currency"
-							:battery-colors="batteryColors"
-						/>
-					</Card>
+						<Card
+							v-if="socEntries.length"
+							title="SoC Projections"
+							subtitle="%"
+							edge-to-edge
+							class="box-pull-out mb-4"
+						>
+							<div
+								v-for="(entry, idx) in socEntries"
+								:key="entry.index"
+								:class="{ 'mb-3': idx < socEntries.length - 1 }"
+							>
+								<SocChart
+									:evopt="evopt"
+									:entry="entry"
+									:timestamp="evopt.details.timestamp[0]"
+									:show-x-axis="idx === socEntries.length - 1"
+								/>
+							</div>
+						</Card>
 
-					<h2 class="section-title mb-4">Optimizer Inputs</h2>
+						<Card
+							title="Timeline"
+							:subtitle="timeSeriesSubtitle"
+							edge-to-edge
+							class="box-pull-out mb-4"
+						>
+							<TimeSeriesDataTable
+								:evopt="evopt"
+								mode="response"
+								:battery-details="evopt.details.batteryDetails"
+								:timestamps="evopt.details.timestamp"
+								:currency="currency"
+								:battery-colors="batteryColors"
+							/>
+						</Card>
 
-					<Card
-						title="Batteries"
-						:subtitle="batteryEfficiencySubtitle"
-						edge-to-edge
-						class="box-pull-out mb-4"
-					>
-						<BatteryConfigurationTable
-							:batteries="evopt.req.batteries"
-							:battery-details="evopt.details.batteryDetails"
-							:battery-colors="batteryColors"
-							:currency="currency"
-						/>
-					</Card>
+						<h2 class="section-title mb-4">Optimizer Inputs</h2>
 
-					<Card
-						title="Environment"
-						:subtitle="timeSeriesSubtitle"
-						edge-to-edge
-						class="box-pull-out mb-4"
-					>
-						<TimeSeriesDataTable
-							:evopt="evopt"
-							mode="request"
-							:battery-details="evopt.details.batteryDetails"
-							:timestamps="evopt.details.timestamp"
-							:currency="currency"
-							:battery-colors="batteryColors"
-						/>
-					</Card>
+						<Card
+							title="Batteries"
+							:subtitle="batteryEfficiencySubtitle"
+							edge-to-edge
+							class="box-pull-out mb-4"
+						>
+							<BatteryConfigurationTable
+								:batteries="evopt.req.batteries"
+								:battery-details="evopt.details.batteryDetails"
+								:battery-colors="batteryColors"
+								:currency="currency"
+							/>
+						</Card>
 
-					<h2 class="section-title mb-4">Raw Data</h2>
+						<Card
+							title="Environment"
+							:subtitle="timeSeriesSubtitle"
+							edge-to-edge
+							class="box-pull-out mb-4"
+						>
+							<TimeSeriesDataTable
+								:evopt="evopt"
+								mode="request"
+								:battery-details="evopt.details.batteryDetails"
+								:timestamps="evopt.details.timestamp"
+								:currency="currency"
+								:battery-colors="batteryColors"
+							/>
+						</Card>
 
-					<Card title="Request" edge-to-edge class="box-pull-out mb-4">
-						<div class="position-relative">
-							<pre
-								class="p-3 overflow-auto"
-								style="background-color: var(--evcc-gray-10)"
-								>{{ formattedRequest }}</pre>
-							<CopyButton :content="formattedRequest" />
-						</div>
-					</Card>
+						<h2 class="section-title mb-4">Raw Data</h2>
 
-					<Card title="Response" edge-to-edge class="box-pull-out mb-4">
-						<div class="position-relative">
-							<pre
-								class="p-3 overflow-auto"
-								style="background-color: var(--evcc-gray-10)"
-								>{{ formattedResponse }}</pre>
-							<CopyButton :content="formattedResponse" />
-						</div>
-					</Card>
-				</div>
-				<div v-else>
-					<p>nothing to see here</p>
-				</div>
-			</main>
-		</div>
+						<Card title="Request" edge-to-edge class="box-pull-out mb-4">
+							<div class="position-relative">
+								<pre
+									class="p-3 overflow-auto"
+									style="background-color: var(--evcc-gray-10)"
+									>{{ formattedRequest }}</pre>
+								<CopyButton :content="formattedRequest" />
+							</div>
+						</Card>
+
+						<Card title="Response" edge-to-edge class="box-pull-out mb-4">
+							<div class="position-relative">
+								<pre
+									class="p-3 overflow-auto"
+									style="background-color: var(--evcc-gray-10)"
+									>{{ formattedResponse }}</pre>
+								<CopyButton :content="formattedResponse" />
+							</div>
+						</Card>
+					</div>
+					<div v-else>
+						<p>{{ $t("forecast.energy.noDiagnostics") }}</p>
+					</div>
+				</main>
+			</div>
+		</section>
 	</div>
 </template>
 
@@ -146,6 +200,10 @@ import Header from "../components/Top/Header.vue";
 import Card from "../components/Helper/Card.vue";
 import OptimizeHeader from "../components/Optimize/OptimizeHeader.vue";
 import AutomaticModeStrip from "../components/Optimize/AutomaticModeStrip.vue";
+import EnergyPlanCard from "../components/Forecast/EnergyPlanCard.vue";
+import SavingsLedgerCard from "../components/Forecast/SavingsLedgerCard.vue";
+import SavingsLedgerDecisions from "../components/Forecast/SavingsLedgerDecisions.vue";
+import type { LedgerDecisionRow } from "../components/Forecast/savingsLedger.types";
 import { openModal } from "../configModal";
 import BatteryConfigurationTable from "../components/Optimize/BatteryConfigurationTable.vue";
 import SocChart, { type SocChartEntry } from "../components/Optimize/SocChart.vue";
@@ -172,17 +230,39 @@ export default defineComponent({
 		TimeSeriesDataTable,
 		CopyButton,
 		AutomaticModeStrip,
+		EnergyPlanCard,
+		SavingsLedgerCard,
+		SavingsLedgerDecisions,
 	},
 	mixins: [formatter],
 	data() {
 		return {
 			pending: false,
+			tabs: ["plan", "results", "diagnostics"],
+			resultsVisited: false,
+			ledgerDecisions: null as LedgerDecisionRow[] | null,
 		};
 	},
 	head() {
-		return { title: "Optimize Debug" };
+		return { title: this.$t("forecast.energy.pageTitle") };
 	},
 	computed: {
+		activeTab(): string {
+			const tab = this.$route.query["tab"];
+			return typeof tab === "string" && this.tabs.includes(tab) ? tab : "plan";
+		},
+		optimizerEnabled() {
+			return !!store.state.optimizer;
+		},
+		optimizerInsights() {
+			return store.state.optimizerInsights;
+		},
+		optimizerHealth() {
+			return store.state.optimizerHealth;
+		},
+		configuredBatteries() {
+			return store.state.battery?.devices || [];
+		},
 		evopt() {
 			return store.state.evopt;
 		},
@@ -270,6 +350,12 @@ export default defineComponent({
 		},
 	},
 	watch: {
+		activeTab: {
+			immediate: true,
+			handler(tab: string) {
+				if (tab === "results") this.resultsVisited = true;
+			},
+		},
 		"evopt.updated"() {
 			// re-enable the refresh action once a fresh optimizer run lands
 			this.pending = false;

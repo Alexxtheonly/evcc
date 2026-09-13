@@ -75,7 +75,7 @@
 			to="/optimize"
 			active-class="active"
 		>
-			Optimize 🧪
+			{{ $t("forecast.energy.pageTitle") }} 🧪
 		</router-link>
 		<router-link v-if="experimental" class="dropdown-item" to="/history" active-class="active">
 			{{ $t("main.history.title") }} 🧪
@@ -107,6 +107,7 @@ export default defineComponent({
 		sponsor: { type: Object as PropType<Sponsor>, default: () => ({}) },
 		fatal: { type: Array as PropType<FatalError[]>, default: () => [] },
 		experimental: Boolean,
+		optimizer: Boolean,
 		authDisabled: Boolean,
 		evopt: { type: Object as PropType<EvOpt>, required: false },
 		installed: String,
@@ -156,7 +157,7 @@ export default defineComponent({
 			);
 		},
 		optimizeAvailable() {
-			return !!this.evopt && this.experimental;
+			return this.optimizer || (!!this.evopt && this.experimental);
 		},
 		showLogout() {
 			return !this.authDisabled && isLoggedIn();

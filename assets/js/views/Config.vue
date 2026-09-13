@@ -417,6 +417,13 @@
 							<template #icon><OptimizerIcon /></template>
 							<template #tags>
 								<DeviceTags :tags="optimizerTags" />
+								<button
+									type="button"
+									class="btn btn-sm btn-outline-secondary mt-2"
+									@click="openEnergySettings"
+								>
+									{{ $t("forecast.energy.configure") }}
+								</button>
 							</template>
 						</DeviceCard>
 					</div>
@@ -533,6 +540,12 @@
 				/>
 				<TelemetryModal :is-sponsor="isSponsor" :telemetry="telemetry" />
 				<OptimizerModal :is-sponsor="isSponsor" />
+				<EnergySettings
+					ref="energySettings"
+					:devices="energySettingsDevices"
+					:economics="energyEconomics"
+					:currency="currency"
+				/>
 				<McpModal />
 				<ExperimentalModal :experimental="experimental" />
 				<RemoteModal :remote="remote" :is-sponsor="isSponsor" :site-title="siteTitle" />
@@ -614,6 +627,7 @@ import NetworkModal from "../components/Config/NetworkModal.vue";
 import NotificationIcon from "../components/MaterialIcon/Notification.vue";
 import OptimizerIcon from "../components/MaterialIcon/Optimizer.vue";
 import OptimizerModal from "../components/Config/OptimizerModal.vue";
+import EnergySettings from "../components/Forecast/EnergySettings.vue";
 import McpIcon from "../components/MaterialIcon/Mcp.vue";
 import McpModal from "../components/Config/McpModal.vue";
 import restart, { performRestart } from "../restart";
@@ -722,6 +736,7 @@ export default defineComponent({
 		NotificationIcon,
 		OptimizerIcon,
 		OptimizerModal,
+		EnergySettings,
 		McpIcon,
 		McpModal,
 		SponsorModal,
@@ -790,6 +805,15 @@ export default defineComponent({
 		return { title: this.$t("config.main.title") };
 	},
 	computed: {
+		energySettingsDevices() {
+			return this.batteryMeters.map((meter) => ({
+				name: meter.name,
+				title: meter.config?.title || meter.name,
+			}));
+		},
+		energyEconomics() {
+			return store.state.optimizerInsights?.economics;
+		},
 		activeSlug(): string | undefined {
 			const slug = this.$route.hash.slice(1);
 			return SECTION_TITLES[slug] ? slug : undefined;
@@ -1237,6 +1261,11 @@ export default defineComponent({
 		}
 	},
 	methods: {
+		openEnergySettings(event: Event) {
+			(this.$refs["energySettings"] as unknown as InstanceType<typeof EnergySettings>).open(
+				event
+			);
+		},
 		isUnconfigured(tags: DeviceTags): boolean {
 			return tags["configured"]?.value === false;
 		},
