@@ -285,3 +285,39 @@ test("a partially edited native date cannot save the previous complete date", as
   expect(wrapper.get('[role="alert"]').text()).toBe("forecast.energy.invalidBillingDate");
   expect(input.isVisible()).toBe(true);
 });
+
+test("invalid wear survives blur after an earlier validation rerender and can be explicitly cleared", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  vi.mocked(api.put).mockResolvedValue({});
+  const wrapper = mountSettings();
+  await open(wrapper);
+  const input = wrapper.get("#energy-wear-storage");
+  await input.setValue("-1");
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).not.toHaveBeenCalled();
+  await input.setValue("");
+  Object.defineProperty(input.element, "validity", {
+    configurable: true,
+    value: { badInput: true },
+  });
+  await input.trigger("input");
+  Object.defineProperty(input.element, "validity", {
+    configurable: true,
+    value: { badInput: false },
+  });
+  await input.trigger("blur");
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).not.toHaveBeenCalled();
+  await wrapper
+    .findAll("button")
+    .find((button) => button.attributes("aria-label")?.startsWith("forecast.energy.clearWear"))!
+    .trigger("click");
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(
+    "config/energyintelligence",
+    expect.objectContaining({ batteryWear: {} })
+  );
+});

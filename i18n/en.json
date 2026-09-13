@@ -1145,6 +1145,8 @@
   },
   "forecast": {
     "energy": {
+      "clear": "Clear",
+      "clearWear": "Clear wear cost for {device}",
       "energyOnly": "Energy plan only. Charge level is unavailable.",
       "unknownLevel": "Unknown charge level",
       "configure": "Configure",

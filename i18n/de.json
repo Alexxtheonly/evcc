@@ -1145,6 +1145,8 @@
   },
   "forecast": {
     "energy": {
+      "clear": "Leeren",
+      "clearWear": "Verschleißkosten für {device} leeren",
       "energyOnly": "Nur Energieplanung. Kein Ladestand verfügbar.",
       "unknownLevel": "Unbekannter Ladestand",
       "configure": "Einrichten",

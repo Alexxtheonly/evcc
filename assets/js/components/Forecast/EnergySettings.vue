@@ -79,6 +79,7 @@
 						<input
 							id="energy-settlement-from"
 							v-model="settlementDate"
+							@input="recordInputValidity"
 							type="date"
 							class="form-control"
 						/>
@@ -132,6 +133,7 @@
 								<input
 									:id="`energy-${direction.key}-${device.name}`"
 									v-model="efficiencies[device.name]![direction.key]"
+									@input="recordInputValidity"
 									class="form-control"
 									type="number"
 									min="0.000001"
@@ -164,16 +166,29 @@
 									fmtCurrencySymbol(currency)
 								}})</label
 							>
-							<input
-								:id="`energy-wear-${device.name}`"
-								v-model="wear[device.name]"
-								class="form-control"
-								type="number"
-								min="0"
-								max="100"
-								step="0.001"
-								:placeholder="$t('forecast.energy.wearUnknown')"
-							/>
+							<div class="input-group">
+								<input
+									:id="`energy-wear-${device.name}`"
+									v-model="wear[device.name]"
+									@input="recordInputValidity"
+									class="form-control"
+									type="number"
+									min="0"
+									max="100"
+									step="0.001"
+									:placeholder="$t('forecast.energy.wearUnknown')"
+								/>
+								<button
+									type="button"
+									class="btn btn-outline-secondary"
+									:aria-label="
+										$t('forecast.energy.clearWear', { device: device.title })
+									"
+									@click="clearWear(device.name)"
+								>
+									{{ $t("forecast.energy.clear") }}
+								</button>
+							</div>
 							<p class="small text-muted mt-2 mb-0">
 								{{ $t("forecast.energy.wearNote") }}
 							</p>
@@ -246,6 +261,7 @@ export default defineComponent({
 		loaded: false,
 		error: "",
 		request: 0,
+		badInputs: {} as Record<string, boolean>,
 		activeSection: "planning",
 		sections: ["planning", "billing", "batteries"],
 		toggles: [
@@ -295,7 +311,20 @@ export default defineComponent({
 		},
 		hasBadInput(id: string) {
 			const input = (this.$refs["form"] as HTMLFormElement).elements.namedItem(id);
-			return input instanceof HTMLInputElement && input.validity.badInput;
+			return (
+				this.badInputs[id] || (input instanceof HTMLInputElement && input.validity.badInput)
+			);
+		},
+		recordInputValidity(event: Event) {
+			const input = event.target as HTMLInputElement;
+			this.badInputs[input.id] = input.validity.badInput;
+		},
+		clearWear(name: string) {
+			this.wear[name] = "";
+			const id = `energy-wear-${name}`;
+			this.badInputs[id] = false;
+			const input = (this.$refs["form"] as HTMLFormElement).elements.namedItem(id);
+			if (input instanceof HTMLInputElement) input.value = "";
 		},
 		initializeDevices() {
 			for (const device of this.devices) {
@@ -346,6 +375,7 @@ export default defineComponent({
 			try {
 				const settings = (await api.get<EnergySettings>("config/energyintelligence")).data;
 				if (request !== this.request) return;
+				this.badInputs = {};
 				this.draft = { ...settings, batteryWear: { ...settings.batteryWear } };
 				this.planes = { ...settings.batteryEnergyPlane };
 				this.efficiencies = Object.fromEntries(
