@@ -1,7 +1,9 @@
 import { shallowMount } from "@vue/test-utils";
 import { describe, expect, test } from "vite-plus/test";
 import EnergyPlanCard from "./EnergyPlanCard.vue";
-import { forecastTotals, type EnergyInsights } from "./energyIntelligence";
+import EnergySocChart from "./EnergySocChart.vue";
+import { CURRENCY } from "@/types/evcc";
+import { forecastTotals, socTimeline, type EnergyInsights } from "./energyIntelligence";
 
 const settings = {
   robust: false,
@@ -31,6 +33,77 @@ const global = {
 };
 
 describe("energy plan", () => {
+  test("chart positions unequal intervals by elapsed time, not array index", () => {
+    const slots = [slot, { ...slot, start: slot.end, end: "2026-09-13T13:00:00Z" }];
+    const device = {
+      key: "storage",
+      name: "storage",
+      title: "Storage",
+      kind: "battery" as const,
+      capacityKWh: 10,
+      initialSoc: 50,
+      plan: [
+        { start: slot.start, chargeWh: 1000, dischargeWh: 0, soc: 60 },
+        { start: slot.end, chargeWh: 1000, dischargeWh: 0, soc: 70 },
+      ],
+    };
+    const wrapper = shallowMount(EnergySocChart, { props: { slots, device }, global });
+    const points = wrapper
+      .get("polyline")
+      .attributes("points")!
+      .split(" ")
+      .map((point) => point.split(",").map(Number));
+    expect(points).toEqual([
+      [0, 67.5],
+      [166.25, 54],
+      [665, 40.5],
+    ]);
+    expect(wrapper.findAll("text")).toHaveLength(0);
+  });
+
+  test("supports multiple generic batteries, empty plans and the selected currency", () => {
+    const empty = {
+      key: "storage-a",
+      name: "storage-a",
+      title: "Speicher mit einem besonders langen frei gewählten Namen",
+      kind: "battery" as const,
+      capacityKWh: 10,
+      initialSoc: 50,
+      plan: [],
+    };
+    const insights: EnergyInsights = {
+      updated: slot.start,
+      automatic: false,
+      status: "ready",
+      settings,
+      forecast: [slot],
+      devices: [empty, { ...empty, key: "storage-b", name: "storage-b", title: "Second storage" }],
+    };
+    const wrapper = shallowMount(EnergyPlanCard, {
+      props: { insights, currency: CURRENCY.USD },
+      global,
+    });
+    expect(wrapper.findAllComponents(EnergySocChart)).toHaveLength(2);
+    expect(wrapper.text()).toContain("forecast.energy.noPlan");
+    expect(wrapper.text()).not.toContain("forecast.energy.idle");
+    expect(wrapper.text()).toContain("¢/kWh");
+    expect(wrapper.text()).not.toContain("€/kWh");
+  });
+  test("places initial charge at horizon start and solver charge at each interval end", () => {
+    const device = {
+      key: "storage",
+      name: "storage",
+      title: "Storage",
+      kind: "battery" as const,
+      capacityKWh: 10,
+      initialSoc: 50,
+      plan: [{ start: slot.start, chargeWh: 1000, dischargeWh: 0, soc: 60 }],
+    };
+    expect(socTimeline(device, [slot])).toEqual([
+      { time: slot.start, soc: 50 },
+      { time: slot.end, soc: 60 },
+    ]);
+  });
   test("reports a failed attempt with no fabricated plan or cash saving", () => {
     const insights: EnergyInsights = {
       updated: slot.start,

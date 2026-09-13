@@ -1,100 +1,210 @@
 <template>
-	<details ref="details" class="mt-3" @toggle="opened">
-		<summary>{{ $t("forecast.energy.settings") }}</summary>
-		<form class="mt-3" @submit.prevent="save">
-			<p class="small text-muted">{{ $t("forecast.energy.settingsNote") }}</p>
-			<div v-for="setting in toggles" :key="setting.key" class="form-check form-switch mb-2">
-				<input
-					:id="`energy-${setting.key}`"
-					v-model="draft[setting.key]"
-					class="form-check-input"
-					type="checkbox"
-					role="switch"
-				/>
-				<label :for="`energy-${setting.key}`" class="form-check-label">{{
-					$t(setting.label)
-				}}</label>
+	<GenericModal
+		id="energySettingsModal"
+		ref="modal"
+		:title="$t('forecast.energy.settings')"
+		:uncloseable="saving"
+		:prevent-dismiss="saving"
+		@open="load"
+		@close="closed"
+	>
+		<form novalidate @submit.prevent="save">
+			<p class="small">{{ $t("forecast.energy.settingsNote") }}</p>
+			<p v-if="error" class="alert alert-danger" role="alert">{{ error }}</p>
+			<div v-if="!loaded" class="py-3" role="status">
+				<button v-if="error" type="button" class="btn btn-outline-secondary" @click="load">
+					{{ $t("forecast.energy.retry") }}
+				</button>
+				<span v-else>{{ $t("forecast.energy.loading") }}</span>
 			</div>
-			<div v-for="device in loaded ? devices : []" :key="device.name" class="mb-3">
-				<label :for="`energy-wear-${device.name}`" class="form-label"
-					>{{ device.title }} · {{ $t("forecast.energy.wear") }}</label
+			<template v-else>
+				<div
+					class="d-flex flex-wrap gap-2 mb-3"
+					:aria-label="$t('forecast.energy.settings')"
 				>
-				<input
-					:id="`energy-wear-${device.name}`"
-					v-model="wear[device.name]"
-					class="form-control"
-					type="number"
-					min="0"
-					max="100"
-					step="0.001"
-					:placeholder="$t('forecast.energy.unconfigured')"
-				/>
-				<label :for="`energy-plane-${device.name}`" class="form-label mt-2">{{
-					$t("forecast.energy.measurementPlane")
-				}}</label>
-				<select
-					:id="`energy-plane-${device.name}`"
-					v-model="planes[device.name]"
-					class="form-select"
-				>
-					<option value="unknown">{{ $t("forecast.energy.planeUnknown") }}</option>
-					<option value="dc">{{ $t("forecast.energy.planeDc") }}</option>
-					<option value="ac">{{ $t("forecast.energy.planeAc") }}</option>
-				</select>
-				<p class="small text-muted mt-1">{{ $t("forecast.energy.planeNote") }}</p>
-				<div class="row g-2">
-					<div
-						v-for="direction in efficiencyDirections"
-						:key="direction.key"
-						class="col-6"
+					<button
+						v-for="section in sections"
+						:key="section"
+						type="button"
+						class="btn btn-sm"
+						:class="section === activeSection ? 'btn-primary' : 'btn-outline-secondary'"
+						:aria-pressed="section === activeSection"
+						@click="activeSection = section"
 					>
-						<label :for="`energy-${direction.key}-${device.name}`" class="form-label">{{
-							$t(direction.label)
+						{{ $t(`forecast.energy.sections.${section}`) }}
+					</button>
+				</div>
+				<section v-show="activeSection === 'planning'">
+					<h6>{{ $t("forecast.energy.sections.planning") }}</h6>
+					<p class="small">{{ $t("forecast.energy.planningDefaults") }}</p>
+					<div
+						v-for="setting in toggles"
+						:key="setting.key"
+						class="form-check form-switch mb-3"
+					>
+						<input
+							:id="`energy-${setting.key}`"
+							v-model="draft[setting.key]"
+							class="form-check-input"
+							type="checkbox"
+							role="switch"
+						/>
+						<label :for="`energy-${setting.key}`" class="form-check-label">{{
+							$t(setting.label)
+						}}</label>
+						<div class="small text-muted">{{ $t(setting.hint) }}</div>
+					</div>
+					<p class="small">{{ $t("forecast.energy.arrivalPrerequisites") }}</p>
+				</section>
+				<section v-show="activeSection === 'billing'">
+					<h6>{{ $t("forecast.energy.sections.billing") }}</h6>
+					<label for="energy-settlement" class="form-label">{{
+						$t("forecast.energy.settlement")
+					}}</label>
+					<select
+						id="energy-settlement"
+						v-model="draft.settlementMode"
+						class="form-select mb-2"
+					>
+						<option value="simulation">
+							{{ $t("forecast.energy.simulationOption") }}
+						</option>
+						<option value="interval">{{ $t("forecast.energy.intervalOption") }}</option>
+					</select>
+					<p class="small text-muted">{{ $t("forecast.energy.billingNote") }}</p>
+					<template v-if="draft.settlementMode === 'interval'">
+						<label for="energy-settlement-from" class="form-label">{{
+							$t("forecast.energy.settlementFrom")
 						}}</label>
 						<input
-							:id="`energy-${direction.key}-${device.name}`"
-							v-model="efficiencies[device.name]![direction.key]"
+							id="energy-settlement-from"
+							v-model="settlementDate"
+							type="date"
 							class="form-control"
-							type="number"
-							min="0.000001"
-							max="100"
-							step="any"
-							:placeholder="$t('forecast.energy.unconfigured')"
 						/>
+						<p class="small text-muted mt-2">
+							{{ $t("forecast.energy.billingDateNote") }}
+						</p>
+					</template>
+				</section>
+				<section v-show="activeSection === 'batteries'">
+					<h6>{{ $t("forecast.energy.sections.batteries") }}</h6>
+					<p class="small">{{ $t("forecast.energy.batteryDefaults") }}</p>
+					<p v-if="!devices.length" class="small">
+						{{ $t("forecast.energy.noBatteries") }}
+					</p>
+					<div
+						v-for="device in devices"
+						:key="device.name"
+						class="border rounded p-3 mb-3"
+					>
+						<h6>{{ device.title }}</h6>
+						<label :for="`energy-efficiency-mode-${device.name}`" class="form-label">{{
+							$t("forecast.energy.efficiencyMode")
+						}}</label>
+						<select
+							:id="`energy-efficiency-mode-${device.name}`"
+							:value="custom[device.name] ? 'custom' : 'automatic'"
+							class="form-select"
+							@change="changeEfficiencyMode(device.name, $event)"
+						>
+							<option value="automatic">
+								{{ $t("forecast.energy.efficiencyAutomatic") }}
+							</option>
+							<option value="custom">
+								{{ $t("forecast.energy.efficiencyCustom") }}
+							</option>
+						</select>
+						<p class="small mt-2 mb-2" :data-testid="`energy-effective-${device.name}`">
+							{{ effectiveDescription(device.name) }}
+						</p>
+						<div v-if="custom[device.name]" class="row g-2 mb-2">
+							<div
+								v-for="direction in efficiencyDirections"
+								:key="direction.key"
+								class="col-sm-6"
+							>
+								<label
+									:for="`energy-${direction.key}-${device.name}`"
+									class="form-label small"
+									>{{ $t(direction.label) }}</label
+								>
+								<input
+									:id="`energy-${direction.key}-${device.name}`"
+									v-model="efficiencies[device.name]![direction.key]"
+									class="form-control"
+									type="number"
+									min="0.000001"
+									max="100"
+									step="any"
+								/>
+							</div>
+						</div>
+						<details class="mt-3">
+							<summary>{{ $t("forecast.energy.calibrationAndWear") }}</summary>
+							<label :for="`energy-plane-${device.name}`" class="form-label mt-3">{{
+								$t("forecast.energy.measurementPlane")
+							}}</label>
+							<select
+								:id="`energy-plane-${device.name}`"
+								v-model="planes[device.name]"
+								class="form-select"
+							>
+								<option value="unknown">
+									{{ $t("forecast.energy.planeUnknown") }}
+								</option>
+								<option value="dc">{{ $t("forecast.energy.planeDc") }}</option>
+								<option value="ac">{{ $t("forecast.energy.planeAc") }}</option>
+							</select>
+							<p class="small text-muted mt-2">
+								{{ $t("forecast.energy.planeNote") }}
+							</p>
+							<label :for="`energy-wear-${device.name}`" class="form-label"
+								>{{ $t("forecast.energy.wear") }} ({{
+									fmtCurrencySymbol(currency)
+								}})</label
+							>
+							<input
+								:id="`energy-wear-${device.name}`"
+								v-model="wear[device.name]"
+								class="form-control"
+								type="number"
+								min="0"
+								max="100"
+								step="0.001"
+								:placeholder="$t('forecast.energy.wearUnknown')"
+							/>
+							<p class="small text-muted mt-2 mb-0">
+								{{ $t("forecast.energy.wearNote") }}
+							</p>
+						</details>
 					</div>
-				</div>
-				<p class="small text-muted mt-1">{{ $t("forecast.energy.efficiencyNote") }}</p>
+				</section>
+			</template>
+			<div class="d-flex justify-content-between gap-3 border-top pt-3 mt-3">
+				<button
+					type="button"
+					class="btn btn-outline-secondary flex-shrink-0 text-nowrap"
+					:disabled="saving"
+					@click="cancel"
+				>
+					{{ $t("forecast.energy.cancel") }}
+				</button>
+				<button type="submit" class="btn btn-primary" :disabled="saving || !loaded">
+					{{ $t("forecast.energy.save") }}
+				</button>
 			</div>
-			<label for="energy-settlement" class="form-label">{{
-				$t("forecast.energy.settlement")
-			}}</label>
-			<select id="energy-settlement" v-model="draft.settlementMode" class="form-select mb-3">
-				<option value="simulation">{{ $t("forecast.energy.simulationOption") }}</option>
-				<option value="interval">{{ $t("forecast.energy.intervalOption") }}</option>
-			</select>
-			<label for="energy-settlement-from" class="form-label">{{
-				$t("forecast.energy.settlementFrom")
-			}}</label>
-			<input
-				id="energy-settlement-from"
-				v-model="settlementDate"
-				class="form-control mb-3"
-				type="date"
-				:required="draft.settlementMode === 'interval'"
-			/>
-			<p v-if="error" class="text-danger" role="alert">{{ error }}</p>
-			<p v-if="saved" class="text-success" role="status">{{ $t("forecast.energy.saved") }}</p>
-			<button class="btn btn-primary" type="submit" :disabled="saving || !loaded">
-				{{ $t("forecast.energy.save") }}
-			</button>
 		</form>
-	</details>
+	</GenericModal>
 </template>
-
 <script lang="ts">
 import { defineComponent, type PropType } from "vue";
 import api from "@/api";
-import type { EnergyDevice, EnergySettings } from "./energyIntelligence";
+import Modal from "bootstrap/js/dist/modal";
+import GenericModal from "../Helper/GenericModal.vue";
+import formatter from "@/mixins/formatter";
+import { CURRENCY } from "@/types/evcc";
+import type { EnergyDevice, EnergyInsights, EnergySettings } from "./energyIntelligence";
 
 const defaults = (): EnergySettings => ({
 	robust: false,
@@ -106,13 +216,17 @@ const defaults = (): EnergySettings => ({
 });
 
 export default defineComponent({
+	components: { GenericModal },
+	mixins: [formatter],
 	props: {
-		settings: { type: Object as PropType<EnergySettings>, default: undefined },
 		devices: {
 			type: Array as PropType<Pick<EnergyDevice, "name" | "title">[]>,
 			default: () => [],
 		},
+		economics: { type: Array as PropType<EnergyInsights["economics"]>, default: () => [] },
+		currency: { type: String as PropType<CURRENCY>, default: CURRENCY.EUR },
 	},
+	emits: ["saved"],
 	data: () => ({
 		draft: defaults(),
 		wear: {} as Record<string, string>,
@@ -121,19 +235,35 @@ export default defineComponent({
 			string,
 			{ chargeEfficiency: string; dischargeEfficiency: string }
 		>,
+		custom: {} as Record<string, boolean>,
 		efficiencyDirections: [
 			{ key: "chargeEfficiency" as const, label: "forecast.energy.chargeEfficiency" },
 			{ key: "dischargeEfficiency" as const, label: "forecast.energy.dischargeEfficiency" },
 		],
 		settlementDate: "",
+		initialSettlementDate: "",
 		saving: false,
 		loaded: false,
 		error: "",
-		saved: false,
+		request: 0,
+		activeSection: "planning",
+		sections: ["planning", "billing", "batteries"],
 		toggles: [
-			{ key: "robust" as const, label: "forecast.energy.robust" },
-			{ key: "arrivals" as const, label: "forecast.energy.arrivals" },
-			{ key: "useLearnedEfficiency" as const, label: "forecast.energy.learnedEfficiency" },
+			{
+				key: "robust" as const,
+				label: "forecast.energy.robust",
+				hint: "forecast.energy.robustHint",
+			},
+			{
+				key: "arrivals" as const,
+				label: "forecast.energy.arrivals",
+				hint: "forecast.energy.arrivalsHint",
+			},
+			{
+				key: "useLearnedEfficiency" as const,
+				label: "forecast.energy.learnedEfficiency",
+				hint: "forecast.energy.learnedHint",
+			},
 		],
 	}),
 	watch: {
@@ -145,6 +275,14 @@ export default defineComponent({
 		},
 	},
 	methods: {
+		cancel() {
+			const element = document.getElementById("energySettingsModal");
+			if (element) Modal.getInstance(element)?.hide();
+		},
+		closed() {
+			this.request++;
+			this.loaded = false;
+		},
 		initializeDevices() {
 			for (const device of this.devices) {
 				this.planes[device.name] ||= "unknown";
@@ -154,13 +292,46 @@ export default defineComponent({
 				};
 			}
 		},
-		async opened(event: Event) {
-			if (!(event.target as HTMLDetailsElement).open) return;
+		effectiveDescription(name: string) {
+			const item = this.economics?.find((item) => item.name === name);
+			if (!item || (!this.custom[name] && item.source === "configured"))
+				return this.$t("forecast.energy.efficiencyPending");
+			const source = ["default", "measured", "configured"].includes(item.source)
+				? this.$t(`forecast.energy.sources.${item.source}`)
+				: item.source;
+			return this.$t("forecast.energy.effectiveEfficiency", {
+				source,
+				charge: this.fmtNumber(item.chargeEfficiency * 100, 1),
+				discharge: this.fmtNumber(item.dischargeEfficiency * 100, 1),
+				roundtrip: this.fmtNumber(
+					item.chargeEfficiency * item.dischargeEfficiency * 100,
+					1
+				),
+			});
+		},
+		changeEfficiencyMode(name: string, event: Event) {
+			this.custom[name] = (event.target as HTMLSelectElement).value === "custom";
+			if (!this.custom[name]) return;
+			const current = this.efficiencies[name]!;
+			if (current.chargeEfficiency || current.dischargeEfficiency) return;
+			const item = this.economics?.find((item) => item.name === name);
+			if (item)
+				this.efficiencies[name] = {
+					chargeEfficiency: String(item.chargeEfficiency * 100),
+					dischargeEfficiency: String(item.dischargeEfficiency * 100),
+				};
+		},
+		async load() {
+			document
+				.getElementById("energySettingsModal")
+				?.setAttribute("aria-label", this.$t("forecast.energy.settings"));
+			const request = ++this.request;
 			this.loaded = false;
 			this.error = "";
-			this.saved = false;
+			this.activeSection = "planning";
 			try {
 				const settings = (await api.get<EnergySettings>("config/energyintelligence")).data;
+				if (request !== this.request) return;
 				this.draft = { ...settings, batteryWear: { ...settings.batteryWear } };
 				this.planes = { ...settings.batteryEnergyPlane };
 				this.efficiencies = Object.fromEntries(
@@ -172,6 +343,9 @@ export default defineComponent({
 						},
 					])
 				);
+				this.custom = Object.fromEntries(
+					Object.keys(settings.batteryEfficiency || {}).map((name) => [name, true])
+				);
 				this.initializeDevices();
 				this.wear = Object.fromEntries(
 					Object.entries(settings.batteryWear || {}).map(([name, value]) => [
@@ -181,31 +355,35 @@ export default defineComponent({
 				);
 				if (settings.settlementFrom) {
 					const date = new Date(settings.settlementFrom);
-					const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-					this.settlementDate = local.toISOString().slice(0, 10);
+					this.settlementDate = new Date(
+						date.getTime() - date.getTimezoneOffset() * 60000
+					)
+						.toISOString()
+						.slice(0, 10);
 				} else this.settlementDate = "";
+				this.initialSettlementDate = this.settlementDate;
 				this.loaded = true;
 			} catch (error) {
-				this.error = String(error);
+				if (request === this.request) this.error = String(error);
 			}
 		},
 		async save() {
 			if (!this.loaded || this.saving) return;
 			this.error = "";
-			this.saved = false;
 			const batteryWear: Record<string, number> = {};
 			for (const [name, text] of Object.entries(this.wear)) {
 				if (text === "") continue;
 				const value = Number(text);
 				if (!Number.isFinite(value) || value < 0 || value > 100) {
 					this.error = this.$t("forecast.energy.invalidWear");
+					this.activeSection = "batteries";
 					return;
 				}
 				batteryWear[name] = value;
 			}
 			const batteryEfficiency: NonNullable<EnergySettings["batteryEfficiency"]> = {};
 			for (const [name, entry] of Object.entries(this.efficiencies)) {
-				if (entry.chargeEfficiency === "" && entry.dischargeEfficiency === "") continue;
+				if (!this.custom[name]) continue;
 				const chargeEfficiency = Number(entry.chargeEfficiency) / 100;
 				const dischargeEfficiency = Number(entry.dischargeEfficiency) / 100;
 				if (
@@ -214,22 +392,38 @@ export default defineComponent({
 					)
 				) {
 					this.error = this.$t("forecast.energy.invalidEfficiency");
+					this.activeSection = "batteries";
 					return;
 				}
 				batteryEfficiency[name] = { chargeEfficiency, dischargeEfficiency };
+			}
+			const batteryEnergyPlane = Object.fromEntries(
+				Object.entries(this.planes).filter(
+					([name, value]) =>
+						value !== "unknown" || this.draft.batteryEnergyPlane?.[name] != null
+				)
+			);
+			if (this.draft.settlementMode === "interval" && !this.settlementDate) {
+				this.error = this.$t("forecast.energy.invalidBillingDate");
+				this.activeSection = "billing";
+				return;
 			}
 			this.saving = true;
 			try {
 				await api.put("config/energyintelligence", {
 					...this.draft,
 					batteryWear,
-					batteryEnergyPlane: this.planes,
+					batteryEnergyPlane,
 					batteryEfficiency,
-					settlementFrom: this.settlementDate
-						? new Date(`${this.settlementDate}T00:00:00`).toISOString()
-						: null,
+					settlementFrom:
+						this.settlementDate === this.initialSettlementDate
+							? (this.draft.settlementFrom ?? null)
+							: this.settlementDate
+								? new Date(`${this.settlementDate}T00:00:00`).toISOString()
+								: null,
 				});
-				this.saved = true;
+				this.$emit("saved");
+				this.cancel();
 			} catch (error) {
 				this.error = String(error);
 			} finally {
@@ -239,12 +433,15 @@ export default defineComponent({
 	},
 });
 </script>
-
 <style scoped>
+form {
+	overflow-wrap: anywhere;
+}
+form p,
+form .text-muted {
+	color: var(--evcc-default-text) !important;
+}
 summary {
 	cursor: pointer;
-}
-form {
-	max-width: 38rem;
 }
 </style>

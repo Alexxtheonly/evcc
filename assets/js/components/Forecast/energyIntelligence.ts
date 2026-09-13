@@ -77,11 +77,16 @@ export interface EnergyInsights {
   snapshotId?: number;
 }
 
-export function socPoints(values: number[]): string {
-  return values
-    .map((soc, index) => `${(index / Math.max(1, values.length - 1)) * 1000},${200 - soc * 2}`)
-    .join(" ");
-}
+export const socTimeline = (device: EnergyDevice, slots: EnergyForecastSlot[]) => {
+  if (!slots.length) return [];
+  return [
+    { time: slots[0]!.start, soc: device.initialSoc },
+    ...device.plan.flatMap((point) => {
+      const slot = slots.find((slot) => slot.start === point.start);
+      return slot ? [{ time: slot.end, soc: point.soc }] : [];
+    }),
+  ];
+};
 
 export function planWindows(device: EnergyDevice, slots: EnergyForecastSlot[]) {
   const windows: {
