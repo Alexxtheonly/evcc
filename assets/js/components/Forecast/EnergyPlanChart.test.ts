@@ -53,6 +53,61 @@ const create = (forecast = slots, devices = [device]) =>
   shallowMount(EnergyPlanChart, { props: { slots: forecast, devices }, global });
 
 describe("energy chart", () => {
+  test("first hover uses rendered tooltip height and keeps its scrollable contents open", async () => {
+    const wrapper = create();
+    const svg = wrapper.get("svg");
+    const actualBounds = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this.tagName === "svg") return { left: 100, width: 500 } as DOMRect;
+        if (this.classList.contains("chart-tooltip"))
+          return { bottom: window.innerHeight + 250, height: window.innerHeight - 16 } as DOMRect;
+        return actualBounds.call(this);
+      }
+    );
+    await svg.trigger("pointermove", { clientX: 150, clientY: window.innerHeight - 40 });
+    await wrapper.vm.$nextTick();
+    const tooltip = wrapper.get(".chart-tooltip");
+    expect(tooltip.attributes("style")).toContain("top: 8px");
+    await wrapper
+      .get('[role="group"]')
+      .trigger("pointerleave", { relatedTarget: tooltip.element, pointerType: "mouse" });
+    expect(wrapper.find(".chart-tooltip").exists()).toBe(true);
+    await tooltip.trigger("pointerdown", { pointerType: "touch" });
+    await tooltip.trigger("scroll");
+    expect(wrapper.find(".chart-tooltip").exists()).toBe(true);
+    wrapper.unmount();
+    vi.restoreAllMocks();
+  });
+  test("touch release keeps details, outside taps and scrolling dismiss without blocking gestures", async () => {
+    const wrapper = create();
+    const svg = wrapper.get("svg");
+    vi.spyOn(svg.element, "getBoundingClientRect").mockReturnValue({
+      left: 100,
+      width: 500,
+    } as DOMRect);
+    const tap = async () => {
+      await svg.trigger("pointerdown", { clientX: 150, clientY: 300, pointerType: "touch" });
+      await svg.trigger("pointerup", { clientX: 150, clientY: 300, pointerType: "touch" });
+      await wrapper.get('[role="group"]').trigger("pointerleave", { pointerType: "touch" });
+      expect(wrapper.find(".chart-tooltip").exists()).toBe(true);
+    };
+    await tap();
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".chart-tooltip").exists()).toBe(false);
+    await tap();
+    document.dispatchEvent(new Event("scroll"));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".chart-tooltip").exists()).toBe(false);
+    await tap();
+    const cancel = new Event("pointercancel", { bubbles: true, cancelable: true });
+    svg.element.dispatchEvent(cancel);
+    await wrapper.vm.$nextTick();
+    expect(cancel.defaultPrevented).toBe(false);
+    expect(wrapper.find(".chart-tooltip").exists()).toBe(false);
+    wrapper.unmount();
+  });
   test("aggregate multi-battery scenarios are not assigned to a single battery", async () => {
     const wrapper = shallowMount(EnergyPlanChart, {
       props: { slots, devices: [device], low: [40, 40], high: [60, 60] },

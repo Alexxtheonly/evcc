@@ -29,7 +29,8 @@
 			:aria-label="inspectionLabel"
 			@pointermove="inspectPointer"
 			@pointerdown="inspectPointer"
-			@pointerleave="tooltipPosition = undefined"
+			@pointerleave="leavePointer"
+			@pointercancel="dismissTooltip"
 			@keydown="inspectKey"
 		>
 			<template v-if="visible.price">
@@ -161,6 +162,7 @@
 			class="chart-tooltip border rounded shadow p-2"
 			:style="tooltipPosition"
 			aria-hidden="true"
+			@pointerleave="leavePointer"
 		>
 			<slot name="inspection" :devices="shownDevices" />
 		</div>
@@ -193,6 +195,14 @@ export default defineComponent({
 		hiddenDevices: [] as string[],
 		tooltipPosition: undefined as { left: string; top: string; width: string } | undefined,
 	}),
+	mounted() {
+		document.addEventListener("pointerdown", this.dismissOutside, true);
+		document.addEventListener("scroll", this.dismissOnScroll, true);
+	},
+	beforeUnmount() {
+		document.removeEventListener("pointerdown", this.dismissOutside, true);
+		document.removeEventListener("scroll", this.dismissOnScroll, true);
+	},
 	computed: {
 		shownDevices() {
 			return this.devices.filter((device) => !this.hiddenDevices.includes(device.key));
@@ -291,6 +301,31 @@ export default defineComponent({
 	},
 	methods: {
 		socTimeline,
+		dismissTooltip() {
+			this.tooltipPosition = undefined;
+		},
+		dismissOutside(event: PointerEvent) {
+			if (this.tooltipContains(event.target)) return;
+			if (
+				!(event.target instanceof Element) ||
+				!this.$el.contains(event.target) ||
+				!event.target.closest("svg")
+			)
+				this.dismissTooltip();
+		},
+		leavePointer(event: PointerEvent) {
+			if (event.pointerType !== "touch" && !this.tooltipContains(event.relatedTarget))
+				this.dismissTooltip();
+		},
+		tooltipContains(target: EventTarget | null) {
+			return (
+				target instanceof Node &&
+				(this.$refs["tooltip"] as HTMLElement | undefined)?.contains(target)
+			);
+		},
+		dismissOnScroll(event: Event) {
+			if (!this.tooltipContains(event.target)) this.dismissTooltip();
+		},
 		toggleDevice(key: string) {
 			this.hiddenDevices = this.hiddenDevices.includes(key)
 				? this.hiddenDevices.filter((item) => item !== key)
@@ -327,7 +362,7 @@ export default defineComponent({
 					: [];
 			});
 		},
-		inspectPointer(event: PointerEvent) {
+		async inspectPointer(event: PointerEvent) {
 			const svg = event.target instanceof Element ? event.target.closest("svg") : null;
 			if (!svg) return;
 			const bounds = svg.getBoundingClientRect();
@@ -355,6 +390,13 @@ export default defineComponent({
 				top: `${Math.max(8, Math.min(window.innerHeight - height - 8, event.clientY - height - 16))}px`,
 				width: `${width}px`,
 			};
+			await this.$nextTick();
+			const tooltip = (
+				this.$refs["tooltip"] as HTMLElement | undefined
+			)?.getBoundingClientRect();
+			if (this.tooltipPosition && tooltip && tooltip.bottom > window.innerHeight - 8) {
+				this.tooltipPosition.top = `${Math.max(8, window.innerHeight - tooltip.height - 8)}px`;
+			}
 		},
 		inspectKey(event: KeyboardEvent) {
 			if (event.key === "Escape") this.tooltipPosition = undefined;
@@ -525,8 +567,7 @@ svg {
 	z-index: 1050;
 	background: var(--evcc-box);
 	color: var(--evcc-default-text);
-	pointer-events: none;
 	max-height: calc(100vh - 16px);
-	overflow: hidden;
+	overflow: auto;
 }
 </style>
