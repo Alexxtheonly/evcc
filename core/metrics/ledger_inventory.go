@@ -41,7 +41,7 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 	bySlot := make(map[int64]*uint64)
 	for _, r := range controls {
 		if r.SnapshotUnavailable {
-			res.Reason = "historical_snapshot_expired_or_deleted"
+			res.Reason = "historical_snapshot_unavailable_or_assumptions_changed"
 			return res, nil
 		}
 		bySlot[r.Timestamp] = r.OptimizerSnapshotID
@@ -182,6 +182,7 @@ func inventoryAdjustedFromSlots(slots []slotData, physics []batteryPhysics, res 
 }
 
 func equalPhysics(a, b batteryPhysics) bool {
+	ceilingEqual := a.ChargeCeilingFrac == nil && b.ChargeCeilingFrac == nil || a.ChargeCeilingFrac != nil && b.ChargeCeilingFrac != nil && *a.ChargeCeilingFrac == *b.ChargeCeilingFrac
 	wearEqual := a.WearPerKWh == nil && b.WearPerKWh == nil || a.WearPerKWh != nil && b.WearPerKWh != nil && *a.WearPerKWh == *b.WearPerKWh
-	return a.MeasurementPlane == b.MeasurementPlane && a.CapacityKWh == b.CapacityKWh && a.EtaC == b.EtaC && a.EtaD == b.EtaD && a.FloorFrac == b.FloorFrac && a.MaxChargeKWh == b.MaxChargeKWh && a.MaxDischargeKWh == b.MaxDischargeKWh && wearEqual
+	return ceilingEqual && a.MeasurementPlane == b.MeasurementPlane && a.CapacityKWh == b.CapacityKWh && a.EtaC == b.EtaC && a.EtaD == b.EtaD && a.FloorFrac == b.FloorFrac && a.MaxChargeKWh == b.MaxChargeKWh && a.MaxDischargeKWh == b.MaxDischargeKWh && wearEqual
 }

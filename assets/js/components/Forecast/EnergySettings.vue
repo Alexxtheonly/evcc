@@ -25,7 +25,7 @@
 					class="form-control"
 					type="number"
 					min="0"
-					max="10"
+					max="100"
 					step="0.001"
 					:placeholder="$t('forecast.energy.unconfigured')"
 				/>
@@ -56,9 +56,9 @@
 							v-model="efficiencies[device.name]![direction.key]"
 							class="form-control"
 							type="number"
-							min="1"
+							min="0.000001"
 							max="100"
-							step="0.1"
+							step="any"
 							:placeholder="$t('forecast.energy.unconfigured')"
 						/>
 					</div>
@@ -197,7 +197,7 @@ export default defineComponent({
 			for (const [name, text] of Object.entries(this.wear)) {
 				if (text === "") continue;
 				const value = Number(text);
-				if (!Number.isFinite(value) || value < 0 || value > 10) {
+				if (!Number.isFinite(value) || value < 0 || value > 100) {
 					this.error = this.$t("forecast.energy.invalidWear");
 					return;
 				}

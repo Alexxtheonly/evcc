@@ -39,7 +39,14 @@ func snapshotPhysics(s *OptimizerSnapshot, fallback batteryPhysics) (batteryPhys
 	if e.WearPerKWh != nil && (!finite(*e.WearPerKWh) || *e.WearPerKWh < 0) {
 		return fallback, "invalid_snapshot_wear", false
 	}
-	return batteryPhysics{CapacityKWh: e.CapacityKWh, CapacitySource: "snapshot", EtaC: e.EtaC, EtaD: e.EtaD, EtaSource: e.Source, FloorFrac: e.FloorFrac, FloorSource: "snapshot", MaxChargeKWh: e.MaxChargeKWh, MaxDischargeKWh: e.MaxDischargeKWh, HasChargeEvidence: true, HasDischargeEvidence: true, WearPerKWh: e.WearPerKWh, MeasurementPlane: e.MeasurementPlane}, "optimizer_snapshot", true
+	if e.ChargeCeilingFrac != nil && (!finite(*e.ChargeCeilingFrac) || *e.ChargeCeilingFrac < e.FloorFrac || *e.ChargeCeilingFrac > 1) {
+		return fallback, "invalid_snapshot_charge_ceiling", false
+	}
+	source := "optimizer_snapshot"
+	if e.ChargeCeilingFrac == nil {
+		source = "optimizer_snapshot_legacy_charge_ceiling_assumed_full"
+	}
+	return batteryPhysics{CapacityKWh: e.CapacityKWh, CapacitySource: "snapshot", EtaC: e.EtaC, EtaD: e.EtaD, EtaSource: e.Source, FloorFrac: e.FloorFrac, FloorSource: "snapshot", ChargeCeilingFrac: e.ChargeCeilingFrac, MaxChargeKWh: e.MaxChargeKWh, MaxDischargeKWh: e.MaxDischargeKWh, HasChargeEvidence: true, HasDischargeEvidence: true, WearPerKWh: e.WearPerKWh, MeasurementPlane: e.MeasurementPlane}, source, true
 }
 
 func replayOutcome(index int, rows []controlSlot, slots map[int64]slotData, phys batteryPhysics, source string, to time.Time, snapshots map[uint64]*OptimizerSnapshot) *DecisionOutcome {

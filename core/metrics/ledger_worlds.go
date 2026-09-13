@@ -92,10 +92,11 @@ func computeW1(slots []slotData) []worldFlow {
 // package (Settled, Coverage, ...); without tags they serialise as PascalCase amid
 // lowerCamel siblings.
 type batteryPhysics struct {
-	MeasurementPlane string   `json:"measurementPlane,omitempty"`
-	WearPerKWh       *float64 `json:"wearPerKWh,omitempty"`
-	CapacityKWh      float64  `json:"capacityKWh"`
-	CapacitySource   string   `json:"capacitySource"`
+	ChargeCeilingFrac *float64 `json:"chargeCeilingFrac,omitempty"`
+	MeasurementPlane  string   `json:"measurementPlane,omitempty"`
+	WearPerKWh        *float64 `json:"wearPerKWh,omitempty"`
+	CapacityKWh       float64  `json:"capacityKWh"`
+	CapacitySource    string   `json:"capacitySource"`
 
 	EtaC      float64 `json:"etaC"`
 	EtaD      float64 `json:"etaD"`
@@ -592,6 +593,9 @@ func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryP
 		return socKWh + chargeAC*phys.EtaC, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, true
 
 	case batteryModeCharge:
+		if phys.ChargeCeilingFrac != nil {
+			headroomKWh = max(0, *phys.ChargeCeilingFrac*phys.CapacityKWh-socKWh)
+		}
 		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC)
 		fromSurplus := min(chargeAC, surplus)
 		fromGrid := chargeAC - fromSurplus

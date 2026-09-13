@@ -150,7 +150,7 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 		}
 		if r.SnapshotUnavailable {
 			valid = false
-			source = "historical_snapshot_expired_or_deleted"
+			source = "historical_snapshot_unavailable_or_assumptions_changed"
 		}
 
 		dr := DecisionRow{

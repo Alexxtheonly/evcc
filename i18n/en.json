@@ -1192,7 +1192,7 @@
       "settlementFrom": "Interval billing starts on",
       "save": "Save settings",
       "saved": "Settings saved. Automatic control is unchanged.",
-      "invalidWear": "Enter a wear cost between 0 and 10 per DC kWh, or leave it blank.",
+      "invalidWear": "Enter a wear cost between 0 and 100 per DC kWh, or leave it blank.",
       "measurementPlane": "Battery energy measurement",
       "planeUnknown": "Unknown (no automatic calibration)",
       "planeDc": "DC / battery side (no AC-efficiency calibration)",

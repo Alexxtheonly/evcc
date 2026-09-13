@@ -1192,7 +1192,7 @@
       "settlementFrom": "Viertelstundenabrechnung beginnt am",
       "save": "Einstellungen speichern",
       "saved": "Einstellungen gespeichert. Automatische Steuerung unverändert.",
-      "invalidWear": "Verschleißkosten zwischen 0 und 10 je DC-kWh eingeben oder leer lassen.",
+      "invalidWear": "Verschleißkosten zwischen 0 und 100 je DC-kWh eingeben oder leer lassen.",
       "measurementPlane": "Energiemessung der Batterie",
       "planeUnknown": "Unbekannt (keine automatische Kalibrierung)",
       "planeDc": "DC / Batterieseite (keine AC-Wirkungsgradkalibrierung)",
