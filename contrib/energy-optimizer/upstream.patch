@@ -315,7 +315,7 @@ index 0000000..f9e8cca
 +            discharge = math.nextafter(discharge, 0.0)
 +    raise ValueError('first step action exceeds physical storage capacity')
 diff --git a/src/optimizer/optimizer.py b/src/optimizer/optimizer.py
-index 77c2353..4d896ef 100644
+index 77c2353..d78cd62 100644
 --- a/src/optimizer/optimizer.py
 +++ b/src/optimizer/optimizer.py
 @@ -136,6 +136,12 @@ class BatteryConfig:
@@ -348,7 +348,7 @@ index 77c2353..4d896ef 100644
  
          # charge for import power demand rate. The demand rate is applied to the maximum
          # power draw beyond the threshold within the time horizon.
-@@ -616,23 +625,33 @@ class Optimizer:
+@@ -616,23 +625,39 @@ class Optimizer:
  
          # Constraint (3): Battery dynamics
          for i, bat in enumerate(self.batteries):
@@ -364,12 +364,20 @@ index 77c2353..4d896ef 100644
 +                self.problem += self.variables['d'][i][0] == bat.first_step_discharge
              # Initial state of charge
              if len(self.time_steps) > 0:
-                 self.problem += (self.variables['s'][i][0]
-                                  == bat.s_initial
+-                self.problem += (self.variables['s'][i][0]
+-                                 == bat.s_initial
 -                                 + self.eta_c * self.variables['c'][i][0]
 -                                 - (1 / self.eta_d) * self.variables['d'][i][0])
-+                                 + eta_c * self.variables['c'][i][0]
-+                                 - (1 / eta_d) * self.variables['d'][i][0])
++                if bat.first_step_charge is not None:
++                    # Substitute fixed flows before MPS serialization can round
++                    # their coefficients independently across a storage bound.
++                    initial = bat.s_initial + eta_c * bat.first_step_charge - bat.first_step_discharge / eta_d
++                    self.problem += self.variables['s'][i][0] == initial
++                else:
++                    self.problem += (self.variables['s'][i][0]
++                                     == bat.s_initial
++                                     + eta_c * self.variables['c'][i][0]
++                                     - (1 / eta_d) * self.variables['d'][i][0])
  
              # State of charge evolution
              for t in range(1, self.T):
@@ -388,7 +396,7 @@ index 77c2353..4d896ef 100644
                      if bat.s_goal[t] > 0:
                          self.problem += (self.variables['s'][i][t]
                                           + self.variables['s_goal_pen'][i][t] >= bat.s_goal[t])
-@@ -922,6 +941,7 @@ class Optimizer:
+@@ -922,6 +947,7 @@ class Optimizer:
              result = {
                  'status': status,
                  'objective_value': self.get_clean_objective_value(),
@@ -396,7 +404,7 @@ index 77c2353..4d896ef 100644
                  'limit_violations': {
                      'grid_import_limit_exceeded': grid_imp_limit_violated,
                      'grid_export_limit_hit': grid_exp_limit_hit
-@@ -992,7 +1012,7 @@ class Optimizer:
+@@ -992,7 +1018,7 @@ class Optimizer:
          # Final state of charge value [currency unit]
          for i, bat in enumerate(self.batteries):
              clean_objective += (pulp.value(self.variables['s'][i][self.T-1])
@@ -405,7 +413,7 @@ index 77c2353..4d896ef 100644
  
          # charge for import power demand rate. The demand rate is applied to the maximum
          # power draw beyond the threshold within the time horizon.
-@@ -1000,4 +1020,12 @@ class Optimizer:
+@@ -1000,4 +1026,12 @@ class Optimizer:
              clean_objective += - self.grid.prc_p_exc_imp \
                  * pulp.value(self.variables['p_max_imp_exc'])
  

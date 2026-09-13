@@ -7,6 +7,11 @@ runs both the upstream suite and the extension's physical/economic tests before
 producing the runtime image. No adjacent repository or local Go replacement is
 needed.
 
+Both package-install steps force a fresh build of the patched optimizer package.
+The build compares every installed Python module with its source, before testing
+the non-editable installation directly and again after removing development
+dependencies. Cached wheels and editable test imports cannot mask stale runtime code.
+
 Build from this directory:
 
 ```sh
@@ -73,6 +78,8 @@ move the action inward by at most four representable float64 steps. Negative
 inputs, simultaneous charge/discharge and unavailable actions remain strict.
 Float32 solver-output precision is not an input tolerance: controllers must
 reconstruct executable full-power actions from their original request limits.
+The first storage state substitutes fixed charge/discharge constants before MPS
+serialization, avoiding independently rounded coefficients at full/empty bounds.
 
 The extended OpenAPI contract is tracked in `upstream.patch` and installed at
 `/app/openapi.yaml` in the image. evcc checks capabilities before transmitting

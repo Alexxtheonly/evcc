@@ -12,7 +12,10 @@ RUN git apply --check /tmp/upstream.patch && git apply /tmp/upstream.patch
 
 FROM source AS dependencies
 COPY --from=ghcr.io/astral-sh/uv:0.12.13 /uv /uvx /bin/
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-editable
+COPY verify_install.py /app/verify_install.py
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-editable --reinstall-package optimizer \
+    && /app/.venv/bin/python /app/verify_install.py
 ADD --checksum=sha256:f551e7b843e25becee466a447118f6f44f219c4e46cfb4670829ecd3cf47e7d8 \
     https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.10/Cbc-releases.2.10.10-x86_64-ubuntu22-gcc1130-static.tar.gz \
     /tmp/cbc.tar.gz
@@ -21,8 +24,9 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then tar -xzf /tmp/cbc.tar.gz -C /usr/local 
 
 FROM dependencies AS builder
 COPY tests /app/extension-tests
-RUN uv run --locked pytest -q tests extension-tests
-RUN uv sync --locked --no-editable --no-group dev
+RUN /app/.venv/bin/pytest -q tests extension-tests
+RUN uv sync --locked --no-editable --no-group dev --reinstall-package optimizer \
+    && /app/.venv/bin/python /app/verify_install.py
 
 FROM python:3.13-slim
 RUN groupadd -r app && useradd -r -g app -s /bin/false app
