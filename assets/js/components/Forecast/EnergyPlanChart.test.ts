@@ -53,6 +53,19 @@ const create = (forecast = slots, devices = [device]) =>
   shallowMount(EnergyPlanChart, { props: { slots: forecast, devices }, global });
 
 describe("energy chart", () => {
+  test("aggregate multi-battery scenarios are not assigned to a single battery", async () => {
+    const wrapper = shallowMount(EnergyPlanChart, {
+      props: { slots, devices: [device], low: [40, 40], high: [60, 60] },
+      global,
+    });
+    expect(wrapper.find("polygon").exists()).toBe(true);
+    await wrapper.setProps({ devices: [device, { ...device, key: "battery:b", initialSoc: 90 }] });
+    expect(wrapper.find("polygon").exists()).toBe(false);
+    expect(wrapper.findAll(".soc-line")).toHaveLength(2);
+    await wrapper.findAll("button")[1]!.trigger("click");
+    expect(wrapper.findAll(".soc-line")).toHaveLength(1);
+    expect(wrapper.find("polygon").exists()).toBe(false);
+  });
   test("missing prices leave a gap instead of a zero or connecting line", () => {
     const forecast = [
       slots[0]!,

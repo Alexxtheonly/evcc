@@ -1,7 +1,7 @@
 <template>
 	<div class="energy-chart">
 		<div class="d-flex flex-wrap gap-2 mb-2" :aria-label="$t('forecast.energy.chartLayers')">
-			<label v-for="layer in layers" :key="layer" class="legend-toggle small">
+			<label v-for="layer in layers" :key="layer" class="legend-toggle">
 				<input v-model="visible[layer]" type="checkbox" class="form-check-input mt-0" />
 				<span :class="['legend-mark', layer]" aria-hidden="true" />
 				{{ $t(`forecast.energy.chart.${layer}`) }}
@@ -158,7 +158,7 @@
 		<div
 			v-if="tooltipPosition"
 			ref="tooltip"
-			class="chart-tooltip small border rounded shadow p-2"
+			class="chart-tooltip border rounded shadow p-2"
 			:style="tooltipPosition"
 			aria-hidden="true"
 		>
@@ -270,7 +270,8 @@ export default defineComponent({
 			return lines;
 		},
 		envelope() {
-			const device = this.devices.find((device) => device.kind === "battery");
+			const batteries = this.devices.filter((device) => device.kind === "battery");
+			const device = batteries.length === 1 ? batteries[0] : undefined;
 			if (
 				!device ||
 				!this.socDevices.includes(device) ||
@@ -380,6 +381,11 @@ export default defineComponent({
 });
 </script>
 <style scoped>
+.legend-toggle,
+.chart-tooltip {
+	font-size: 0.875rem;
+	color: var(--evcc-default-text);
+}
 .legend-toggle {
 	display: inline-flex;
 	align-items: center;
