@@ -3734,6 +3734,376 @@
           ]
         }
       },
+      "EnergySettings": {
+        "type": "object",
+        "properties": {
+          "robust": {
+            "type": "boolean"
+          },
+          "arrivals": {
+            "type": "boolean"
+          },
+          "useLearnedEfficiency": {
+            "type": "boolean"
+          },
+          "batteryWear": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "batteryEnergyPlane": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "ac",
+                "dc",
+                "unknown"
+              ]
+            }
+          },
+          "batteryEfficiency": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "chargeEfficiency": {
+                  "type": "number"
+                },
+                "dischargeEfficiency": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "chargeEfficiency",
+                "dischargeEfficiency"
+              ]
+            }
+          },
+          "settlementMode": {
+            "type": "string",
+            "enum": [
+              "simulation",
+              "interval"
+            ]
+          },
+          "settlementFrom": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "robust",
+          "arrivals",
+          "useLearnedEfficiency",
+          "batteryWear",
+          "settlementMode"
+        ]
+      },
+      "EnergyForecastSlot": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "homeLowWh": {
+            "type": "number"
+          },
+          "homeWh": {
+            "type": "number"
+          },
+          "homeHighWh": {
+            "type": "number"
+          },
+          "solarLowWh": {
+            "type": "number"
+          },
+          "solarWh": {
+            "type": "number"
+          },
+          "solarHighWh": {
+            "type": "number"
+          },
+          "gridPrice": {
+            "type": "number"
+          },
+          "gridImportWh": {
+            "type": "number"
+          },
+          "gridChargeMinWh": {
+            "type": "number"
+          },
+          "gridChargeMaxWh": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "homeLowWh",
+          "homeWh",
+          "homeHighWh",
+          "solarLowWh",
+          "solarWh",
+          "solarHighWh",
+          "gridPrice"
+        ]
+      },
+      "EnergyDevice": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "battery",
+              "vehicle",
+              "expectedVehicle"
+            ]
+          },
+          "capacityKWh": {
+            "type": "number"
+          },
+          "initialSoc": {
+            "type": "number"
+          },
+          "arrival": {
+            "type": "string"
+          },
+          "departure": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string"
+                },
+                "chargeWh": {
+                  "type": "number"
+                },
+                "dischargeWh": {
+                  "type": "number"
+                },
+                "soc": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "start",
+                "chargeWh",
+                "dischargeWh"
+              ]
+            }
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "title",
+          "kind",
+          "capacityKWh",
+          "plan"
+        ]
+      },
+      "EnergyInsights": {
+        "type": "object",
+        "properties": {
+          "updated": {
+            "type": "string"
+          },
+          "automatic": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "degraded",
+              "unavailable"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/EnergySettings"
+          },
+          "profile": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "samples": {
+                "type": "number"
+              },
+              "coveredBuckets": {
+                "type": "number"
+              },
+              "missingBuckets": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "rejectedSamples": {
+                "type": "number"
+              },
+              "lastGood": {
+                "type": "string"
+              },
+              "lastGoodAgeSeconds": {
+                "type": "number"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "rangeSource": {
+                "type": "string"
+              },
+              "calibrationSamples": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "source",
+              "samples",
+              "coveredBuckets",
+              "rejectedSamples"
+            ]
+          },
+          "forecast": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnergyForecastSlot"
+            }
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnergyDevice"
+            }
+          },
+          "arrivalNotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "reason"
+              ]
+            }
+          },
+          "economics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "chargeEfficiency": {
+                  "type": "number"
+                },
+                "dischargeEfficiency": {
+                  "type": "number"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "candidateChargeEfficiency": {
+                  "type": "number"
+                },
+                "candidateDischargeEfficiency": {
+                  "type": "number"
+                },
+                "wearPerKWh": {
+                  "type": "number"
+                },
+                "calibrationReason": {
+                  "type": "string"
+                },
+                "measurementPlane": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "chargeEfficiency",
+                "dischargeEfficiency",
+                "source"
+              ]
+            }
+          },
+          "scenarios": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "selected": {
+                "type": "string"
+              },
+              "costLow": {
+                "type": "number"
+              },
+              "costHigh": {
+                "type": "number"
+              },
+              "batterySocLow": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "batterySocHigh": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "snapshotId": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "updated",
+          "automatic",
+          "status",
+          "settings"
+        ]
+      },
       "BatterySuggestion": {
         "description": "Battery optimizer suggestion for a home battery.",
         "type": "object",
@@ -5015,6 +5385,9 @@
           "authProviders": {
             "$ref": "#/components/schemas/AuthProviders",
             "description": "Status of configured vehicle authentication providers, keyed by provider name."
+          },
+          "optimizerInsights": {
+            "$ref": "#/components/schemas/EnergyInsights"
           },
           "version": {
             "description": "Running evcc version.",

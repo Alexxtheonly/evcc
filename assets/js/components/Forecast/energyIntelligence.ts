@@ -19,6 +19,9 @@ export interface EnergyForecastSlot {
   solarWh: number;
   solarHighWh: number;
   gridPrice: number;
+  gridImportWh?: number;
+  gridChargeMinWh?: number;
+  gridChargeMaxWh?: number;
 }
 
 export interface EnergyDevice {

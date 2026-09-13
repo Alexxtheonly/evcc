@@ -1,7 +1,7 @@
 import { shallowMount } from "@vue/test-utils";
 import { describe, expect, test } from "vite-plus/test";
 import EnergyPlanCard from "./EnergyPlanCard.vue";
-import EnergySocChart from "./EnergySocChart.vue";
+import EnergyPlanChart from "./EnergyPlanChart.vue";
 import { CURRENCY } from "@/types/evcc";
 import { forecastTotals, socTimeline, type EnergyInsights } from "./energyIntelligence";
 
@@ -68,11 +68,11 @@ describe("energy plan", () => {
     expect(wrapper.text()).toContain("forecast.energy.unknownLevel");
     expect(wrapper.text()).not.toContain("NaN");
     expect(socTimeline(device, [slot])).toEqual([]);
-    const chart = shallowMount(EnergySocChart, {
-      props: { device, slots: [slot], low: [30], high: [50] },
+    const chart = shallowMount(EnergyPlanChart, {
+      props: { devices: [device], slots: [slot], low: [30], high: [50] },
       global,
     });
-    expect(chart.find("polyline").exists()).toBe(false);
+    expect(chart.find(".soc-line").exists()).toBe(false);
     expect(chart.find("polygon").attributes("points")).not.toContain("NaN");
   });
   test("chart positions unequal intervals by elapsed time, not array index", () => {
@@ -89,16 +89,16 @@ describe("energy plan", () => {
         { start: slot.end, chargeWh: 1000, dischargeWh: 0, soc: 70 },
       ],
     };
-    const wrapper = shallowMount(EnergySocChart, { props: { slots, device }, global });
+    const wrapper = shallowMount(EnergyPlanChart, { props: { slots, devices: [device] }, global });
     const points = wrapper
-      .get("polyline")
+      .get(".soc-line")
       .attributes("points")!
       .split(" ")
       .map((point) => point.split(",").map(Number));
     expect(points).toEqual([
-      [0, 67.5],
-      [166.25, 54],
-      [665, 40.5],
+      [0, 60],
+      [166.25, 48],
+      [665, 36],
     ]);
     expect(wrapper.findAll("text")).toHaveLength(0);
   });
@@ -125,7 +125,7 @@ describe("energy plan", () => {
       props: { insights, currency: CURRENCY.USD },
       global,
     });
-    expect(wrapper.findAllComponents(EnergySocChart)).toHaveLength(2);
+    expect(wrapper.getComponent(EnergyPlanChart).props("devices")).toHaveLength(2);
     expect(wrapper.text()).toContain("forecast.energy.noPlan");
     expect(wrapper.text()).not.toContain("forecast.energy.idle");
     expect(wrapper.text()).toContain("¢/kWh");

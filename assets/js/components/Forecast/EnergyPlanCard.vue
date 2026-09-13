@@ -88,62 +88,77 @@
 					</div>
 				</div>
 			</div>
-			<template v-for="(device, index) in batteries" :key="device.key">
-				<h4 class="fs-6 mt-3 mb-1">
-					{{ device.title }} · {{ $t("forecast.energy.chargeLevel") }}
-				</h4>
-				<EnergySocChart
-					:device="device"
-					:slots="slots"
-					:selected-end="selectedSlot?.end"
-					:low="index === 0 ? insights?.scenarios?.batterySocLow : undefined"
-					:high="index === 0 ? insights?.scenarios?.batterySocHigh : undefined"
-				/>
-			</template>
+			<EnergyPlanChart
+				:devices="devices"
+				:slots="slots"
+				:selected-index="slotIndex"
+				:low="insights?.scenarios?.batterySocLow"
+				:high="insights?.scenarios?.batterySocHigh"
+				:currency="currency"
+				@inspect="slotIndex = $event"
+			>
+				<template #inspection="{ devices: chartDevices }">
+					<template v-if="selectedSlot">
+						<div class="fw-semibold mb-1">
+							{{ interval(selectedSlot.start, selectedSlot.end) }}
+						</div>
+						<div>
+							{{ $t("forecast.energy.chart.price") }}:
+							{{ price(selectedSlot.gridPrice) }}
+						</div>
+						<div>{{ gridCharging }}</div>
+						<div v-for="device in chartDevices" :key="device.key" class="mt-1">
+							<strong>{{ device.title }}</strong
+							>: {{ action(device) }}
+							<span v-if="device.capacityKWh > 0 && deviceSlot(device)">
+								·
+								{{
+									$t("forecast.energy.levelAtEnd", {
+										soc: percent(deviceSlot(device)!.soc),
+									})
+								}}</span
+							>
+						</div>
+					</template>
+				</template>
+			</EnergyPlanChart>
 			<div v-if="selectedSlot" class="inspection border rounded p-3 mt-3">
-				<label for="energy-plan-time" class="form-label fw-semibold"
-					>{{ $t("forecast.energy.inspect") }}:
-					{{ interval(selectedSlot.start, selectedSlot.end) }}</label
-				>
-				<div class="d-flex align-items-center gap-3 mb-2">
-					<button
-						type="button"
-						class="btn btn-outline-secondary btn-sm"
-						:aria-label="$t('forecast.energy.previous')"
-						:disabled="slotIndex <= 0"
-						@click="slotIndex--"
-					>
-						‹
-					</button>
-					<input
-						id="energy-plan-time"
-						v-model.number="slotIndex"
-						type="range"
-						class="form-range"
-						min="0"
-						:max="slots.length - 1"
-						step="1"
-						:aria-valuetext="interval(selectedSlot.start, selectedSlot.end)"
-					/>
-					<button
-						type="button"
-						class="btn btn-outline-secondary btn-sm"
-						:aria-label="$t('forecast.energy.next')"
-						:disabled="slotIndex >= slots.length - 1"
-						@click="slotIndex++"
-					>
-						›
-					</button>
+				<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+					<div class="fw-semibold">
+						{{ $t("forecast.energy.inspect") }}:
+						{{ interval(selectedSlot.start, selectedSlot.end) }}
+					</div>
+					<div class="d-flex gap-2">
+						<button
+							type="button"
+							class="btn btn-outline-secondary btn-sm"
+							:aria-label="$t('forecast.energy.previous')"
+							:disabled="slotIndex <= 0"
+							@click="slotIndex--"
+						>
+							‹
+						</button>
+						<button
+							type="button"
+							class="btn btn-outline-secondary btn-sm"
+							:aria-label="$t('forecast.energy.next')"
+							:disabled="slotIndex >= slots.length - 1"
+							@click="slotIndex++"
+						>
+							›
+						</button>
+					</div>
 				</div>
 				<p class="small mb-2">
 					{{
 						$t("forecast.energy.slotContext", {
-							price: fmtPricePerKWh(selectedSlot.gridPrice, currency),
+							price: price(selectedSlot.gridPrice),
 							home: kwh(selectedSlot.homeWh / 1000),
 							solar: kwh(selectedSlot.solarWh / 1000),
 						})
 					}}
 				</p>
+				<p class="small mb-2">{{ gridCharging }}</p>
 				<div
 					v-for="device in devices"
 					:key="device.key"
@@ -276,7 +291,7 @@
 import { defineComponent, type PropType } from "vue";
 import Card from "../Helper/Card.vue";
 import EnergySettings from "./EnergySettings.vue";
-import EnergySocChart from "./EnergySocChart.vue";
+import EnergyPlanChart from "./EnergyPlanChart.vue";
 import formatter from "@/mixins/formatter";
 import { is12hFormat } from "@/units";
 import {
@@ -288,7 +303,7 @@ import {
 import { CURRENCY, type BatteryMeter, type OptimizerHealth } from "@/types/evcc";
 
 export default defineComponent({
-	components: { Card, EnergySettings, EnergySocChart },
+	components: { Card, EnergySettings, EnergyPlanChart },
 	mixins: [formatter],
 	props: {
 		insights: { type: Object as PropType<EnergyInsights>, default: undefined },
@@ -351,6 +366,15 @@ export default defineComponent({
 		selectedSlot() {
 			return this.slots[Math.min(this.slotIndex, this.slots.length - 1)];
 		},
+		gridCharging() {
+			const slot = this.selectedSlot;
+			if (slot?.gridChargeMinWh == null || slot.gridChargeMaxWh == null)
+				return this.$t("forecast.energy.gridChargingUnavailable");
+			return this.$t("forecast.energy.gridChargingRange", {
+				low: this.kwh(slot.gridChargeMinWh / 1000),
+				high: this.kwh(slot.gridChargeMaxWh / 1000),
+			});
+		},
 		deviceSummaries() {
 			return this.devices.map((device) => {
 				const windows = planWindows(device, this.slots);
@@ -364,6 +388,11 @@ export default defineComponent({
 		},
 	},
 	methods: {
+		price(value: number) {
+			return Number.isFinite(value)
+				? this.fmtPricePerKWh(value, this.currency)
+				: this.$t("forecast.energy.priceUnavailable");
+		},
 		openSettings(event: Event) {
 			(this.$refs["settings"] as unknown as InstanceType<typeof EnergySettings>).open(event);
 		},
@@ -446,8 +475,5 @@ summary {
 .quality-details {
 	border-top: 1px solid var(--bs-border-color);
 	padding-top: 1rem;
-}
-input[type="range"] {
-	min-width: 0;
 }
 </style>
