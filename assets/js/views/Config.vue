@@ -808,7 +808,7 @@ export default defineComponent({
 		energySettingsDevices() {
 			return this.batteryMeters.map((meter) => ({
 				name: meter.name,
-				title: meter.config?.title || meter.name,
+				title: meter.deviceTitle || meter.config?.title || meter.name,
 			}));
 		},
 		energyEconomics() {

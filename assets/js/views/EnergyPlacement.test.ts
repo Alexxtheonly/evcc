@@ -228,6 +228,38 @@ describe("energy planning placement", () => {
       .find((button) => button.text() === "forecast.energy.configure")!;
     expect(button).toBeDefined();
     expect(wrapper.getComponent(EnergySettings).props("devices")).toEqual([]);
+    await wrapper.setData({
+      site: { battery: ["db:11", "custom-storage", "untitled-storage"] },
+      meters: [
+        {
+          id: 11,
+          name: "db:11",
+          type: "template",
+          deviceProduct: "Battery product",
+          deviceTitle: "Garage storage",
+          config: { template: "battery-template" },
+        },
+        {
+          id: 0,
+          name: "custom-storage",
+          type: "custom",
+          deviceProduct: "",
+          config: { title: "Basement storage" },
+        },
+        {
+          id: 0,
+          name: "untitled-storage",
+          type: "custom",
+          deviceProduct: "",
+          config: {},
+        },
+      ],
+    });
+    expect(wrapper.getComponent(EnergySettings).props("devices")).toEqual([
+      { name: "db:11", title: "Garage storage" },
+      { name: "custom-storage", title: "Basement storage" },
+      { name: "untitled-storage", title: "untitled-storage" },
+    ]);
     await button.trigger("click");
     expect(open).toHaveBeenCalledOnce();
     expect(api.post).not.toHaveBeenCalled();
