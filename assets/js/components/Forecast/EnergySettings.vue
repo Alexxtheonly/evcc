@@ -242,7 +242,7 @@ export default defineComponent({
 		economics: { type: Array as PropType<EnergyInsights["economics"]>, default: () => [] },
 		currency: { type: String as PropType<CURRENCY>, default: CURRENCY.EUR },
 	},
-	emits: ["saved"],
+	emits: ["saved", "closed"],
 	data: () => ({
 		draft: defaults(),
 		wear: {} as Record<string, string>,
@@ -314,6 +314,7 @@ export default defineComponent({
 		restoreFocus() {
 			if (this.invoker?.isConnected) this.invoker.focus();
 			this.invoker = null;
+			this.$emit("closed");
 		},
 		invalidBattery(name: string, field: string, message: string) {
 			this.error = `${this.devices.find((device) => device.name === name)?.title ?? name}: ${this.$t(message)}`;

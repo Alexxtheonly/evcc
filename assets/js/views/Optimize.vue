@@ -1,7 +1,11 @@
 <template>
 	<div class="container px-4 safe-area-inset">
 		<TopHeader :title="$t('forecast.energy.pageTitle')" />
-		<nav class="d-flex flex-wrap gap-2 mb-4" :aria-label="$t('forecast.energy.pageTitle')">
+		<nav
+			ref="sections"
+			class="d-flex flex-wrap gap-2 mb-4"
+			:aria-label="$t('forecast.energy.pageTitle')"
+		>
 			<router-link
 				v-for="tab in tabs"
 				:key="tab"
@@ -18,6 +22,7 @@
 				<router-link to="/config#integrations">{{ $t("config.main.title") }}</router-link>
 			</p>
 			<EnergyPlanCard
+				@settings-closed="restoreSettingsFocus"
 				:insights="optimizerInsights"
 				:health="optimizerHealth"
 				:automatic="optimizerAutomatic"
@@ -362,6 +367,13 @@ export default defineComponent({
 		},
 	},
 	methods: {
+		restoreSettingsFocus() {
+			if (this.activeTab !== "plan") {
+				(this.$refs["sections"] as HTMLElement)
+					.querySelector<HTMLElement>('[aria-current="page"]')
+					?.focus();
+			}
+		},
 		optimizeNow() {
 			this.pending = true;
 			api.post("optimize");

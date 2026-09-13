@@ -341,6 +341,7 @@ test("focus returns to the invoker only after the modal has finished closing", a
     wrapper.getComponent(GenericModal).vm.$emit("closed");
     await flushPromises();
     expect(document.activeElement).toBe(invoker);
+    expect(wrapper.emitted("closed")).toHaveLength(1);
   } finally {
     wrapper.unmount();
     invoker.remove();

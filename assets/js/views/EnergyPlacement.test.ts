@@ -7,6 +7,7 @@ import Config from "./Config.vue";
 import MoreMenu from "../components/BottomTabs/MoreMenu.vue";
 import EnergyPlanCard from "../components/Forecast/EnergyPlanCard.vue";
 import EnergySettings from "../components/Forecast/EnergySettings.vue";
+import GenericModal from "../components/Helper/GenericModal.vue";
 import SavingsLedgerCard from "../components/Forecast/SavingsLedgerCard.vue";
 import SavingsLedgerDecisions from "../components/Forecast/SavingsLedgerDecisions.vue";
 import SavingsLedgerWaterfall from "../components/Forecast/SavingsLedgerWaterfall.vue";
@@ -43,6 +44,37 @@ beforeEach(() => {
 });
 
 describe("energy planning placement", () => {
+  test("closing settings after browser Back focuses the visible section, not the hidden invoker", async () => {
+    const router = await navigation("/optimize?tab=results");
+    const wrapper = shallowMount(Optimize, {
+      attachTo: document.body,
+      global: {
+        plugins: [router],
+        mocks,
+        renderStubDefaultSlot: true,
+        stubs: { RouterLink: false, EnergyPlanCard: false, EnergySettings: false },
+      },
+    });
+    try {
+      await router.push("/optimize?tab=plan");
+      const settings = wrapper.getComponent(EnergySettings);
+      const invoker = wrapper.getComponent(EnergyPlanCard).get("button").element;
+      (invoker as HTMLButtonElement).focus();
+      await settings.setData({ invoker });
+      router.back();
+      await flushPromises();
+      expect(router.currentRoute.value.query["tab"]).toBe("results");
+      expect(wrapper.getComponent(EnergySettings).vm).toBe(settings.vm);
+      settings.getComponent(GenericModal).vm.$emit("closed");
+      await flushPromises();
+      const activeSection = wrapper.get('nav a[aria-current="page"]');
+      expect(activeSection.text()).toBe("forecast.energy.tabs.results");
+      expect(document.activeElement).toBe(activeSection.element);
+      expect(api.post).not.toHaveBeenCalled();
+    } finally {
+      wrapper.unmount();
+    }
+  });
   test("a ledger response arriving on another tab does not initialize hidden charts", async () => {
     let complete!: (response: { status: number; data: typeof liveSample }) => void;
     vi.mocked(api.get).mockReturnValueOnce(

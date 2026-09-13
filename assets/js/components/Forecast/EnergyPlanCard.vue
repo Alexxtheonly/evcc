@@ -280,6 +280,7 @@
 			</p>
 		</details>
 		<EnergySettings
+			@closed="$emit('settingsClosed')"
 			ref="settings"
 			:devices="settingsDevices"
 			:economics="insights?.economics"
@@ -304,6 +305,7 @@ import { CURRENCY, type BatteryMeter, type OptimizerHealth } from "@/types/evcc"
 
 export default defineComponent({
 	components: { Card, EnergySettings, EnergyPlanChart },
+	emits: ["settingsClosed"],
 	mixins: [formatter],
 	props: {
 		insights: { type: Object as PropType<EnergyInsights>, default: undefined },
