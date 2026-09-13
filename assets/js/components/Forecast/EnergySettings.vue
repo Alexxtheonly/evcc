@@ -8,7 +8,7 @@
 		@open="load"
 		@close="closed"
 	>
-		<form novalidate @submit.prevent="save">
+		<form ref="form" novalidate @submit.prevent="save">
 			<p class="small">{{ $t("forecast.energy.settingsNote") }}</p>
 			<p v-if="error" class="alert alert-danger" role="alert">{{ error }}</p>
 			<div v-if="!loaded" class="py-3" role="status">
@@ -293,6 +293,10 @@ export default defineComponent({
 				input?.focus();
 			});
 		},
+		hasBadInput(id: string) {
+			const input = (this.$refs["form"] as HTMLFormElement).elements.namedItem(id);
+			return input instanceof HTMLInputElement && input.validity.badInput;
+		},
 		initializeDevices() {
 			for (const device of this.devices) {
 				this.planes[device.name] ||= "unknown";
@@ -380,6 +384,24 @@ export default defineComponent({
 		async save() {
 			if (!this.loaded || this.saving) return;
 			this.error = "";
+			for (const device of this.devices) {
+				if (this.hasBadInput(`energy-wear-${device.name}`)) {
+					this.invalidBattery(device.name, "wear", "forecast.energy.invalidWear");
+					return;
+				}
+				if (this.custom[device.name]) {
+					for (const direction of this.efficiencyDirections) {
+						if (this.hasBadInput(`energy-${direction.key}-${device.name}`)) {
+							this.invalidBattery(
+								device.name,
+								direction.key,
+								"forecast.energy.invalidEfficiency"
+							);
+							return;
+						}
+					}
+				}
+			}
 			const batteryWear: Record<string, number> = {};
 			for (const [name, text] of Object.entries(this.wear)) {
 				if (text === "") continue;
@@ -417,9 +439,13 @@ export default defineComponent({
 						value !== "unknown" || this.draft.batteryEnergyPlane?.[name] != null
 				)
 			);
-			if (this.draft.settlementMode === "interval" && !this.settlementDate) {
+			if (
+				this.draft.settlementMode === "interval" &&
+				(!this.settlementDate || this.hasBadInput("energy-settlement-from"))
+			) {
 				this.error = this.$t("forecast.energy.invalidBillingDate");
 				this.activeSection = "billing";
+				this.$nextTick(() => document.getElementById("energy-settlement-from")?.focus());
 				return;
 			}
 			this.saving = true;

@@ -241,3 +241,47 @@ test("invalid wear reveals and focuses the named battery field even from Plannin
     wrapper.unmount();
   }
 });
+
+test("native badInput is not interpreted as clearing an optional wear value", async () => {
+  vi.mocked(api.get).mockResolvedValue({
+    data: { ...defaults(), batteryWear: { storage: 0.035 } },
+  });
+  vi.mocked(api.put).mockResolvedValue({});
+  const wrapper = mountSettings();
+  await open(wrapper);
+  const input = wrapper.get("#energy-wear-storage");
+  await input.setValue("");
+  Object.defineProperty(input.element, "validity", {
+    configurable: true,
+    value: { badInput: true },
+  });
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).not.toHaveBeenCalled();
+  expect(wrapper.get('[role="alert"]').text()).toContain("Home battery");
+  Object.defineProperty(input.element, "validity", {
+    configurable: true,
+    value: { badInput: false },
+  });
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(
+    "config/energyintelligence",
+    expect.objectContaining({ batteryWear: {} })
+  );
+});
+
+test("a partially edited native date cannot save the previous complete date", async () => {
+  vi.mocked(api.get).mockResolvedValue({
+    data: { ...defaults(), settlementMode: "interval", settlementFrom: "2026-04-01T00:00:00Z" },
+  });
+  const wrapper = mountSettings();
+  await open(wrapper);
+  const input = wrapper.get("#energy-settlement-from");
+  Object.defineProperty(input.element, "validity", { value: { badInput: true } });
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).not.toHaveBeenCalled();
+  expect(wrapper.get('[role="alert"]').text()).toBe("forecast.energy.invalidBillingDate");
+  expect(input.isVisible()).toBe(true);
+});
