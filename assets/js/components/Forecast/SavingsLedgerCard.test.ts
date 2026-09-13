@@ -101,6 +101,8 @@ describe("inventory accounting explanations", () => {
       expect(wrapper.vm.inventoryDetail("new warning from a later backend")).toBe(
         "new warning from a later backend"
       );
+      expect(wrapper.vm.inventoryDetail("constructor")).toBe("constructor");
+      expect(wrapper.vm.inventoryDetail("__proto__")).toBe("__proto__");
       wrapper.unmount();
     }
   );

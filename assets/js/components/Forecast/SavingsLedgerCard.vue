@@ -526,7 +526,7 @@ export default defineComponent({
 				"stored DC energy valued at last nonnegative grid price times discharge efficiency; period-average uses nonnegative mean price":
 					"valuation",
 			};
-			const key = keys[value];
+			const key = Object.hasOwn(keys, value) ? keys[value] : undefined;
 			return key ? this.$t(`forecast.energy.inventoryDetails.${key}`) : value;
 		},
 		money(v: number): string {
