@@ -1,0 +1,435 @@
+diff --git a/openapi.yaml b/openapi.yaml
+index 43c58e7..27cecb2 100644
+--- a/openapi.yaml
++++ b/openapi.yaml
+@@ -39,6 +39,25 @@ servers:
+     description: Production server
+ 
+ paths:
++  /optimize/capabilities:
++    get:
++      summary: Local energy planning capabilities
++      responses:
++        "200":
++          description: Enforced extension version and features
++          content:
++            application/json:
++              schema:
++                type: object
++                required: [version, features]
++                properties:
++                  version:
++                    type: integer
++                    enum: [1]
++                  features:
++                    type: array
++                    items:
++                      type: string
+   /optimize/charge-schedule:
+     post:
+       tags:
+@@ -124,6 +143,8 @@ paths:
+                 $ref: "#/components/schemas/Error"
+               example:
+                 message: "Optimization failed: Infeasible problem"
++        "422":
++          description: No feasible schedule satisfies the physical and fixed-action constraints.
+ 
+   /optimize/health:
+     get:
+@@ -196,6 +217,36 @@ components:
+         - d_max
+         - p_a
+       properties:
++        availability:
++          type: array
++          items:
++            type: boolean
++          description: One boolean per slot; false forbids both charging and discharging. Omitted means available throughout.
++        eta_c:
++          type: number
++          minimum: 0
++          exclusiveMinimum: true
++          maximum: 1
++          description: Device charging efficiency; defaults to the request efficiency.
++        eta_d:
++          type: number
++          minimum: 0
++          exclusiveMinimum: true
++          maximum: 1
++          description: Device discharging efficiency; defaults to the request efficiency.
++        wear_cost:
++          type: number
++          minimum: 0
++          default: 0
++          description: Currency per Wh of DC energy discharged. Cost is wear_cost times AC discharge divided by eta_d.
++        first_step_charge:
++          type: number
++          minimum: 0
++          description: Exact charging energy in the first slot, AC Wh. Requires first_step_discharge too.
++        first_step_discharge:
++          type: number
++          minimum: 0
++          description: Exact discharging energy in the first slot, AC Wh. Requires first_step_charge too.
+         charge_from_grid:
+           type: boolean
+           description: |
+@@ -248,7 +299,6 @@ components:
+           example: 5000
+         p_a:
+           type: number
+-          minimum: 0
+           description: Monetary value of the stored energy per Wh at end of time horizon
+           example: 0.25
+         p_demand:
+@@ -306,14 +356,12 @@ components:
+           type: array
+           items:
+             type: number
+-            minimum: 0
+           description: Grid import price per Wh at each time step (currency units/Wh)
+           example: [0.30, 0.25, 0.20, 0.22, 0.28, 0.32]
+         p_E:
+           type: array
+           items:
+             type: number
+-            minimum: 0
+           description: Grid export remuneration per Wh at each time step (currency units/Wh)
+           example: [0.15, 0.12, 0.10, 0.11, 0.14, 0.16]
+ 
+@@ -392,6 +440,9 @@ components:
+     OptimizationResult:
+       type: object
+       properties:
++        wear_cost:
++          type: number
++          description: Total battery wear cost, currency units; included in objective_value.
+         status:
+           type: string
+           enum: [Optimal, Feasible, Infeasible, Unbounded, Undefined, Not Solved]
+@@ -411,8 +462,8 @@ components:
+           type: number
+           nullable: true
+           description: |
+-            Objective function value (economic benefit in currency units). Present for Optimal and
+-            Feasible, null otherwise.
++            Grid export revenue minus import cost and battery wear, plus final-minus-initial
++            storage value and minus any demand-rate cost, in currency units.
+           example: 1250.75
+         limit_violations:
+           type: object
+diff --git a/src/optimizer/app.py b/src/optimizer/app.py
+index a355b2d..a4ee785 100644
+--- a/src/optimizer/app.py
++++ b/src/optimizer/app.py
+@@ -10,6 +10,7 @@ from flask import Flask, jsonify, request
+ from flask_restx import Api, Resource, fields
+ from werkzeug.exceptions import BadRequest
+ 
++from .energy_extension import CAPABILITIES, validate_input
+ from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+ from .settings import OptimizerSettings
+ 
+@@ -104,6 +105,12 @@ grid_model = api.model('GridConfig', {
+ })
+ 
+ battery_config_model = api.model('BatteryConfig', {
++    'availability': fields.List(fields.Boolean, required=False, description='Per-slot connection availability'),
++    'eta_c': fields.Float(required=False, description='Device charging efficiency in (0, 1]'),
++    'eta_d': fields.Float(required=False, description='Device discharging efficiency in (0, 1]'),
++    'wear_cost': fields.Float(required=False, description='Currency per Wh of DC energy discharged'),
++    'first_step_charge': fields.Float(required=False, description='Exact first-slot charging energy (AC Wh), paired with first_step_discharge'),
++    'first_step_discharge': fields.Float(required=False, description='Exact first-slot discharging energy (AC Wh), paired with first_step_charge'),
+     'charge_from_grid': fields.Boolean(required=False, description='Controls whether the battery can be charged from the grid.'),
+     'discharge_to_grid': fields.Boolean(required=False, description='Controls whether the battery can discharge to grid.'),
+     's_capacity': fields.Float(required=False, description='Capacity at 100% state of charge (Wh)'),
+@@ -149,6 +156,7 @@ limit_violation_result_model = api.model('LimitViolationResult', {
+ })
+ 
+ optimization_result_model = api.model('OptimizationResult', {
++    'wear_cost': fields.Float(description='Total battery wear cost in currency'),
+     'status': fields.String(description='Optimization status'),
+     'objective_value': fields.Float(description='Optimal objective function value'),
+     'limit_violations': fields.Nested(limit_violation_result_model, description='Collection of flags signalling the violation of defined limits'),
+@@ -174,6 +182,7 @@ class OptimizeCharging(Resource):
+         """
+         try:
+             data = api.payload
++            validate_input(data)
+ 
+             # Parse strategy items with default values
+             strat_data = data.get('strategy', {})
+@@ -207,6 +216,12 @@ class OptimizeCharging(Resource):
+                     d_max=bat_data['d_max'],
+                     p_a=bat_data['p_a'],
+                     c_priority=bat_data.get('c_priority', 0),
++                    availability=bat_data.get('availability'),
++                    eta_c=bat_data.get('eta_c'),
++                    eta_d=bat_data.get('eta_d'),
++                    wear_cost=bat_data.get('wear_cost', 0),
++                    first_step_charge=bat_data.get('first_step_charge'),
++                    first_step_discharge=bat_data.get('first_step_discharge'),
+                 ))
+ 
+             # Parse time series data
+@@ -253,11 +268,20 @@ class OptimizeCharging(Resource):
+             started = time.perf_counter()
+             result = optimizer.solve()
+             dump_slow_request(data, time.perf_counter() - started)
+-            return result
+-
+         except Exception as e:
+             api.abort(500, f"Optimization failed: {str(e)}")
+ 
++        if result['status'] not in ('Optimal', 'Feasible'):
++            api.abort(422, f"No feasible schedule: {result['status']}")
++        return result
++
++
++@ns.route('/capabilities')
++class Capabilities(Resource):
++    def get(self):
++        """Describe enforced energy planning extensions."""
++        return CAPABILITIES
++
+ 
+ @ns.route('/health')
+ class Health(Resource):
+diff --git a/src/optimizer/energy_extension.py b/src/optimizer/energy_extension.py
+new file mode 100644
+index 0000000..a0cf3cd
+--- /dev/null
++++ b/src/optimizer/energy_extension.py
+@@ -0,0 +1,90 @@
++"""Validation for the local energy planning API."""
++
++import math
++
++CAPABILITIES = {
++    'version': 1,
++    'features': ['battery_availability', 'battery_efficiency', 'battery_wear', 'fixed_first_step'],
++}
++MAX_SLOTS = 384
++MAX_BATTERIES = 16
++
++
++def finite(value, name: str, minimum=None, maximum=None) -> float:
++    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
++        raise ValueError(f'{name} must be finite')
++    if minimum is not None and value < minimum:
++        raise ValueError(f'{name} must be at least {minimum}')
++    if maximum is not None and value > maximum:
++        raise ValueError(f'{name} must be at most {maximum}')
++    return value
++
++
++def efficiency(value, name: str) -> float:
++    value = finite(value, name, 0, 1)
++    if value == 0:
++        raise ValueError(f'{name} must be positive')
++    return value
++
++
++def validate_input(data: dict) -> None:
++    series = data['time_series']
++    count = len(series['dt'])
++    if not 1 <= count <= MAX_SLOTS:
++        raise ValueError(f'horizon must contain 1 to {MAX_SLOTS} slots')
++    if not 1 <= len(data['batteries']) <= MAX_BATTERIES:
++        raise ValueError(f'input must contain 1 to {MAX_BATTERIES} batteries')
++    for key in ('dt', 'gt', 'ft', 'p_N', 'p_E'):
++        if len(series[key]) != count:
++            raise ValueError(f'{key} length must match dt')
++        for value in series[key]:
++            finite(value, key, 0 if key in ('dt', 'gt', 'ft') else None)
++            if key == 'dt' and value == 0:
++                raise ValueError('dt must be positive')
++    eta_c = efficiency(data.get('eta_c', 0.95), 'eta_c')
++    eta_d = efficiency(data.get('eta_d', 0.95), 'eta_d')
++    for key, value in data.get('grid', {}).items():
++        if key in ('p_max_imp', 'p_max_exp', 'prc_p_exc_imp') and value is not None:
++            finite(value, key, 0)
++    for battery in data['batteries']:
++        validate_battery(battery, series['dt'], eta_c, eta_d)
++
++
++def validate_battery(battery: dict, durations: list, default_eta_c: float, default_eta_d: float) -> None:
++    for key in ('s_min', 's_max', 's_initial', 'c_min', 'c_max', 'd_max'):
++        finite(battery[key], key, 0)
++    finite(battery['p_a'], 'p_a')
++    capacity = finite(battery.get('s_capacity', battery['s_max']), 's_capacity', 0)
++    if not battery['s_min'] <= battery['s_max'] <= capacity or battery['s_initial'] > capacity:
++        raise ValueError('storage bounds or initial energy exceed capacity')
++    if battery['c_min'] > battery['c_max']:
++        raise ValueError('c_min exceeds c_max')
++    count = len(durations)
++    for key in ('s_goal', 'p_demand'):
++        if battery.get(key) is not None:
++            if len(battery[key]) != count:
++                raise ValueError(f'{key} length must match dt')
++            for value in battery[key]:
++                finite(value, key, 0)
++    availability = battery.get('availability')
++    if availability is not None:
++        if len(availability) != count or any(type(value) is not bool for value in availability):
++            raise ValueError('availability must contain one boolean per slot')
++    eta_c = efficiency(battery.get('eta_c', default_eta_c), 'battery eta_c')
++    eta_d = efficiency(battery.get('eta_d', default_eta_d), 'battery eta_d')
++    finite(battery.get('wear_cost', 0), 'wear_cost', 0)
++    charge = battery.get('first_step_charge')
++    discharge = battery.get('first_step_discharge')
++    if (charge is None) != (discharge is None):
++        raise ValueError('both first_step_charge and first_step_discharge are required together')
++    if charge is None:
++        return
++    finite(charge, 'first_step_charge', 0, battery['c_max'] * durations[0] / 3600)
++    finite(discharge, 'first_step_discharge', 0, battery['d_max'] * durations[0] / 3600)
++    if charge > 0 and discharge > 0:
++        raise ValueError('first step cannot charge and discharge simultaneously')
++    if availability is not None and not availability[0] and charge + discharge > 0:
++        raise ValueError('first step action requires battery availability')
++    final = battery['s_initial'] + eta_c * charge - discharge / eta_d
++    if not 0 <= final <= capacity:
++        raise ValueError('first step action exceeds physical storage capacity')
+diff --git a/src/optimizer/optimizer.py b/src/optimizer/optimizer.py
+index 77c2353..4d896ef 100644
+--- a/src/optimizer/optimizer.py
++++ b/src/optimizer/optimizer.py
+@@ -136,6 +136,12 @@ class BatteryConfig:
+     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
+     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
+     c_priority: int = 0
++    availability: Optional[List[bool]] = None
++    eta_c: Optional[float] = None
++    eta_d: Optional[float] = None
++    wear_cost: float = 0
++    first_step_charge: Optional[float] = None
++    first_step_discharge: Optional[float] = None
+ 
+ 
+ @dataclass
+@@ -206,6 +212,7 @@ class Optimizer:
+             self.max_import_price,
+             self.max_export_price,
+             *(bat.p_a for bat in self.batteries),
++            *(bat.wear_cost / (bat.eta_d if bat.eta_d is not None else self.eta_d) for bat in self.batteries),
+         ]
+         if self.is_grid_demand_rate_active:
+             # prc_p_exc_imp is currency/W and the charge is set by the single worst time step, so
+@@ -396,6 +403,8 @@ class Optimizer:
+         # Final state of charge value [currency unit]
+         for i, bat in enumerate(self.batteries):
+             objective += self.variables['s'][i][-1] * bat.p_a
++            eta_d = bat.eta_d if bat.eta_d is not None else self.eta_d
++            objective -= bat.wear_cost / eta_d * pulp.lpSum(self.variables['d'][i])
+ 
+         # charge for import power demand rate. The demand rate is applied to the maximum
+         # power draw beyond the threshold within the time horizon.
+@@ -616,23 +625,33 @@ class Optimizer:
+ 
+         # Constraint (3): Battery dynamics
+         for i, bat in enumerate(self.batteries):
++            eta_c = bat.eta_c if bat.eta_c is not None else self.eta_c
++            eta_d = bat.eta_d if bat.eta_d is not None else self.eta_d
++            if bat.availability is not None:
++                for t, available in enumerate(bat.availability):
++                    if not available:
++                        self.problem += self.variables['c'][i][t] == 0
++                        self.problem += self.variables['d'][i][t] == 0
++            if bat.first_step_charge is not None:
++                self.problem += self.variables['c'][i][0] == bat.first_step_charge
++                self.problem += self.variables['d'][i][0] == bat.first_step_discharge
+             # Initial state of charge
+             if len(self.time_steps) > 0:
+                 self.problem += (self.variables['s'][i][0]
+                                  == bat.s_initial
+-                                 + self.eta_c * self.variables['c'][i][0]
+-                                 - (1 / self.eta_d) * self.variables['d'][i][0])
++                                 + eta_c * self.variables['c'][i][0]
++                                 - (1 / eta_d) * self.variables['d'][i][0])
+ 
+             # State of charge evolution
+             for t in range(1, self.T):
+                 self.problem += (self.variables['s'][i][t]
+                                  == self.variables['s'][i][t - 1]
+-                                 + self.eta_c * self.variables['c'][i][t]
+-                                 - (1 / self.eta_d) * self.variables['d'][i][t])
++                                 + eta_c * self.variables['c'][i][t]
++                                 - (1 / eta_d) * self.variables['d'][i][t])
+ 
+-            # Constraint (6): Battery SOC goal constraints (for t > 0)
++            # Goals refer to energy at the end of each slot, including the first.
+             if bat.s_goal is not None:
+-                for t in range(1, self.T):
++                for t in self.time_steps:
+                     if bat.s_goal[t] > 0:
+                         self.problem += (self.variables['s'][i][t]
+                                          + self.variables['s_goal_pen'][i][t] >= bat.s_goal[t])
+@@ -922,6 +941,7 @@ class Optimizer:
+             result = {
+                 'status': status,
+                 'objective_value': self.get_clean_objective_value(),
++                'wear_cost': self.get_wear_cost(),
+                 'limit_violations': {
+                     'grid_import_limit_exceeded': grid_imp_limit_violated,
+                     'grid_export_limit_hit': grid_exp_limit_hit
+@@ -992,7 +1012,7 @@ class Optimizer:
+         # Final state of charge value [currency unit]
+         for i, bat in enumerate(self.batteries):
+             clean_objective += (pulp.value(self.variables['s'][i][self.T-1])
+-                                - pulp.value(self.variables['s'][i][0])) * bat.p_a
++                                - bat.s_initial) * bat.p_a
+ 
+         # charge for import power demand rate. The demand rate is applied to the maximum
+         # power draw beyond the threshold within the time horizon.
+@@ -1000,4 +1020,12 @@ class Optimizer:
+             clean_objective += - self.grid.prc_p_exc_imp \
+                 * pulp.value(self.variables['p_max_imp_exc'])
+ 
+-        return clean_objective
++        return clean_objective - self.get_wear_cost()
++
++    def get_wear_cost(self) -> float:
++        """Return currency cost of DC energy discharged across all batteries."""
++        return sum(
++            bat.wear_cost / (bat.eta_d if bat.eta_d is not None else self.eta_d)
++            * sum(pulp.value(var) for var in self.variables['d'][i])
++            for i, bat in enumerate(self.batteries)
++        )
+diff --git a/tests/test_app.py b/tests/test_app.py
+index 1bd3129..cd3718f 100644
+--- a/tests/test_app.py
++++ b/tests/test_app.py
+@@ -32,6 +32,11 @@ def test_optimizer(test_case: pathlib.Path):
+         # check objective value
+         actual_objective_value = response.json["objective_value"]
+         expected_objective_value = expected_response.get("objective_value", {})
++        # Translate the fixed initial-inventory accounting to the legacy fixture convention.
++        actual_objective_value -= sum(
++            (battery['state_of_charge'][0] - config['s_initial']) * config['p_a']
++            for battery, config in zip(response.json['batteries'], request['batteries'])
++        )
+         # atol is a hundredth of a cent. The tie break stage gives away that much of the cost
+         # optimum to stay feasible against the solver's own rounding, see COST_BOUND_SLACK and
+         # COST_BOUND_TOLERANCE, and a case whose value is small in currency, 023 reports 0.58,
+diff --git a/tests/test_objective_split.py b/tests/test_objective_split.py
+index b7e2032..d076669 100644
+--- a/tests/test_objective_split.py
++++ b/tests/test_objective_split.py
+@@ -1,5 +1,6 @@
+ import json
+ import pathlib
++import tempfile
+ 
+ import numpy
+ import pulp
+@@ -42,7 +43,8 @@ def solve_cost_only(optimizer):
+     """First stage on its own, solved to proven optimality."""
+     optimizer.create_model()
+     optimizer.problem.setObjective(optimizer.cost_objective * optimizer.objective_scale)
+-    optimizer.problem.solve(pulp.PULP_CBC_CMD(msg=0))
++    with tempfile.TemporaryDirectory() as directory:
++        optimizer.problem.solve(optimizer._solver(directory))
+     return optimizer
+ 
+ 
