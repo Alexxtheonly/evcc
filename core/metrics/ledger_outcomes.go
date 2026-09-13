@@ -24,7 +24,7 @@ type DecisionOutcome struct {
 
 func snapshotPhysics(s *OptimizerSnapshot, fallback batteryPhysics) (batteryPhysics, string, bool) {
 	if s == nil {
-		return fallback, "legacy_assumed_efficiency_and_observed_limits", true
+		return fallback, "historical_snapshot_unavailable", false
 	}
 	var economics struct {
 		Batteries []SnapshotBatteryEconomics `json:"batteries"`
@@ -70,7 +70,7 @@ func replayOutcome(index int, rows []controlSlot, slots map[int64]slotData, phys
 		r := rows[i]
 		expected := first.Timestamp + int64(i-index)*int64(tariff.SlotDuration.Seconds())
 		s, ok := slots[r.Timestamp]
-		if r.Timestamp != expected || !ok || r.ModeChanged {
+		if r.Timestamp != expected || !ok || r.ModeChanged || r.SnapshotUnavailable {
 			out.Status = "interrupted"
 			out.Reason = "gap_or_unrecorded_mode_transition"
 			break

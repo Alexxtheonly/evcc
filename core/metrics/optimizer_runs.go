@@ -13,6 +13,7 @@ import (
 // savings figure - and ObjectiveValue must never be rendered in a currency
 // context.
 type optimizerRun struct {
+	SnapshotUnavailable bool    `gorm:"column:snapshot_unavailable"`
 	OptimizerSnapshotID *uint64 `gorm:"column:optimizer_snapshot_id;index"`
 	// Timestamp is the 15min slot boundary for a sampled Optimal/Feasible run
 	// (one representative row per slot), or the run's own real timestamp for

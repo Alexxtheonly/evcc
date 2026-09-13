@@ -75,7 +75,7 @@ func buildHomeProfile(rows []meter, at time.Time) ([2][96]HomeForecastSlot, Prof
 	q := ProfileQuality{Source: "day_type", RangeSource: "historical_variation", MissingBuckets: []int{}}
 	for _, r := range rows {
 		t := time.Unix(r.Timestamp, 0).In(at.Location())
-		if !t.Before(at) {
+		if t.Add(tariff.SlotDuration).After(at) {
 			continue
 		}
 		if r.Recovered || r.Incomplete || !finite(r.Energy) || r.Energy < 0 {

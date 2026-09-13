@@ -2,14 +2,18 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
 	"github.com/evcc-io/evcc/tariff"
+	"gorm.io/gorm"
 )
 
 // InventoryAdjustedChain neutralizes stored energy borrowed across period boundaries.
 type InventoryAdjustedChain struct {
+	EstimatedEndpoints int            `json:"estimatedEndpoints"`
+	MeasurementCaveat  string         `json:"measurementCaveat"`
 	Status             string         `json:"status"`
 	Reason             string         `json:"reason,omitempty"`
 	Worlds             []WorldCost    `json:"worlds,omitempty"`
@@ -36,6 +40,10 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 	snapshots := make(map[uint64]*OptimizerSnapshot)
 	bySlot := make(map[int64]*uint64)
 	for _, r := range controls {
+		if r.SnapshotUnavailable {
+			res.Reason = "historical_snapshot_expired_or_deleted"
+			return res, nil
+		}
 		bySlot[r.Timestamp] = r.OptimizerSnapshotID
 		if r.OptimizerSnapshotID == nil {
 			continue
@@ -45,7 +53,7 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 			continue
 		}
 		s, err := GetOptimizerSnapshot(id)
-		if err != nil {
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
 		snapshots[id] = s
@@ -70,10 +78,21 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 	} else if historical > 0 {
 		res.AssumptionsSource = "mixed_snapshots_and_explicit_legacy_assumptions"
 	}
-	return inventoryAdjustedFromSlots(set.Slots, physics, res), nil
+	endpoints := make(map[int64]float64)
+	var measured []meter
+	if err := db.Instance.Table("meters m").Select("m.ts,m.soc_temp").Joins(`JOIN entities e ON e.id=m.meter AND e."group" = ?`, Battery).Where("m.ts > ? AND m.ts <= ? AND m.soc_temp IS NOT NULL AND COALESCE(m.recovered,0)=0 AND COALESCE(m.incomplete,0)=0", first.Unix(), last.Add(tariff.SlotDuration).Unix()).Find(&measured).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range measured {
+		if r.SocTemp != nil && finite(*r.SocTemp) && *r.SocTemp >= 0 && *r.SocTemp <= 100 {
+			endpoints[r.Timestamp] = *r.SocTemp / 100
+		}
+	}
+	return inventoryAdjustedFromSlots(set.Slots, physics, res, endpoints), nil
 }
 
-func inventoryAdjustedFromSlots(slots []slotData, physics []batteryPhysics, res *InventoryAdjustedChain) *InventoryAdjustedChain {
+func inventoryAdjustedFromSlots(slots []slotData, physics []batteryPhysics, res *InventoryAdjustedChain, endpoints map[int64]float64) *InventoryAdjustedChain {
+	res.MeasurementCaveat = "household and PV balance is approximate when meter AC/DC measurement planes differ; measured SoC endpoints take precedence over energy-based estimates"
 	w2 := make([]worldFlow, len(slots))
 	var sumGrid float64
 	for _, s := range slots {
@@ -116,10 +135,23 @@ func inventoryAdjustedFromSlots(slots []slotData, physics []batteryPhysics, res 
 			wearKnown = false
 		} else {
 			baselineWear += max(0, soc-next) * *p.WearPerKWh
-			actualWear += s.BatteryDischargeKWh / p.EtaD * *p.WearPerKWh
+			discharge := s.BatteryDischargeKWh / p.EtaD
+			if p.MeasurementPlane == "dc" {
+				discharge = s.BatteryDischargeKWh
+			}
+			actualWear += discharge * *p.WearPerKWh
 		}
 		soc = next
-		actualEnd = *s.BatterySocFrac*p.CapacityKWh + s.BatteryChargeKWh*p.EtaC - s.BatteryDischargeKWh/p.EtaD
+		if endpoint, ok := endpoints[s.Start.Add(tariff.SlotDuration).Unix()]; ok {
+			actualEnd = endpoint * p.CapacityKWh
+		} else {
+			res.EstimatedEndpoints++
+			if p.MeasurementPlane == "dc" {
+				actualEnd = *s.BatterySocFrac*p.CapacityKWh + s.BatteryChargeKWh - s.BatteryDischargeKWh
+			} else {
+				actualEnd = *s.BatterySocFrac*p.CapacityKWh + s.BatteryChargeKWh*p.EtaC - s.BatteryDischargeKWh/p.EtaD
+			}
+		}
 		prev = s.Start
 	}
 	closeSegment(len(slots) - 1)
@@ -151,5 +183,5 @@ func inventoryAdjustedFromSlots(slots []slotData, physics []batteryPhysics, res 
 
 func equalPhysics(a, b batteryPhysics) bool {
 	wearEqual := a.WearPerKWh == nil && b.WearPerKWh == nil || a.WearPerKWh != nil && b.WearPerKWh != nil && *a.WearPerKWh == *b.WearPerKWh
-	return a.CapacityKWh == b.CapacityKWh && a.EtaC == b.EtaC && a.EtaD == b.EtaD && a.FloorFrac == b.FloorFrac && a.MaxChargeKWh == b.MaxChargeKWh && a.MaxDischargeKWh == b.MaxDischargeKWh && wearEqual
+	return a.MeasurementPlane == b.MeasurementPlane && a.CapacityKWh == b.CapacityKWh && a.EtaC == b.EtaC && a.EtaD == b.EtaD && a.FloorFrac == b.FloorFrac && a.MaxChargeKWh == b.MaxChargeKWh && a.MaxDischargeKWh == b.MaxDischargeKWh && wearEqual
 }

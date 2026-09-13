@@ -72,6 +72,10 @@ func ArchiveForecastSample(now time.Time, energyAt func(from, to time.Time) (flo
 		if !ok {
 			continue
 		}
+		if !finite(energy) || energy < 0 {
+			errs = errors.Join(errs, errors.New("invalid solar forecast energy"))
+			continue
+		}
 
 		sample := forecastSample{
 			Slot:        target.Unix(),
@@ -84,7 +88,7 @@ func ArchiveForecastSample(now time.Time, energyAt func(from, to time.Time) (flo
 		}
 	}
 
-	return errs
+	return errors.Join(errs, db.Instance.Where("slot < ?", now.AddDate(0, 0, -90).Unix()).Delete(new(forecastSample)).Error)
 }
 
 // LeadTimeSample pairs one archived forecast reading with the actual PV energy
@@ -110,7 +114,7 @@ func QueryLeadTimeSamples(from time.Time) ([]LeadTimeSample, error) {
 		Select(`fs.slot AS slot, fs.lead_minutes AS lead_minutes, fs.energy AS forecast, SUM(m.energy) AS actual`).
 		Joins(`JOIN meters m ON m.ts = fs.slot`).
 		Joins(`JOIN entities e ON e.id = m.meter AND e."group" = ?`, PV).
-		Where("fs.slot >= ? AND COALESCE(m.recovered,0)=0 AND COALESCE(m.incomplete,0)=0", from.Unix()).
+		Where("fs.slot >= ? AND m.energy IS NOT NULL AND m.energy >= 0 AND COALESCE(m.recovered,0)=0 AND COALESCE(m.incomplete,0)=0", from.Unix()).
 		Group("fs.slot, fs.lead_minutes, fs.energy").
 		Having(`COUNT(DISTINCT m.meter) = (SELECT COUNT(*) FROM entities WHERE "group" = ?)`, PV).
 		Scan(&res).Error

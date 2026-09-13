@@ -77,7 +77,7 @@ func deleteSnapshotIDs(tx *gorm.DB, ids []uint64) error {
 		return nil
 	}
 	for _, model := range []any{new(controlSlot), new(optimizerRun)} {
-		if err := tx.Model(model).Where("optimizer_snapshot_id IN ?", ids).Update("optimizer_snapshot_id", nil).Error; err != nil {
+		if err := tx.Model(model).Where("optimizer_snapshot_id IN ?", ids).Updates(map[string]any{"optimizer_snapshot_id": nil, "snapshot_unavailable": true}).Error; err != nil {
 			return err
 		}
 	}
@@ -115,7 +115,7 @@ func bindSnapshot(model any, ts time.Time, id uint64) error {
 	if count != 1 {
 		return fmt.Errorf("optimizer snapshot %d unavailable", id)
 	}
-	return db.Instance.Model(model).Where("ts = ? AND optimizer_snapshot_id IS NULL", ts.Unix()).Update("optimizer_snapshot_id", id).Error
+	return db.Instance.Model(model).Where("ts = ? AND optimizer_snapshot_id IS NULL AND COALESCE(snapshot_unavailable,0)=0", ts.Unix()).Update("optimizer_snapshot_id", id).Error
 }
 
 // DeleteOptimizerSnapshots deletes the selected history and clears its audit links.

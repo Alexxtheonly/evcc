@@ -44,7 +44,7 @@ func TestArchiveForecastSample(t *testing.T) {
 	// restart) re-targets the exact same (slot, lead) rows - the row count
 	// must not grow and the original value must survive untouched
 	require.NoError(t, ArchiveForecastSample(now, func(from, to time.Time) (float64, bool) {
-		return -1e6, true // distinguishable sentinel; must not appear if dedup holds
+		return 1e6, true // distinguishable valid value; must not appear if dedup holds
 	}))
 
 	var count int64

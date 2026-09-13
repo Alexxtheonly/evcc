@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -199,4 +200,158 @@ func TestHomeForecastRealAnonymizedHistory(t *testing.T) {
 	t.Logf("real profile: %d samples, %d/96 buckets, source=%s, missing=%v", q.Samples, q.CoveredBuckets, q.Source, q.MissingBuckets)
 	require.Equal(t, 94, q.CoveredBuckets)
 	require.Equal(t, []int{18, 26}, q.MissingBuckets)
+}
+
+func TestInventoryBoundaryCannotCreditFreeDrain(t *testing.T) {
+	at := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	soc := .45
+	p := batteryPhysics{CapacityKWh: 10, EtaC: .9, EtaD: 1, MaxChargeKWh: 5, MaxDischargeKWh: 5}
+	// Ordinary operation empties 4.5 kWh of opening stock. Actual control holds it.
+	slots := []slotData{{Start: at, HomeKWh: 4.5, GridImportKWh: 4.5, PriceGrid: .4, BatterySocFrac: &soc}}
+	r := inventoryAdjustedFromSlots(slots, []batteryPhysics{p}, &InventoryAdjustedChain{}, map[int64]float64{at.Add(tariff.SlotDuration).Unix(): soc})
+	require.InDelta(t, 1.8, r.TerminalAdjustment.PerSlot, 1e-9)
+	require.InDelta(t, 0, r.Control.Full, 1e-9, "EUR 1.80 avoided cash purchase consumes EUR 1.80 opening inventory")
+	require.Zero(t, r.EstimatedEndpoints)
+	sum := 0.
+	for _, c := range r.Contributions {
+		sum += c.Settled.PerSlot
+	}
+	require.InDelta(t, r.Worlds[0].Settled.PerSlot-r.Worlds[3].Settled.PerSlot, sum, 1e-9)
+	// A missing interval starts another explicitly partial inventory-neutral segment.
+	slots = append(slots, slotData{Start: at.Add(time.Hour), HomeKWh: 4.5, GridImportKWh: 4.5, PriceGrid: .4, BatterySocFrac: &soc})
+	r = inventoryAdjustedFromSlots(slots, []batteryPhysics{p, p}, &InventoryAdjustedChain{}, nil)
+	require.Equal(t, "partial", r.Status)
+	require.Equal(t, 2, r.Segments)
+	require.InDelta(t, 0, r.Control.Full, 1e-9)
+}
+
+func TestBatteryEfficiencyRequiresIndependentCapacityAndACPlane(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	at := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+	capacity := 10.
+	b := entity{Group: Battery, Name: "battery", CapacityKWh: &capacity}
+	require.NoError(t, db.Instance.Create(&b).Error)
+	var rows []meter
+	soc := 20.
+	for i := 0; i <= 24; i++ {
+		v := soc
+		r := meter{Meter: b.Id, Timestamp: at.Add(time.Duration(i) * tariff.SlotDuration).Unix(), SocTemp: &v}
+		if i < 12 {
+			r.ReturnEnergy = .4
+			soc += 3.6
+		} else if i < 24 {
+			r.Energy = .324
+			soc -= 3.6
+		}
+		rows = append(rows, r)
+	}
+	require.NoError(t, db.Instance.Create(&rows).Error)
+	c, err := BatteryEfficiencyCandidates(at)
+	require.NoError(t, err)
+	require.Len(t, c, 1)
+	require.False(t, c[0].Applicable)
+	require.Equal(t, "unknown", c[0].MeasurementPlane)
+	require.InDelta(t, .9, *c[0].ChargeEfficiency, 1e-9)
+	require.InDelta(t, .9, *c[0].DischargeEfficiency, 1e-9)
+	require.NoError(t, SetBatteryMeasurementPlane("battery", "dc"))
+	c, err = BatteryEfficiencyCandidates(at)
+	require.NoError(t, err)
+	require.False(t, c[0].Applicable)
+	require.NoError(t, SetBatteryMeasurementPlane("battery", "ac"))
+	c, err = BatteryEfficiencyCandidates(at)
+	require.NoError(t, err)
+	require.True(t, c[0].Applicable)
+	require.NoError(t, db.Instance.Model(new(meter)).Where("meter = ? AND ts = ?", b.Id, at.Unix()).Update("incomplete", true).Error)
+	c, err = BatteryEfficiencyCandidates(at)
+	require.NoError(t, err)
+	require.Nil(t, c[0].ChargeEfficiency)
+	require.NoError(t, db.Instance.Model(&b).Update("capacity_kwh", nil).Error)
+	c, err = BatteryEfficiencyCandidates(at)
+	require.NoError(t, err)
+	require.Nil(t, c[0].ChargeEfficiency)
+	require.Equal(t, "capacity_unavailable", c[0].Source)
+}
+
+func TestForecastCalibrationUsesOnlyIssuedCleanPastPairs(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	at := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 31; i++ {
+		ts := at.Add(-time.Duration(i+1) * tariff.SlotDuration)
+		f := homeForecastSample{Slot: ts.Unix(), Issued: ts.Add(-time.Hour).Unix(), LeadMinutes: 60, Base: .1, Low: 0, High: .2}
+		require.NoError(t, db.Instance.Create(&f).Error)
+		require.NoError(t, persist(entity{Id: 1}, ts, .3, 0, nil, false, i == 0))
+	}
+	res := &HomeForecastResult{Rates: []HomeForecastSlot{{Start: at.Add(time.Hour), Base: 100, Low: 50, High: 150}}}
+	require.NoError(t, calibrateHomeRanges(at, res))
+	require.Equal(t, 30, res.Quality.CalibrationSamples)
+	require.Equal(t, "forecast_errors", res.Quality.RangeSource)
+	require.InDelta(t, 300, res.Rates[0].High, 1e-9)
+	// A forecast issued after its target cannot become calibration evidence.
+	future := homeForecastSample{Slot: at.Add(time.Hour).Unix(), Issued: at.Add(2 * time.Hour).Unix(), LeadMinutes: 60, Base: 0}
+	require.NoError(t, db.Instance.Create(&future).Error)
+	require.NoError(t, persist(entity{Id: 1}, time.Unix(future.Slot, 0), 999, 0, nil, false, false))
+	require.NoError(t, calibrateHomeRanges(at, res))
+	require.Equal(t, 30, res.Quality.CalibrationSamples)
+}
+
+func TestSolarArchiveRejectsInvalidEnergyAndIncompleteArrays(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	at := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+	require.Error(t, ArchiveForecastSample(at, func(time.Time, time.Time) (float64, bool) { return -1, true }))
+	var n int64
+	require.NoError(t, db.Instance.Model(new(forecastSample)).Count(&n).Error)
+	require.Zero(t, n)
+	p1 := entity{Group: PV, Name: "roof1"}
+	p2 := entity{Group: PV, Name: "roof2"}
+	require.NoError(t, db.Instance.Create(&p1).Error)
+	require.NoError(t, db.Instance.Create(&p2).Error)
+	f := forecastSample{Slot: at.Unix(), LeadMinutes: 60, Energy: .5}
+	require.NoError(t, db.Instance.Create(&f).Error)
+	require.NoError(t, persist(p1, at, .3, 0, nil, false, false))
+	s, err := QueryLeadTimeSamples(at)
+	require.NoError(t, err)
+	require.Empty(t, s)
+	require.NoError(t, persist(p2, at, .2, 0, nil, false, true))
+	s, err = QueryLeadTimeSamples(at)
+	require.NoError(t, err)
+	require.Empty(t, s)
+	require.NoError(t, db.Instance.Model(new(meter)).Where("meter = ?", p2.Id).Update("incomplete", false).Error)
+	s, err = QueryLeadTimeSamples(at)
+	require.NoError(t, err)
+	require.Len(t, s, 1)
+	require.InDelta(t, .5, s[0].Actual, 1e-9)
+}
+
+func TestDecisionSnapshotsSurviveNewRunsButNotDeletedEconomics(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	_, rows, slots, p := replayExample(t, nil)
+	encoded, err := json.Marshal(struct {
+		Batteries []SnapshotBatteryEconomics `json:"batteries"`
+	}{[]SnapshotBatteryEconomics{{Name: "battery", CapacityKWh: 10, EtaC: .9, EtaD: 1, MaxChargeKWh: 5, MaxDischargeKWh: 5, Source: "known"}}})
+	require.NoError(t, err)
+	for i := range rows {
+		id, err := SaveOptimizerSnapshot(OptimizerSnapshot{Timestamp: time.Unix(rows[i].Timestamp, 0), ControllerVersion: "v1", Economics: encoded})
+		require.NoError(t, err)
+		rows[i].OptimizerSnapshotID = &id
+		require.NoError(t, db.Instance.Create(&rows[i]).Error)
+	}
+	from := time.Unix(rows[0].Timestamp, 0)
+	to := from.Add(2 * tariff.SlotDuration)
+	set := &ledgerSlotSet{Slots: []slotData{slots[rows[0].Timestamp], slots[rows[1].Timestamp]}}
+	out, err := DecisionDeltas(context.Background(), from, to, set, &p)
+	require.NoError(t, err)
+	require.Equal(t, "completed", out[0].Outcome.Status)
+	require.Equal(t, "optimizer_snapshot", out[0].Outcome.AssumptionsSource)
+	require.InDelta(t, .8, *out[0].Outcome.NetDeltaEUR, 1e-9)
+	_, err = DeleteOptimizerSnapshots(from, from.Add(time.Second))
+	require.NoError(t, err)
+	out, err = DecisionDeltas(context.Background(), from, to, set, &p)
+	require.NoError(t, err)
+	require.Equal(t, "unpriced", out[0].Outcome.Status)
+	require.Equal(t, "historical_snapshot_expired_or_deleted", out[0].Outcome.Reason)
+	require.Nil(t, out[0].SlotFlowDeltaEUR)
 }

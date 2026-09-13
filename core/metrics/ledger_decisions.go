@@ -11,33 +11,15 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
+	"gorm.io/gorm"
 )
 
-// DecisionRow is one control_slots row, plus (when computable) the euro cost of the
-// veto: what the applied mode cost minus what the rejected suggestion would have
-// cost, at that slot's realised price and measured home/PV/SoC.
-//
-// SlotFlowDeltaEUR is nil - never 0 - when it isn't computable: no veto happened
-// (nothing to compare), the slot fell outside the ledger's valid slot set (see
-// Coverage), the site has no battery to simulate against, or either mode on the row is
-// one simulateSlotStep does not model. Absence is never spelled as a sentinel figure.
-//
-// This is NOT hindsight: it simulates applied vs. suggested for the ONE vetoed slot
-// only, at that slot's own starting
-// SoC, and stops there - it does not follow either trajectory forward to see what
-// actually happened next. A charge vetoed at a very cheap price specifically because
-// it would pay off in a LATER, more expensive slot has that payoff priced nowhere;
-// the sign this field reports is determined by the direction of the vetoed decision
-// (charging always reads as a cost, discharging always reads as a saving in the same
-// slot it happened), not by whether the veto was actually right. See
-// TestSlotFlowDeltaIsSlotLocalNotForwardHindsight for a worked example where this
-// reads "veto vindicated" on a veto that actually cost money. A true hindsight figure
-// would have to price the rejected alternative forward until its simulated SoC
-// rejoins the applied trajectory (or run a full oracle replay) - out of scope here,
-// hence the name: do not present this field as hindsight.
+// DecisionRow records the immediate cash difference and the subsequent conditional outcome.
+// SlotFlowDeltaEUR covers only this slot; Outcome follows later recorded controls.
 type DecisionRow struct {
 	OptimizerSnapshotID *uint64          `json:"optimizerSnapshotId,omitempty"`
 	Outcome             *DecisionOutcome `json:"outcome,omitempty"`
@@ -121,7 +103,7 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 			id := *r.OptimizerSnapshotID
 			if _, ok := snapshots[id]; !ok {
 				s, err := GetOptimizerSnapshot(id)
-				if err != nil {
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 					return nil, err
 				}
 				snapshots[id] = s
@@ -132,6 +114,17 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 	out := make([]DecisionRow, 0, len(rows))
 	for i, r := range rows {
 		suggested := decodeSuggestedMode(r.SuggestedMode)
+		p, source, valid := batteryPhysics{}, "battery_physics_unavailable", false
+		if phys != nil {
+			p, source, valid = *phys, "legacy_assumed_efficiency_and_observed_limits", true
+		}
+		if r.OptimizerSnapshotID != nil {
+			p, source, valid = snapshotPhysics(snapshots[*r.OptimizerSnapshotID], p)
+		}
+		if r.SnapshotUnavailable {
+			valid = false
+			source = "historical_snapshot_expired_or_deleted"
+		}
 
 		dr := DecisionRow{
 			OptimizerSnapshotID: r.OptimizerSnapshotID,
@@ -151,15 +144,15 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 		// Gating on effectiveMode while simulating the raw column silently replays an
 		// unrecognised mode as normal - exactly the pricing simulateSlotStep's ok
 		// return exists to refuse.
-		if phys != nil && suggested != nil {
+		if valid && suggested != nil {
 			applied, rejected := effectiveMode(r.AppliedMode), effectiveMode(*suggested)
 
 			if s, found := bySlot[r.Timestamp]; found && applied != rejected && s.BatterySocFrac != nil {
-				socKWh := *s.BatterySocFrac * phys.CapacityKWh
+				socKWh := *s.BatterySocFrac * p.CapacityKWh
 				load := s.modelledLoadKWh()
 
-				_, appliedFlow, appliedOk := simulateSlotStep(applied, load, s.PVKWh, socKWh, *phys)
-				_, rejectedFlow, rejectedOk := simulateSlotStep(rejected, load, s.PVKWh, socKWh, *phys)
+				_, appliedFlow, appliedOk := simulateSlotStep(applied, load, s.PVKWh, socKWh, p)
+				_, rejectedFlow, rejectedOk := simulateSlotStep(rejected, load, s.PVKWh, socKWh, p)
 
 				// a mode neither this replay nor anything else in the package
 				// models leaves SlotFlowDeltaEUR nil: "not understood" is an
@@ -177,11 +170,7 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 			}
 		}
 
-		if phys != nil && suggested != nil && effectiveMode(r.AppliedMode) != effectiveMode(*suggested) {
-			p, source, valid := *phys, "legacy_assumed_efficiency_and_observed_limits", true
-			if r.OptimizerSnapshotID != nil {
-				p, source, valid = snapshotPhysics(snapshots[*r.OptimizerSnapshotID], p)
-			}
+		if suggested != nil && effectiveMode(r.AppliedMode) != effectiveMode(*suggested) {
 			if valid {
 				dr.Outcome = replayOutcome(i, rows, bySlot, p, source, to, snapshots)
 			} else {

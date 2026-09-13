@@ -14,6 +14,7 @@ import (
 // the applied mode, is what makes that gap auditable after the fact instead
 // of merely asserted in the moment.
 type controlSlot struct {
+	SnapshotUnavailable bool    `gorm:"column:snapshot_unavailable"`
 	OptimizerSnapshotID *uint64 `gorm:"column:optimizer_snapshot_id;index"`
 	Timestamp           int64   `gorm:"column:ts;uniqueIndex"` // 15min slot boundary
 
