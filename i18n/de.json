@@ -786,7 +786,7 @@
       "automaticPlans": "übernimmt die Ladepläne",
       "controlled": "Hinweis: Das Laden wird vom {optimizer} gesteuert.",
       "linkWord": "Optimizer",
-      "description": "Analysiert Solarprognose, Strompreise und deinen typischen Verbrauch, um Batterie- und Ladestrategie zu optimieren. Daten werden zur Berechnung an den evcc Optimierungsdienst übertragen. Berechnet und visualisiert, und steuert im Automatikmodus auch deine Geräte.",
+      "description": "Analysiert Solarprognose, Strompreise und deinen typischen Verbrauch, um Batterie- und Ladestrategie zu optimieren. Daten werden zur Berechnung an den konfigurierten Optimierungsdienst übertragen. Berechnet und visualisiert, und steuert im Automatikmodus auch deine Geräte.",
       "enable": "Optimizer aktivieren",
       "info": "Es kann einige Minuten dauern, bis der Optimizer-Menüeintrag sichtbar wird. Bei neuen Installationen kann es bis zu 24 Stunden dauern, bis evcc genügend Daten gesammelt hat.",
       "title": "Optimizer"
@@ -1159,7 +1159,7 @@
       "simulation": "Prognostizierte Kosten sind Schätzungen. Einsparungen durch zeitliche Verschiebung sind bis zum angegebenen Abrechnungsbeginn simuliert.",
       "home": "Haushaltsbedarf im Planungszeitraum",
       "solar": "Solarerzeugung im Planungszeitraum",
-      "envelope": "Empirischer Bereich, keine Garantie",
+      "envelope": "Szenariobereich, keine Garantie",
       "chargeLevel": "Ladestand",
       "socChart": "Erwarteter Ladestand von {name}. Werte mit dem Zeitregler ansehen.",
       "inspect": "Plan ansehen",
@@ -1219,7 +1219,8 @@
       "assumptions": "Modellannahmen",
       "through": "Bewertet bis {time}",
       "inventory": "Software-Nutzen mit Restenergiekorrektur",
-      "inventoryNote": "Geschätzter Nutzen nach Restenergie und konfiguriertem Verschleiß. Getrennt von tatsächlichen Zahlungen."
+      "inventoryNote": "Geschätzter Nutzen nach Restenergie und konfiguriertem Verschleiß. Getrennt von tatsächlichen Zahlungen.",
+      "wearExcluded": "Batterieverschleiß ist für Teile oder den gesamten Zeitraum nicht konfiguriert und in dieser Schätzung nicht enthalten."
     },
     "co2": {
       "average": "Durchschnitt",

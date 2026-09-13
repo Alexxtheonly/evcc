@@ -108,7 +108,10 @@ const defaults = (): EnergySettings => ({
 export default defineComponent({
 	props: {
 		settings: { type: Object as PropType<EnergySettings>, default: undefined },
-		devices: { type: Array as PropType<EnergyDevice[]>, default: () => [] },
+		devices: {
+			type: Array as PropType<Pick<EnergyDevice, "name" | "title">[]>,
+			default: () => [],
+		},
 	},
 	data: () => ({
 		draft: defaults(),
@@ -133,7 +136,24 @@ export default defineComponent({
 			{ key: "useLearnedEfficiency" as const, label: "forecast.energy.learnedEfficiency" },
 		],
 	}),
+	watch: {
+		devices: {
+			immediate: true,
+			handler() {
+				this.initializeDevices();
+			},
+		},
+	},
 	methods: {
+		initializeDevices() {
+			for (const device of this.devices) {
+				this.planes[device.name] ||= "unknown";
+				this.efficiencies[device.name] ||= {
+					chargeEfficiency: "",
+					dischargeEfficiency: "",
+				};
+			}
+		},
 		async opened(event: Event) {
 			if (!(event.target as HTMLDetailsElement).open) return;
 			this.loaded = false;
@@ -152,13 +172,7 @@ export default defineComponent({
 						},
 					])
 				);
-				for (const device of this.devices) {
-					this.planes[device.name] ||= "unknown";
-					this.efficiencies[device.name] ||= {
-						chargeEfficiency: "",
-						dischargeEfficiency: "",
-					};
-				}
+				this.initializeDevices();
 				this.wear = Object.fromEntries(
 					Object.entries(settings.batteryWear || {}).map(([name, value]) => [
 						name,

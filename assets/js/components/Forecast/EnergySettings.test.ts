@@ -100,3 +100,33 @@ test("saving reporting preferences sends no automatic-control command", async ()
     settlementFrom: null,
   });
 });
+
+test("an open settings form accepts newly discovered batteries without losing edits", async () => {
+  vi.mocked(api.get).mockResolvedValue({
+    data: {
+      robust: false,
+      arrivals: false,
+      useLearnedEfficiency: false,
+      batteryWear: {},
+      settlementMode: "simulation",
+    },
+  });
+  const wrapper = mountSettings();
+  wrapper.get("details").element.open = true;
+  await wrapper.get("details").trigger("toggle");
+  await flushPromises();
+  await wrapper.setProps({ devices: [{ name: "late", title: "Late battery" }] });
+  await wrapper.get("#energy-chargeEfficiency-late").setValue("95");
+  await wrapper.setProps({
+    devices: [
+      { name: "late", title: "Late battery" },
+      { name: "second", title: "Second battery" },
+    ],
+  });
+  expect((wrapper.get("#energy-chargeEfficiency-late").element as HTMLInputElement).value).toBe(
+    "95"
+  );
+  expect((wrapper.get("#energy-chargeEfficiency-second").element as HTMLInputElement).value).toBe(
+    ""
+  );
+});

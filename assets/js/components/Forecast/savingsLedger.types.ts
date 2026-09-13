@@ -105,6 +105,9 @@ export interface LedgerChain {
     control?: LedgerControlSplit;
     terminalAdjustment?: LedgerSettled;
     wearAdjustment?: number;
+    segments: number;
+    estimatedEndpoints: number;
+    measurementCaveat?: string;
     assumptionsSource: string;
     valuation: string;
   };
@@ -131,7 +134,7 @@ export interface LedgerDecisionRow {
    * full 15 minutes. The slot-local delta still simulates the full slot regardless. */
   modeChanged: boolean;
   slotFlowDeltaEur?: number;
-  snapshotId?: string;
+  optimizerSnapshotId?: number;
   outcome?: {
     status: "pending" | "completed" | "interrupted" | "unpriced";
     reason?: string;

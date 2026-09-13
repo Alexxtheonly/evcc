@@ -210,7 +210,7 @@
 				<div v-if="item.calibrationReason">{{ item.calibrationReason }}</div>
 			</div>
 		</details>
-		<EnergySettings :settings="insights?.settings" :devices="batteries" />
+		<EnergySettings :settings="insights?.settings" :devices="settingsDevices" />
 	</Card>
 </template>
 
@@ -225,7 +225,7 @@ import {
 	type EnergyDevice,
 	type EnergyInsights,
 } from "./energyIntelligence";
-import type { OptimizerHealth } from "@/types/evcc";
+import type { BatteryMeter, OptimizerHealth } from "@/types/evcc";
 
 export default defineComponent({
 	components: { Card, EnergySettings },
@@ -234,6 +234,10 @@ export default defineComponent({
 		health: { type: Object as PropType<OptimizerHealth>, default: undefined },
 		automatic: Boolean,
 		currency: { type: String, default: "EUR" },
+		configuredBatteries: {
+			type: Array as PropType<Pick<BatteryMeter, "name" | "title">[]>,
+			default: () => [],
+		},
 	},
 	data: () => ({ slotIndex: 0 }),
 	computed: {
@@ -251,6 +255,20 @@ export default defineComponent({
 		},
 		batteries() {
 			return this.devices.filter((device) => device.kind === "battery");
+		},
+		settingsDevices() {
+			return this.configuredBatteries.length
+				? this.configuredBatteries.flatMap((device) =>
+						device.name
+							? [
+									{
+										name: device.name,
+										title: device.title || device.name,
+									},
+								]
+							: []
+					)
+				: this.batteries;
 		},
 		totals() {
 			return forecastTotals(this.slots);

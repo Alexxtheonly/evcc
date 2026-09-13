@@ -786,7 +786,7 @@
       "automaticPlans": "takes over charging plans",
       "controlled": "Note: Charging is controlled by the {optimizer}.",
       "linkWord": "optimizer",
-      "description": "Analyzes solar forecast, electricity prices, and your consumption patterns to optimize battery and charging strategy. Data is sent to the evcc optimization service for processing. Calculates and visualizes, and in automatic mode also controls your devices.",
+      "description": "Analyzes solar forecast, electricity prices, and your consumption patterns to optimize battery and charging strategy. Data is sent to the configured optimization service for processing. Calculates and visualizes, and in automatic mode also controls your devices.",
       "enable": "Enable Optimizer",
       "info": "It may take a few minutes for the optimizer menu entry to become visible. For new installations, it may take up to 24 hours until evcc has collected enough data.",
       "title": "Optimizer"
@@ -1159,7 +1159,7 @@
       "simulation": "Forecast costs are estimates. Interval-price savings are simulated until your declared billing start date.",
       "home": "Household demand over this horizon",
       "solar": "Solar generation over this horizon",
-      "envelope": "Empirical range, not guaranteed",
+      "envelope": "Scenario range, not guaranteed",
       "chargeLevel": "Charge level",
       "socChart": "Expected charge level of {name}. Use the time slider to inspect values.",
       "inspect": "Inspect plan",
@@ -1219,7 +1219,8 @@
       "assumptions": "Model assumptions",
       "through": "Evaluated through {time}",
       "inventory": "Inventory-adjusted software benefit",
-      "inventoryNote": "Estimated benefit after remaining battery energy and configured wear. This is separate from cash paid."
+      "inventoryNote": "Estimated benefit after remaining battery energy and configured wear. This is separate from cash paid.",
+      "wearExcluded": "Battery wear is unconfigured for part or all of this period and is excluded from this estimate."
     },
     "co2": {
       "average": "Average",

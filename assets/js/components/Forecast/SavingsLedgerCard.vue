@@ -73,7 +73,7 @@
 			</p>
 			<div
 				v-if="ledger.chain?.inventoryAdjusted"
-				class="mb-3"
+				class="mb-3 text-break"
 				data-testid="ledger-inventory-benefit"
 			>
 				<div>{{ $t("forecast.energy.inventory") }}</div>
@@ -85,8 +85,20 @@
 				>
 				<span v-else>{{ $t("forecast.savingsLedger.decisions.deltaUnknown") }}</span>
 				<p class="small text-muted mb-1">{{ $t("forecast.energy.inventoryNote") }}</p>
+				<p
+					v-if="ledger.chain.inventoryAdjusted.wearAdjustment == null"
+					class="small text-warning mb-1"
+				>
+					{{ $t("forecast.energy.wearExcluded") }}
+				</p>
 				<p v-if="ledger.chain.inventoryAdjusted.reason" class="small text-warning mb-1">
 					{{ ledger.chain.inventoryAdjusted.reason }}
+				</p>
+				<p
+					v-if="ledger.chain.inventoryAdjusted.measurementCaveat"
+					class="small text-warning mb-1"
+				>
+					{{ ledger.chain.inventoryAdjusted.measurementCaveat }}
 				</p>
 				<p class="small text-muted mb-1">
 					{{ ledger.chain.inventoryAdjusted.assumptionsSource }} ·

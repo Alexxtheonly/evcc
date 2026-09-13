@@ -10,6 +10,7 @@
 			:health="optimizerHealth"
 			:automatic="optimizerAutomatic"
 			:currency="currency"
+			:configured-batteries="configuredBatteries"
 		/>
 		<div v-if="!forecastAvailable" class="flex-grow-1 d-flex">
 			<div class="empty-box d-flex flex-column p-5">
@@ -219,6 +220,9 @@ export default defineComponent({
 		return { title: this.$t("forecast.modalTitle") };
 	},
 	computed: {
+		configuredBatteries() {
+			return store.state.battery?.devices || [];
+		},
 		forecast() {
 			return store.uiForecast.value;
 		},
