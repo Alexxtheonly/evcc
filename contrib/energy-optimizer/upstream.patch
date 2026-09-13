@@ -397,18 +397,43 @@ index 77c2353..4d896ef 100644
 +            for i, bat in enumerate(self.batteries)
 +        )
 diff --git a/tests/test_app.py b/tests/test_app.py
-index 1bd3129..cd3718f 100644
+index 1bd3129..c38fe81 100644
 --- a/tests/test_app.py
 +++ b/tests/test_app.py
-@@ -32,6 +32,11 @@ def test_optimizer(test_case: pathlib.Path):
+@@ -10,6 +10,26 @@ import pytest
+ from optimizer.app import app, settings
+ 
+ 
++def expected_economic_value(request, schedule):
++    series = request['time_series']
++    value = sum(
++        exported * export_price - imported * import_price
++        for exported, export_price, imported, import_price in zip(
++            schedule['grid_export'], series['p_E'], schedule['grid_import'], series['p_N'])
++    )
++    value += sum(
++        (battery['state_of_charge'][-1] - config['s_initial']) * config['p_a']
++        for battery, config in zip(schedule['batteries'], request['batteries'])
++    )
++    grid = request.get('grid', {})
++    if grid.get('p_max_imp') is not None and grid.get('prc_p_exc_imp') is not None:
++        peak = max(energy * 3600 / duration for energy, duration in zip(schedule['grid_import'], series['dt']))
++        value -= max(0, peak - grid['p_max_imp']) * grid['prc_p_exc_imp']
++    elif grid.get('p_max_imp') is not None:
++        value -= sum(energy * price for energy, price in zip(schedule['grid_import_overshoot'], series['p_N']))
++    return value
++
++
+ @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
+ def test_optimizer(test_case: pathlib.Path):
+     client = app.test_client()
+@@ -31,7 +51,8 @@ def test_optimizer(test_case: pathlib.Path):
+             f"optimizer status: {actual_status}, expected was: {expected_status}"
          # check objective value
          actual_objective_value = response.json["objective_value"]
-         expected_objective_value = expected_response.get("objective_value", {})
-+        # Translate the fixed initial-inventory accounting to the legacy fixture convention.
-+        actual_objective_value -= sum(
-+            (battery['state_of_charge'][0] - config['s_initial']) * config['p_a']
-+            for battery, config in zip(response.json['batteries'], request['batteries'])
-+        )
+-        expected_objective_value = expected_response.get("objective_value", {})
++        # Legacy objective scalars do not consistently match their recorded energy flows.
++        expected_objective_value = expected_economic_value(request, expected_response)
          # atol is a hundredth of a cent. The tie break stage gives away that much of the cost
          # optimum to stay feasible against the solver's own rounding, see COST_BOUND_SLACK and
          # COST_BOUND_TOLERANCE, and a case whose value is small in currency, 023 reports 0.58,

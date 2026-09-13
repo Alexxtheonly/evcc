@@ -50,9 +50,12 @@ prices remain valid. Wear itself must never be negative.
 `objective_value` equals export revenue minus import cost and wear, plus the value
 of final minus **initial** battery energy, minus any configured demand-rate
 cost. The upstream first-slot ending energy was an incorrect initial inventory;
-the patch fixes it. Upstream fixture checks translate the reported result back
-to their legacy accounting convention; separate extension tests assert the
-correct initial inventory directly. End-of-slot charge goals now include slot zero.
+the patch fixes it. Upstream fixture checks recompute expected economics from
+their recorded grid flows and final-minus-initial inventory. Their legacy scalar
+can disagree with their own energy flows, depending on the first-slot schedule.
+The original tight tolerance and strict dispatch assertions remain in place.
+Separate extension tests assert initial inventory directly. End-of-slot charge
+goals now include slot zero.
 Goals and grid limits retain the upstream soft-penalty behavior. Availability,
 physical capacity, power limits and fixed first-slot actions are hard constraints.
 
