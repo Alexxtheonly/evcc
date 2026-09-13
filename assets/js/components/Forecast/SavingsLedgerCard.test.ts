@@ -2,6 +2,7 @@ import { shallowMount, config, flushPromises } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { describe, expect, test, vi, beforeEach, afterEach } from "vite-plus/test";
 import en from "../../../../i18n/en.json";
+import de from "../../../../i18n/de.json";
 
 // api is mocked wholesale so importing the card never pulls in the real axios instance,
 // which reads window.location at module init and drags in the auth modal via its
@@ -56,6 +57,54 @@ function mountCard() {
   // how many requests it issues, not about its children's internals
   return shallowMount(SavingsLedgerCard);
 }
+
+describe("inventory accounting explanations", () => {
+  test.each([en, de])(
+    "renders readable accounting limits and preserves unknown warnings",
+    async (messages) => {
+      const reason = "separate_inventory_neutral_segments_at_gaps_or_assumption_changes";
+      const assumptionsSource = "legacy_assumed_efficiency_and_observed_limits";
+      const measurementCaveat =
+        "household and PV balance is approximate when meter AC/DC measurement planes differ; measured SoC endpoints take precedence over energy-based estimates";
+      const valuation =
+        "stored DC energy valued at last nonnegative grid price times discharge efficiency; period-average uses nonnegative mean price";
+      const data = {
+        ...liveSample,
+        chain: {
+          ...liveSample.chain,
+          inventoryAdjusted: {
+            status: "partial",
+            reason,
+            assumptionsSource,
+            measurementCaveat,
+            valuation,
+          },
+        },
+      };
+      vi.mocked(api.get).mockResolvedValue({ status: 200, data });
+      const wrapper = shallowMount(SavingsLedgerCard, {
+        global: {
+          mocks: {
+            $t: (key: string) =>
+              key.split(".").reduce<any>((value, part) => value?.[part], messages) ?? key,
+          },
+        },
+      });
+      await flushPromises();
+      const details = wrapper.get('[data-testid="ledger-inventory-benefit"]').text();
+      expect(details).toContain(messages.forecast.energy.inventoryDetails.segments);
+      expect(details).toContain(messages.forecast.energy.inventoryDetails.legacy);
+      expect(details).toContain(messages.forecast.energy.inventoryDetails.measurement);
+      expect(details).toContain(messages.forecast.energy.inventoryDetails.valuation);
+      expect(details).not.toContain(reason);
+      expect(details).not.toContain(assumptionsSource);
+      expect(wrapper.vm.inventoryDetail("new warning from a later backend")).toBe(
+        "new warning from a later backend"
+      );
+      wrapper.unmount();
+    }
+  );
+});
 
 // paging is the only thing that makes isAtPresent false, which the auto-clamps below
 // are gated on

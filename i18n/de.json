@@ -1220,6 +1220,18 @@
       "through": "Bewertet bis {time}",
       "inventory": "Software-Nutzen mit Restenergiekorrektur",
       "inventoryNote": "Geschätzter Nutzen nach Restenergie und konfiguriertem Verschleiß. Getrennt von tatsächlichen Zahlungen.",
+      "inventoryDetails": {
+        "noPrices": "Für diese Schätzung sind keine Zeitfenster mit Preisdaten verfügbar.",
+        "changedAssumptions": "Historische Annahmen fehlen oder änderten sich innerhalb eines Zeitfensters. Dieser Zeitraum lässt sich nicht zuverlässig bewerten.",
+        "unsupportedEconomics": "Historische Verlust- oder Verschleißannahmen lassen sich nicht zuverlässig nachberechnen.",
+        "missingSoc": "Für diesen Zeitraum fehlen Messwerte zum Batterieladestand.",
+        "segments": "Lücken oder geänderte Annahmen teilen den Zeitraum in getrennt bewertete Abschnitte, jeweils mit Restenergiekorrektur.",
+        "legacy": "Ältere Zeiträume verwenden ausgewiesene Ersatzannahmen zum Wirkungsgrad und beobachtete Leistungsgrenzen.",
+        "snapshots": "Verwendet die bei der jeweiligen Planung gespeicherten Annahmen.",
+        "mixed": "Verwendet gespeicherte Planungsannahmen, soweit vorhanden, und ausgewiesene Ersatzannahmen für ältere Zeiträume.",
+        "measurement": "Haus- und Solarenergiebilanzen sind bei gemischten AC- und DC-Messungen nur näherungsweise korrekt. Gemessene Batterieladestände haben Vorrang vor energiebasierten Schätzungen.",
+        "valuation": "Verbleibende DC-Batterieenergie wird mit dem letzten nichtnegativen Netzpreis bewertet, abzüglich Entladeverlusten. Beim Periodendurchschnitt gilt der nichtnegative Mittelpreis."
+      },
       "wearExcluded": "Batterieverschleiß ist für Teile oder den gesamten Zeitraum nicht konfiguriert und in dieser Schätzung nicht enthalten."
     },
     "co2": {

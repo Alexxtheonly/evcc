@@ -1220,6 +1220,18 @@
       "through": "Evaluated through {time}",
       "inventory": "Inventory-adjusted software benefit",
       "inventoryNote": "Estimated benefit after remaining battery energy and configured wear. This is separate from cash paid.",
+      "inventoryDetails": {
+        "noPrices": "No priced slots are available for this estimate.",
+        "changedAssumptions": "Historical assumptions are missing or changed during a slot; this period cannot be valued reliably.",
+        "unsupportedEconomics": "Historical loss or wear assumptions cannot be replayed reliably.",
+        "missingSoc": "Battery charge measurements are missing for this period.",
+        "segments": "Gaps or changed assumptions split this period into separately valued sections, each adjusted for remaining battery energy.",
+        "legacy": "Older periods use declared fallback efficiency and observed power limits.",
+        "snapshots": "Uses the assumptions saved when each plan was made.",
+        "mixed": "Uses saved plan assumptions where available and declared fallback assumptions for older periods.",
+        "measurement": "Household and solar energy balances are approximate when AC and DC meters are mixed. Measured battery charge levels take precedence over energy-based estimates.",
+        "valuation": "Remaining DC battery energy is valued at the last nonnegative grid price, adjusted for discharge losses. Period-average comparisons use the nonnegative mean price."
+      },
       "wearExcluded": "Battery wear is unconfigured for part or all of this period and is excluded from this estimate."
     },
     "co2": {

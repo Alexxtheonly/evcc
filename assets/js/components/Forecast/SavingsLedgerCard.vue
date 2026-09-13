@@ -92,17 +92,17 @@
 					{{ $t("forecast.energy.wearExcluded") }}
 				</p>
 				<p v-if="ledger.chain.inventoryAdjusted.reason" class="small text-warning mb-1">
-					{{ ledger.chain.inventoryAdjusted.reason }}
+					{{ inventoryDetail(ledger.chain.inventoryAdjusted.reason) }}
 				</p>
 				<p
 					v-if="ledger.chain.inventoryAdjusted.measurementCaveat"
 					class="small text-warning mb-1"
 				>
-					{{ ledger.chain.inventoryAdjusted.measurementCaveat }}
+					{{ inventoryDetail(ledger.chain.inventoryAdjusted.measurementCaveat) }}
 				</p>
 				<p class="small text-muted mb-1">
-					{{ ledger.chain.inventoryAdjusted.assumptionsSource }} ·
-					{{ ledger.chain.inventoryAdjusted.valuation }}
+					{{ inventoryDetail(ledger.chain.inventoryAdjusted.assumptionsSource) }} ·
+					{{ inventoryDetail(ledger.chain.inventoryAdjusted.valuation) }}
 				</p>
 			</div>
 			<SavingsLedgerWaterfall
@@ -511,6 +511,24 @@ export default defineComponent({
 		this.fetch();
 	},
 	methods: {
+		inventoryDetail(value: string): string {
+			const keys: Record<string, string> = {
+				no_priced_slots: "noPrices",
+				historical_snapshot_unavailable_or_assumptions_changed: "changedAssumptions",
+				unsupported_historical_economics: "unsupportedEconomics",
+				missing_soc: "missingSoc",
+				separate_inventory_neutral_segments_at_gaps_or_assumption_changes: "segments",
+				legacy_assumed_efficiency_and_observed_limits: "legacy",
+				optimizer_snapshots: "snapshots",
+				mixed_snapshots_and_explicit_legacy_assumptions: "mixed",
+				"household and PV balance is approximate when meter AC/DC measurement planes differ; measured SoC endpoints take precedence over energy-based estimates":
+					"measurement",
+				"stored DC energy valued at last nonnegative grid price times discharge efficiency; period-average uses nonnegative mean price":
+					"valuation",
+			};
+			const key = keys[value];
+			return key ? this.$t(`forecast.energy.inventoryDetails.${key}`) : value;
+		},
 		money(v: number): string {
 			return this.fmtMoney(v, this.currency, true, true);
 		},
