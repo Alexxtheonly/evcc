@@ -171,6 +171,7 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 	if err := site.archiveEnergyRun(extended, details, res); err != nil {
 		return err
 	}
+	site.populateEnergyGrid(ordinary, res)
 	site.publish("evopt", optimizerResult{Updated: time.Now(), Req: ordinary, Res: res, Details: details})
 	site.applyOptimizerResult(ordinary, details.BatteryDetails, res)
 	return nil
@@ -229,6 +230,26 @@ func (site *Site) populateEnergyDevices(req energyRequest, details requestDetail
 			device.Plan = append(device.Plan, energyPlanSlot{Start: start, ChargeWh: float64(b.ChargingPower[t]), DischargeWh: float64(b.DischargingPower[t]), Soc: soc})
 		}
 		site.energyInsights.Devices = append(site.energyInsights.Devices, device)
+	}
+}
+
+func (site *Site) populateEnergyGrid(req optimizer.OptimizationInput, res optimizer.OptimizationResult) {
+	for t := range site.energyInsights.Forecast {
+		var charge, discharge float64
+		for _, battery := range res.Batteries {
+			charge += max(0, float64(battery.ChargingPower[t]))
+			discharge += max(0, float64(battery.DischargingPower[t]))
+		}
+		imp := max(0, float64(energyGridImport(req, res, t)))
+		// AC-side Wh bounds describe source allocation, not forecast uncertainty or per-device routing.
+		low := max(0, charge-float64(req.TimeSeries.Ft[t])-discharge)
+		high := min(charge, imp)
+		if low > high+0.1 {
+			continue
+		}
+		low = min(low, high)
+		slot := &site.energyInsights.Forecast[t]
+		slot.GridImportWh, slot.GridChargeMinWh, slot.GridChargeMaxWh = &imp, &low, &high
 	}
 }
 

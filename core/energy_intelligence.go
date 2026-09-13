@@ -103,15 +103,18 @@ func (site *Site) SetEnergyIntelligenceSettings(cfg EnergyIntelligenceSettings) 
 }
 
 type energyForecastSlot struct {
-	Start       time.Time `json:"start"`
-	End         time.Time `json:"end"`
-	HomeLowWh   float64   `json:"homeLowWh"`
-	HomeWh      float64   `json:"homeWh"`
-	HomeHighWh  float64   `json:"homeHighWh"`
-	SolarLowWh  float64   `json:"solarLowWh"`
-	SolarWh     float64   `json:"solarWh"`
-	SolarHighWh float64   `json:"solarHighWh"`
-	GridPrice   float64   `json:"gridPrice"`
+	Start           time.Time `json:"start"`
+	End             time.Time `json:"end"`
+	HomeLowWh       float64   `json:"homeLowWh"`
+	HomeWh          float64   `json:"homeWh"`
+	HomeHighWh      float64   `json:"homeHighWh"`
+	SolarLowWh      float64   `json:"solarLowWh"`
+	SolarWh         float64   `json:"solarWh"`
+	SolarHighWh     float64   `json:"solarHighWh"`
+	GridPrice       float64   `json:"gridPrice"`
+	GridImportWh    *float64  `json:"gridImportWh,omitempty"`
+	GridChargeMinWh *float64  `json:"gridChargeMinWh,omitempty"`
+	GridChargeMaxWh *float64  `json:"gridChargeMaxWh,omitempty"`
 }
 
 type energyPlanSlot struct {
@@ -190,6 +193,11 @@ func (site *Site) publishEnergyInsights(err error) {
 		value.Status, value.Reason = "unavailable", err.Error()
 		value.Devices = nil
 		value.SnapshotID = nil
+		for i := range value.Forecast {
+			value.Forecast[i].GridImportWh = nil
+			value.Forecast[i].GridChargeMinWh = nil
+			value.Forecast[i].GridChargeMaxWh = nil
+		}
 	} else if value.Status == "" {
 		value.Status = "ready"
 	}
