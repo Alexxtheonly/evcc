@@ -156,10 +156,21 @@ type Site struct {
 
 	adaptivePlansUpdated time.Time // last adaptive plan learning run, guarded by RWMutex
 
-	optimizerMu      sync.Mutex                     // guards optimizer runs
-	optimizerUpdated time.Time                      // last optimizer run, guarded by optimizerMu
-	optimizerClient  *optimizer.ClientWithResponses // cached api client for connection reuse, guarded by optimizerMu
-	optimizerRunSlot time.Time                      // last persisted optimizer_runs slot, guarded by optimizerMu
+	optimizerMu                sync.Mutex                     // guards optimizer runs
+	optimizerUpdated           time.Time                      // last optimizer run, guarded by optimizerMu
+	optimizerClient            *optimizer.ClientWithResponses // cached api client for connection reuse, guarded by optimizerMu
+	optimizerRunSlot           time.Time                      // last persisted optimizer_runs slot, guarded by optimizerMu
+	energyInsights             optimizerInsights
+	energyProfile              *metrics.HomeForecastResult
+	energyHome                 []float64
+	energyCapabilitiesUntil    time.Time
+	energyCapabilitiesURI      string
+	energySnapshotID           *uint64
+	energySnapshotSlot         time.Time
+	energySnapshotAction       string
+	energyEfficiencyUpdated    time.Time
+	energyEfficiencyRefresh    bool
+	energyEfficiencyCandidates []metrics.BatteryEfficiencyCandidate
 
 	solarScaleCached       func() (float64, error)             // util.Cached wrapper around querySolarScale
 	solarScaleByLeadCached func() (map[int]float64, error)     // util.Cached wrapper around querySolarScaleByLead

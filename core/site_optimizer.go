@@ -2,7 +2,6 @@ package core
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -120,6 +119,10 @@ type batteryDetail struct {
 
 	loadpoint    *int // originating loadpoint id for loadpoint/vehicle entries
 	controllable bool // device can act on suggestions
+	arrival      *time.Time
+	departure    *time.Time
+	etaC, etaD   float64
+	wearPerKWh   *float64
 }
 
 // batteryKey and loadpointKey build the canonical device keys used for
@@ -429,38 +432,7 @@ func gridChargeJustified(pn []float32) bool {
 // discharge-weighted price up to the first return to the initial SoC is the
 // price at which the plan actually gives the energy charged now back.
 func chargePaybackJustified(pn, soc, discharge []float32, sInitial float32) bool {
-	if len(pn) < 2 {
-		return false
-	}
-
-	// pn is currency/Wh
-	price := float64(pn[0]) * 1e3
-	if price <= 0 {
-		return true
-	}
-
-	n := min(len(pn), len(soc), len(discharge))
-
-	var value, energy float64
-	for t := 1; t < n; t++ {
-		value += float64(discharge[t]) * float64(pn[t]) * 1e3
-		energy += float64(discharge[t])
-
-		if soc[t] <= sInitial {
-			// the energy charged now has been given back
-			if energy == 0 {
-				return false
-			}
-			return value/energy >= (price+chargePaybackBuffer)/(eta*eta)
-		}
-	}
-
-	// the plan never returns to the initial SoC within the horizon: the charged
-	// energy's value rests on the terminal value alone, which is always below the
-	// buy price - not worth paying for now. This depends on terminalStorageValue
-	// staying a fraction of minImportPrice (a multiplication, not a division by eta);
-	// see its doc comment for why the inverse formula breaks this invariant.
-	return false
+	return gridChargeJustified(pn) && energyPayback(pn, soc, discharge, sInitial, eta, eta, 0)
 }
 
 // batteryModeCandidate maps the suggestions from the current optimizer run
@@ -504,10 +476,6 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 
 	pn := req.TimeSeries.PN
 
-	if !gridChargeJustified(pn) {
-		return optimizerDecision{suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPayback}
-	}
-
 	// every controllable home battery's plan must pay the charge back
 	for i, detail := range details {
 		if detail.Type != batteryTypeBattery || !detail.controllable {
@@ -516,7 +484,21 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 		if i >= len(req.Batteries) || i >= len(res.Batteries) {
 			return optimizerDecision{suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPayback}
 		}
-		if !chargePaybackJustified(pn, res.Batteries[i].StateOfCharge, res.Batteries[i].DischargingPower, req.Batteries[i].SInitial) {
+		etaC, etaD, wear := detail.etaC, detail.etaD, 0.0
+		if etaC == 0 {
+			etaC = eta
+		}
+		if etaD == 0 {
+			etaD = eta
+		}
+		if detail.wearPerKWh != nil {
+			wear = *detail.wearPerKWh
+		}
+		paysBack := energyPayback(pn, res.Batteries[i].StateOfCharge, res.Batteries[i].DischargingPower, req.Batteries[i].SInitial, etaC, etaD, wear)
+		if etaC == eta && etaD == eta && wear == 0 {
+			paysBack = chargePaybackJustified(pn, res.Batteries[i].StateOfCharge, res.Batteries[i].DischargingPower, req.Batteries[i].SInitial)
+		}
+		if !paysBack {
 			return optimizerDecision{suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPayback}
 		}
 	}
@@ -727,6 +709,7 @@ func (site *Site) persistControlSlot() {
 	veto := site.optimizerVetoReason
 	healthOk := site.optimizerHealthOk
 	price := site.optimizerChargePrice
+	snapshot := site.energySnapshotID
 	site.RUnlock()
 
 	// price only means something alongside an actually accepted charge
@@ -753,6 +736,12 @@ func (site *Site) persistControlSlot() {
 
 	if err := metrics.PersistControlSlot(slot, applied.String(), sm, string(veto), healthOk, p); err != nil {
 		site.log.ERROR.Printf("persist control slot: %v", err)
+		return
+	}
+	if snapshot != nil && healthOk && sm != nil {
+		if err := metrics.BindControlSlotSnapshot(slot, *snapshot); err != nil {
+			site.log.ERROR.Printf("link control snapshot: %v", err)
+		}
 	}
 }
 
@@ -984,6 +973,9 @@ func (site *Site) publishSuggestions() {
 // clearSuggestions removes all suggestions and the battery forecast when the
 // optimizer result is stale
 func (site *Site) clearSuggestions() {
+	site.Lock()
+	site.energySnapshotID = nil
+	site.Unlock()
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
 	site.setOptimizerBatteryMode(optimizerDecision{})
@@ -1152,6 +1144,7 @@ func (site *Site) optimizerUpdateAsync(force bool) {
 			}
 			site.publishOptimizerHealth(false, reason)
 		}
+		site.publishEnergyInsights(err)
 	}()
 
 	err = site.optimizerUpdate(site.state().battery.Devices)
@@ -1208,6 +1201,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		blendMeasured(gt, v, optimizerDecaySlots)
 		site.log.DEBUG.Printf("optimizer: home slots updated with measured %.0fWh: %.0f -> %.0f", v, orig, gt[:len(orig)])
 	}
+	site.energyHome = slices.Clone(gt)
 
 	// allow empty solar forecast
 	ft := lo.RepeatBy(minLen, func(i int) float32 { return float32(0) })
@@ -1369,6 +1363,8 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 }
 
 func (site *Site) optimizerUpdate(battery []types.Measurement) error {
+	site.energyInsights = optimizerInsights{Settings: site.GetEnergyIntelligenceSettings()}
+	site.energyProfile = nil
 	req, details, err := site.optimizerRequest(battery)
 	if err != nil {
 		return err
@@ -1396,42 +1392,7 @@ func (site *Site) optimizerUpdate(battery []types.Measurement) error {
 		site.optimizerClient = apiClient
 	}
 
-	resp, err := site.optimizerClient.PostOptimizeChargeScheduleWithResponse(context.TODO(), req, func(_ context.Context, req *http.Request) error {
-		if sponsor.IsAuthorized() {
-			req.Header.Set("Authorization", "Bearer "+sponsor.Token)
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	if resp.StatusCode() != http.StatusOK {
-		return apiError(resp)
-	}
-
-	// publish before the status check so the optimizer page stays available
-	// for diagnosing non-optimal results
-	site.publish("evopt", optimizerResult{
-		Updated: time.Now(),
-		Req:     req,
-		Res:     *resp.JSON200,
-		Details: details,
-	})
-
-	// diagnostic record of the run itself, independent of whether
-	// the result was usable - an Infeasible run is exactly the kind of thing
-	// this table exists to make visible after the fact
-	site.persistOptimizerRun(string(resp.JSON200.Status), *resp.JSON200)
-
-	// feasible results are usable, they are just not proven optimal
-	if status := resp.JSON200.Status; status != optimizer.Optimal && status != optimizer.Feasible {
-		return errors.New(string(status))
-	}
-
-	site.applyOptimizerResult(req, details.BatteryDetails, *resp.JSON200)
-
-	return nil
+	return site.optimizeEnergy(req, details)
 }
 
 // applyOptimizerResult maps the optimizer response onto suggestions, battery
@@ -2033,24 +1994,21 @@ func unmodelledPower(lp loadpoint.API) float64 {
 
 // homeProfile returns the home base load in Wh
 func (site *Site) homeProfile(minLen int) ([]float64, error) {
-	// kWh over last 30 days
-	profile, err := site.collectors[metrics.Home].EnergyProfile(now.BeginningOfDay().AddDate(0, 0, -30))
+	start := time.Now().Truncate(tariff.SlotDuration)
+	profile, err := metrics.HomeForecast(start, start.Add(time.Duration(minLen)*tariff.SlotDuration))
+	site.energyProfile = profile
+	if profile != nil {
+		site.energyInsights.Profile = &profile.Quality
+		if profile.Quality.Source == "cached" || profile.Quality.InterpolatedBuckets > 0 || profile.Quality.PooledBuckets > 0 {
+			site.energyInsights.Status, site.energyInsights.Reason = "degraded", profile.Quality.Reason
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-
-	// max 4 days
-	slots := make([]float64, 0, minLen+1)
-	for len(slots) <= minLen+24*4 { // allow for prorating first day
-		slots = append(slots, profile[:]...)
-	}
-
-	res := profileSlotsFromNow(slots)
-	if len(res) < minLen {
-		return nil, fmt.Errorf("minimum home profile length %d is less than required %d", len(res), minLen)
-	}
-	if len(res) > minLen {
-		res = res[:minLen]
+	res := make([]float64, len(profile.Rates))
+	for i, slot := range profile.Rates {
+		res[i] = slot.Base / 1e3
 	}
 
 	res = site.applyHeatingDegree(res)

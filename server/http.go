@@ -11,6 +11,7 @@ import (
 	"github.com/evcc-io/evcc/core"
 	"github.com/evcc-io/evcc/core/keys"
 	"github.com/evcc-io/evcc/core/loadpoint"
+	"github.com/evcc-io/evcc/core/metrics"
 	"github.com/evcc-io/evcc/core/site"
 	"github.com/evcc-io/evcc/hems/shm"
 	"github.com/evcc-io/evcc/server/assets"
@@ -198,6 +199,7 @@ func (s *HTTPd) RegisterSiteHandlers(site site.API) {
 		"gridsessions":            {"GET", "/gridsessions", gridSessionsHandler},
 		"energyhistory":           {"GET", "/history/energy", energyHistoryHandler},
 		"savingsledger":           {"GET", "/savingsledger", savingsLedgerHandler(site)},
+		"optimizersnapshot":       {"GET", "/optimizer/snapshots/{id:[0-9]+}", optimizerSnapshotHandler},
 		"optimize":                {"POST", "/optimize", callHandler(site.Optimize)},
 		"telemetry2":              {"POST", "/settings/telemetry/{value:[01truefalse]+}", boolHandler(telemetry.Enable, telemetry.Enabled)},
 		"devicecolors":            {"PUT", "/devicecolors", updateDeviceColor(site)},
@@ -325,6 +327,7 @@ func (s *HTTPd) RegisterSystemHandler(site *core.Site, pub publisher, cache *uti
 	{ // api/config
 		api := api.PathPrefix("/config").Subrouter()
 		api.Use(ensureAuthHandler(auth))
+		api.Methods("GET", "PUT").Path("/energyintelligence").Handler(energyIntelligenceHandler(site))
 
 		routes := map[string]route{
 			"auth":               {"POST", "/auth", authHandler},
@@ -443,14 +446,16 @@ func (s *HTTPd) RegisterSystemHandler(site *core.Site, pub publisher, cache *uti
 		api.Use(ensureDbAuth(auth))
 
 		routes := map[string]route{
-			"backup":                {"GET", "/backup", getBackup()},
-			"restore":               {"POST", "/restore", restoreDatabase(shutdown)},
-			"reset":                 {"POST", "/reset", resetDatabase(shutdown)},
-			"deleteenergy":          {"DELETE", "/metrics/energy", deleteEnergyHandler},
-			"deletetariffs":         {"DELETE", "/metrics/tariffs", deleteTariffsHandler},
-			"deletecontrolslots":    {"DELETE", "/metrics/control-slots", deleteControlSlotsHandler},
-			"deleteoptimizerruns":   {"DELETE", "/metrics/optimizer-runs", deleteOptimizerRunsHandler},
-			"deletesettingshistory": {"DELETE", "/settings/history", deleteSettingsHistoryHandler},
+			"backup":                   {"GET", "/backup", getBackup()},
+			"restore":                  {"POST", "/restore", restoreDatabase(shutdown)},
+			"reset":                    {"POST", "/reset", resetDatabase(shutdown)},
+			"deleteenergy":             {"DELETE", "/metrics/energy", deleteEnergyHandler},
+			"deletetariffs":            {"DELETE", "/metrics/tariffs", deleteTariffsHandler},
+			"deletecontrolslots":       {"DELETE", "/metrics/control-slots", deleteControlSlotsHandler},
+			"deleteoptimizerruns":      {"DELETE", "/metrics/optimizer-runs", deleteOptimizerRunsHandler},
+			"deleteoptimizersnapshots": {"DELETE", "/metrics/optimizer-snapshots", deleteEnergyIntelligenceHistory(metrics.DeleteOptimizerSnapshots)},
+			"deletehomeforecasts":      {"DELETE", "/metrics/home-forecasts", deleteEnergyIntelligenceHistory(metrics.DeleteHomeForecastSamples)},
+			"deletesettingshistory":    {"DELETE", "/settings/history", deleteSettingsHistoryHandler},
 		}
 
 		for _, r := range routes {
