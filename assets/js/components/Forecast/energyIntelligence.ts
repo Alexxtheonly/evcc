@@ -3,6 +3,8 @@ export interface EnergySettings {
   arrivals: boolean;
   useLearnedEfficiency: boolean;
   batteryWear: Record<string, number>;
+  batteryEnergyPlane?: Record<string, "ac" | "dc" | "unknown">;
+  batteryEfficiency?: Record<string, { chargeEfficiency: number; dischargeEfficiency: number }>;
   settlementMode: "simulation" | "interval";
   settlementFrom?: string | null;
 }
@@ -59,6 +61,8 @@ export interface EnergyInsights {
     candidateChargeEfficiency?: number;
     candidateDischargeEfficiency?: number;
     wearPerKWh?: number;
+    calibrationReason?: string;
+    measurementPlane?: string;
   }[];
   scenarios?: {
     status: string;
@@ -69,7 +73,7 @@ export interface EnergyInsights {
     batterySocLow?: number[];
     batterySocHigh?: number[];
   };
-  snapshotId?: string;
+  snapshotId?: number;
 }
 
 export function socPoints(values: number[]): string {

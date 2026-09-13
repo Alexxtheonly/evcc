@@ -207,6 +207,7 @@
 						})
 					}}
 				</div>
+				<div v-if="item.calibrationReason">{{ item.calibrationReason }}</div>
 			</div>
 		</details>
 		<EnergySettings :settings="insights?.settings" :devices="batteries" />

@@ -15,7 +15,7 @@
 					$t(setting.label)
 				}}</label>
 			</div>
-			<div v-for="device in devices" :key="device.name" class="mb-3">
+			<div v-for="device in loaded ? devices : []" :key="device.name" class="mb-3">
 				<label :for="`energy-wear-${device.name}`" class="form-label"
 					>{{ device.title }} · {{ $t("forecast.energy.wear") }}</label
 				>
@@ -29,6 +29,41 @@
 					step="0.001"
 					:placeholder="$t('forecast.energy.unconfigured')"
 				/>
+				<label :for="`energy-plane-${device.name}`" class="form-label mt-2">{{
+					$t("forecast.energy.measurementPlane")
+				}}</label>
+				<select
+					:id="`energy-plane-${device.name}`"
+					v-model="planes[device.name]"
+					class="form-select"
+				>
+					<option value="unknown">{{ $t("forecast.energy.planeUnknown") }}</option>
+					<option value="dc">{{ $t("forecast.energy.planeDc") }}</option>
+					<option value="ac">{{ $t("forecast.energy.planeAc") }}</option>
+				</select>
+				<p class="small text-muted mt-1">{{ $t("forecast.energy.planeNote") }}</p>
+				<div class="row g-2">
+					<div
+						v-for="direction in efficiencyDirections"
+						:key="direction.key"
+						class="col-6"
+					>
+						<label :for="`energy-${direction.key}-${device.name}`" class="form-label">{{
+							$t(direction.label)
+						}}</label>
+						<input
+							:id="`energy-${direction.key}-${device.name}`"
+							v-model="efficiencies[device.name]![direction.key]"
+							class="form-control"
+							type="number"
+							min="1"
+							max="100"
+							step="0.1"
+							:placeholder="$t('forecast.energy.unconfigured')"
+						/>
+					</div>
+				</div>
+				<p class="small text-muted mt-1">{{ $t("forecast.energy.efficiencyNote") }}</p>
 			</div>
 			<label for="energy-settlement" class="form-label">{{
 				$t("forecast.energy.settlement")
@@ -78,6 +113,15 @@ export default defineComponent({
 	data: () => ({
 		draft: defaults(),
 		wear: {} as Record<string, string>,
+		planes: {} as Record<string, "ac" | "dc" | "unknown">,
+		efficiencies: {} as Record<
+			string,
+			{ chargeEfficiency: string; dischargeEfficiency: string }
+		>,
+		efficiencyDirections: [
+			{ key: "chargeEfficiency" as const, label: "forecast.energy.chargeEfficiency" },
+			{ key: "dischargeEfficiency" as const, label: "forecast.energy.dischargeEfficiency" },
+		],
 		settlementDate: "",
 		saving: false,
 		loaded: false,
@@ -98,8 +142,25 @@ export default defineComponent({
 			try {
 				const settings = (await api.get<EnergySettings>("config/energyintelligence")).data;
 				this.draft = { ...settings, batteryWear: { ...settings.batteryWear } };
+				this.planes = { ...settings.batteryEnergyPlane };
+				this.efficiencies = Object.fromEntries(
+					Object.entries(settings.batteryEfficiency || {}).map(([name, value]) => [
+						name,
+						{
+							chargeEfficiency: String(value.chargeEfficiency * 100),
+							dischargeEfficiency: String(value.dischargeEfficiency * 100),
+						},
+					])
+				);
+				for (const device of this.devices) {
+					this.planes[device.name] ||= "unknown";
+					this.efficiencies[device.name] ||= {
+						chargeEfficiency: "",
+						dischargeEfficiency: "",
+					};
+				}
 				this.wear = Object.fromEntries(
-					Object.entries(settings.batteryWear).map(([name, value]) => [
+					Object.entries(settings.batteryWear || {}).map(([name, value]) => [
 						name,
 						String(value),
 					])
@@ -128,11 +189,28 @@ export default defineComponent({
 				}
 				batteryWear[name] = value;
 			}
+			const batteryEfficiency: NonNullable<EnergySettings["batteryEfficiency"]> = {};
+			for (const [name, entry] of Object.entries(this.efficiencies)) {
+				if (entry.chargeEfficiency === "" && entry.dischargeEfficiency === "") continue;
+				const chargeEfficiency = Number(entry.chargeEfficiency) / 100;
+				const dischargeEfficiency = Number(entry.dischargeEfficiency) / 100;
+				if (
+					![chargeEfficiency, dischargeEfficiency].every(
+						(value) => Number.isFinite(value) && value > 0 && value <= 1
+					)
+				) {
+					this.error = this.$t("forecast.energy.invalidEfficiency");
+					return;
+				}
+				batteryEfficiency[name] = { chargeEfficiency, dischargeEfficiency };
+			}
 			this.saving = true;
 			try {
 				await api.put("config/energyintelligence", {
 					...this.draft,
 					batteryWear,
+					batteryEnergyPlane: this.planes,
+					batteryEfficiency,
 					settlementFrom: this.settlementDate
 						? new Date(`${this.settlementDate}T00:00:00`).toISOString()
 						: null,
