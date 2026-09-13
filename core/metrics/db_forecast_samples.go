@@ -109,8 +109,9 @@ func QueryLeadTimeSamples(from time.Time) ([]LeadTimeSample, error) {
 		Select(`fs.lead_minutes AS lead_minutes, fs.energy AS forecast, SUM(m.energy) AS actual`).
 		Joins(`JOIN meters m ON m.ts = fs.slot`).
 		Joins(`JOIN entities e ON e.id = m.meter AND e."group" = ?`, PV).
-		Where("fs.slot >= ?", from.Unix()).
+		Where("fs.slot >= ? AND COALESCE(m.recovered,0)=0 AND COALESCE(m.incomplete,0)=0", from.Unix()).
 		Group("fs.slot, fs.lead_minutes, fs.energy").
+		Having(`COUNT(DISTINCT m.meter) = (SELECT COUNT(*) FROM entities WHERE "group" = ?)`, PV).
 		Scan(&res).Error
 
 	return res, err

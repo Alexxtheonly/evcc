@@ -39,8 +39,10 @@ import (
 // rejoins the applied trajectory (or run a full oracle replay) - out of scope here,
 // hence the name: do not present this field as hindsight.
 type DecisionRow struct {
-	Ts          time.Time `json:"ts"`
-	AppliedMode string    `json:"appliedMode"`
+	OptimizerSnapshotID *uint64          `json:"optimizerSnapshotId,omitempty"`
+	Outcome             *DecisionOutcome `json:"outcome,omitempty"`
+	Ts                  time.Time        `json:"ts"`
+	AppliedMode         string           `json:"appliedMode"`
 	// SuggestedMode is nil - and omitted from the JSON - when no optimizer run
 	// produced a suggestion for this slot, so a caller can report "none recorded"
 	// instead of silently skipping the row or rendering a mode that was never
@@ -115,16 +117,17 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 	}
 
 	out := make([]DecisionRow, 0, len(rows))
-	for _, r := range rows {
+	for i, r := range rows {
 		suggested := decodeSuggestedMode(r.SuggestedMode)
 
 		dr := DecisionRow{
-			Ts:            time.Unix(r.Timestamp, 0),
-			AppliedMode:   r.AppliedMode,
-			SuggestedMode: suggested,
-			VetoReason:    r.VetoReason,
-			HealthOk:      r.HealthOk,
-			ModeChanged:   r.ModeChanged,
+			OptimizerSnapshotID: r.OptimizerSnapshotID,
+			Ts:                  time.Unix(r.Timestamp, 0),
+			AppliedMode:         r.AppliedMode,
+			SuggestedMode:       suggested,
+			VetoReason:          r.VetoReason,
+			HealthOk:            r.HealthOk,
+			ModeChanged:         r.ModeChanged,
 		}
 
 		// no suggestion recorded means there is no rejected alternative to price -
@@ -161,6 +164,21 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 			}
 		}
 
+		if phys != nil && suggested != nil && effectiveMode(r.AppliedMode) != effectiveMode(*suggested) {
+			p, source, valid := *phys, "legacy_assumed_efficiency_and_observed_limits", true
+			if r.OptimizerSnapshotID != nil {
+				snapshot, err := GetOptimizerSnapshot(*r.OptimizerSnapshotID)
+				if err != nil {
+					return nil, err
+				}
+				p, source, valid = snapshotPhysics(snapshot, p)
+			}
+			if valid {
+				dr.Outcome = replayOutcome(i, rows, bySlot, p, source, to)
+			} else {
+				dr.Outcome = &DecisionOutcome{Status: "unpriced", Reason: source, AssumptionsSource: source}
+			}
+		}
 		out = append(out, dr)
 	}
 

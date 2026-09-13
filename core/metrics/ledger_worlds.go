@@ -92,8 +92,9 @@ func computeW1(slots []slotData) []worldFlow {
 // package (Settled, Coverage, ...); without tags they serialise as PascalCase amid
 // lowerCamel siblings.
 type batteryPhysics struct {
-	CapacityKWh    float64 `json:"capacityKWh"`
-	CapacitySource string  `json:"capacitySource"`
+	WearPerKWh     *float64 `json:"wearPerKWh,omitempty"`
+	CapacityKWh    float64  `json:"capacityKWh"`
+	CapacitySource string   `json:"capacitySource"`
 
 	EtaC      float64 `json:"etaC"`
 	EtaD      float64 `json:"etaD"`

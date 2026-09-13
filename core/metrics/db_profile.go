@@ -2,10 +2,10 @@ package metrics
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
-	"github.com/evcc-io/evcc/tariff"
 )
 
 var ErrIncomplete = errors.New("meter profile incomplete")
@@ -29,9 +29,9 @@ func energyProfile(entity entity, from time.Time) (*[96]float64, error) {
 	}
 
 	// COALESCE guards against legacy rows with NULL energy
-	rows, err := db.Query(`SELECT min(ts) AS ts, COALESCE(avg(energy), 0) AS energy, count(*) AS n
+	rows, err := db.Query(`SELECT CAST(strftime('%H', ts, 'unixepoch', 'localtime') AS INTEGER) * 4 + CAST(strftime('%M', ts, 'unixepoch', 'localtime') AS INTEGER) / 15 AS bucket, avg(energy) AS energy, count(*) AS n
 		FROM meters
-		WHERE meter = ? AND ts >= ? AND COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0
+		WHERE meter = ? AND ts >= ? AND energy IS NOT NULL AND energy >= 0 AND COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0
 		GROUP BY strftime("%H:%M", ts, 'unixepoch', 'localtime')
 		ORDER BY strftime("%H:%M", ts, 'unixepoch', 'localtime') ASC`,
 		entity.Id, from.Unix(),
@@ -41,36 +41,47 @@ func energyProfile(entity entity, from time.Time) (*[96]float64, error) {
 	}
 	defer rows.Close()
 
-	var prev time.Time
 	var samples int
-	res := make([]float64, 0, 96)
+	var res [96]float64
+	var present [96]bool
 
 	for rows.Next() {
-		var ts SqlTime
+		var bucket int
 		var val float64
 		var n int
 
-		if err := rows.Scan(&ts, &val, &n); err != nil {
+		if err := rows.Scan(&bucket, &val, &n); err != nil {
 			return nil, err
 		}
-		samples += n
-
-		// interpolate single missing value, maybe due to regular restarts?
-		if time.Time(ts).Sub(prev) == 2*tariff.SlotDuration {
-			res = append(res, (val+res[len(res)-1])/2)
+		if bucket >= 0 && bucket < 96 && finite(val) {
+			samples += n
+			res[bucket] = val
+			present[bucket] = true
 		}
-		prev = time.Time(ts)
-
-		res = append(res, val)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	if len(res) != 96 || samples < energyProfileMinSamples {
-		return nil, ErrIncomplete
+	missing := 0
+	for _, ok := range present {
+		if !ok {
+			missing++
+		}
 	}
-
-	return (*[96]float64)(res), nil
+	if missing > 4 || samples < energyProfileMinSamples {
+		return nil, fmt.Errorf("%w: %d clean samples, %d/96 buckets", ErrIncomplete, samples, 96-missing)
+	}
+	for i, ok := range present {
+		if ok {
+			continue
+		}
+		left, right := (i+95)%96, (i+1)%96
+		if !present[left] || !present[right] {
+			return nil, fmt.Errorf("%w: adjacent missing buckets near %02d:%02d", ErrIncomplete, i/4, i%4*15)
+		}
+		res[i] = (res[left] + res[right]) / 2
+	}
+	return &res, nil
 }

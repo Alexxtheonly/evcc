@@ -14,7 +14,8 @@ import (
 // the applied mode, is what makes that gap auditable after the fact instead
 // of merely asserted in the moment.
 type controlSlot struct {
-	Timestamp int64 `gorm:"column:ts;uniqueIndex"` // 15min slot boundary
+	OptimizerSnapshotID *uint64 `gorm:"column:optimizer_snapshot_id;index"`
+	Timestamp           int64   `gorm:"column:ts;uniqueIndex"` // 15min slot boundary
 
 	// AppliedMode is site.appliedBatteryMode() as observed shortly after the
 	// slot began (the first control-loop tick to cross the boundary) - a
