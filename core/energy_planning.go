@@ -159,11 +159,8 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 		}
 	}
 	firstEnd := details.Timestamps[0].Add(time.Duration(req.TimeSeries.Dt[0]) * time.Second)
-	if !firstEnd.After(time.Now()) {
-		return errors.New("optimizer schedule expired before completion")
-	}
-	if !reflect.DeepEqual(cfg, site.GetEnergyIntelligenceSettings()) {
-		return errors.New("energy settings changed while optimizing; waiting for a fresh plan")
+	if err := validateEnergyPlanInputs(firstEnd, time.Now(), cfg, site.GetEnergyIntelligenceSettings()); err != nil {
+		return err
 	}
 	if err := site.validateEnergyDevices(details); err != nil {
 		return err
@@ -179,22 +176,32 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 	return nil
 }
 
+func validateEnergyPlanInputs(firstEnd, now time.Time, planned, current EnergyIntelligenceSettings) error {
+	if !firstEnd.After(now) {
+		return fmt.Errorf("optimizer schedule expired before completion: %w", errOptimizerReplan)
+	}
+	if !reflect.DeepEqual(planned, current) {
+		return fmt.Errorf("energy settings changed while optimizing; waiting for a fresh plan: %w", errOptimizerReplan)
+	}
+	return nil
+}
+
 func (site *Site) validateEnergyDevices(details requestDetails) error {
 	for _, detail := range details.BatteryDetails {
 		if detail.loadpoint == nil || detail.Type != batteryTypeVehicle {
 			continue
 		}
 		id := *detail.loadpoint
-		if id < 0 || id >= len(site.loadpoints) {
-			return errors.New("optimizer loadpoint disappeared")
+		if id < 0 || id >= len(site.loadpoints) || site.loadpoints[id] == nil {
+			return fmt.Errorf("optimizer loadpoint disappeared: %w", errOptimizerReplan)
 		}
 		lp := site.loadpoints[id]
 		if lp.GetStatus() != api.StatusB && lp.GetStatus() != api.StatusC {
-			return errors.New("vehicle disconnected while optimizing")
+			return fmt.Errorf("vehicle disconnected while optimizing: %w", errOptimizerReplan)
 		}
 		for _, v := range site.Vehicles().Settings() {
 			if v.Name() == detail.Name && v.Instance() != lp.GetVehicle() {
-				return errors.New("vehicle assignment changed while optimizing")
+				return fmt.Errorf("vehicle assignment changed while optimizing: %w", errOptimizerReplan)
 			}
 		}
 	}

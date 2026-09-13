@@ -781,8 +781,8 @@ type optimizerHealthPublish struct {
 // is a no-op - Updated does not advance and nothing is published, mirroring
 // publishOptimizerHealthGate. For every other reason the call always publishes
 // and Updated always advances to now. Called from optimizerUpdateAsync's
-// deferred handler for every outcome except errOptimizerNotReady, which leaves
-// the previous status in place for a silent retry on the next cycle.
+// deferred handler except measurement-startup errOptimizerNotReady. A changed-
+// inputs errOptimizerReplan also publishes the transient refusal and clears advice.
 func (site *Site) publishOptimizerHealth(ok bool, reason optimizerHealthReason) bool {
 	site.Lock()
 	changed := site.optimizerHealthOk != ok || site.optimizerHealthReason != reason
@@ -1071,9 +1071,12 @@ func optimizerURI() string {
 
 const slotsPerHour = float64(time.Hour / tariff.SlotDuration)
 
-// errOptimizerNotReady means battery measurements aren't available yet (e.g. at
-// startup); the slot gate is left open so the next cycle retries.
+// errOptimizerNotReady leaves the slot gate open for a retry next cycle.
+// Missing startup measurements retry silently; errOptimizerReplan clears advice.
 var errOptimizerNotReady = errors.New("battery measurements not ready")
+
+// errOptimizerReplan retries next cycle but also invalidates superseded advice.
+var errOptimizerReplan = fmt.Errorf("%w: planning inputs changed", errOptimizerNotReady)
 
 // errOptimizerNotConfigured means there is no battery, vehicle or loadpoint
 // for the optimizer to act on - a legitimate idle state, not a failure.
@@ -1119,40 +1122,52 @@ func (site *Site) optimizerUpdateAsync(force bool) {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic %v", r)
 		}
-
-		// not ready yet: keep the gate open for an immediate retry next cycle
-		if errors.Is(err, errOptimizerNotReady) {
-			return
-		}
-
-		site.optimizerUpdated = time.Now()
-
-		switch {
-		case err == nil:
-			site.publishOptimizerHealth(true, optimizerHealthReasonNone)
-		case errors.Is(err, errOptimizerNotConfigured):
-			// only clear on the transition into "not configured" - repeat runs
-			// while nothing is configured must not keep re-clearing and
-			// re-publishing suggestions/battery/mode that are already cleared
-			if site.publishOptimizerHealth(false, optimizerHealthReasonNotConfigured) {
-				site.clearSuggestions()
-			}
-		default:
-			site.log.ERROR.Println("optimizer:", err)
-
-			// stale advice must not linger
-			site.clearSuggestions()
-
-			reason := optimizerHealthReasonError
-			if errors.Is(err, errOptimizerNoTariff) {
-				reason = optimizerHealthReasonNoTariff
-			}
-			site.publishOptimizerHealth(false, reason)
-		}
-		site.publishEnergyInsights(err)
+		site.finishOptimizerAttempt(err)
 	}()
 
 	err = site.optimizerUpdate(site.state().battery.Devices)
+}
+
+func (site *Site) finishOptimizerAttempt(err error) {
+	replan := errors.Is(err, errOptimizerReplan)
+	if errors.Is(err, errOptimizerNotReady) && !replan {
+		return
+	}
+
+	if replan {
+		// The normal control cycle retries; never self-launch another solve.
+		site.optimizerUpdated = time.Time{}
+	} else {
+		site.optimizerUpdated = time.Now()
+	}
+
+	switch {
+	case err == nil:
+		site.publishOptimizerHealth(true, optimizerHealthReasonNone)
+	case errors.Is(err, errOptimizerNotConfigured):
+		// only clear on the transition into "not configured" - repeat runs
+		// while nothing is configured must not keep re-clearing and
+		// re-publishing suggestions/battery/mode that are already cleared
+		if site.publishOptimizerHealth(false, optimizerHealthReasonNotConfigured) {
+			site.clearSuggestions()
+		}
+	default:
+		if replan {
+			site.log.DEBUG.Println("optimizer:", err)
+		} else {
+			site.log.ERROR.Println("optimizer:", err)
+		}
+
+		// stale advice must not linger
+		site.clearSuggestions()
+
+		reason := optimizerHealthReasonError
+		if errors.Is(err, errOptimizerNoTariff) {
+			reason = optimizerHealthReasonNoTariff
+		}
+		site.publishOptimizerHealth(false, reason)
+	}
+	site.publishEnergyInsights(err)
 }
 
 // optimizerRequest assembles the optimizer request and the matching device
