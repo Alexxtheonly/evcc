@@ -168,6 +168,8 @@ type Site struct {
 	energySnapshotID           *uint64
 	energySnapshotSlot         time.Time
 	energySnapshotAction       string
+	energySnapshotAssumptions  string
+	energyUnpricedSlot         time.Time
 	energyEfficiencyUpdated    time.Time
 	energyEfficiencyRefresh    bool
 	energyEfficiencyCandidates []metrics.BatteryEfficiencyCandidate

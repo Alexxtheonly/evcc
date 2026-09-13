@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evcc-io/evcc/core/types"
 	"github.com/evcc-io/evcc/util/request"
 	"github.com/evcc-io/evcc/util/sponsor"
 	optimizer "github.com/evcc-io/optimizer/client"
@@ -31,6 +32,8 @@ type energyRequest struct {
 	optimizer.OptimizationInput
 	Batteries []energyBattery `json:"batteries"`
 }
+
+var errEnergyInfeasible = errors.New("energy schedule infeasible")
 
 func (req energyRequest) ordinary() optimizer.OptimizationInput {
 	res := req.OptimizationInput
@@ -94,6 +97,9 @@ func (site *Site) solveEnergy(ctx context.Context, req energyRequest) (optimizer
 		return optimizer.OptimizationResult{}, err
 	}
 	if resp.StatusCode() != http.StatusOK {
+		if resp.StatusCode() == http.StatusUnprocessableEntity {
+			return optimizer.OptimizationResult{}, fmt.Errorf("%w: %v", errEnergyInfeasible, apiError(resp))
+		}
 		return optimizer.OptimizationResult{}, apiError(resp)
 	}
 	if resp.JSON200 == nil {
@@ -128,6 +134,9 @@ func validateEnergyResult(req energyRequest, res optimizer.OptimizationResult) e
 	if !valid(res.GridImport) || !valid(res.GridExport) {
 		return errors.New("optimizer returned invalid grid energy")
 	}
+	if len(res.GridImportOvershoot) != 0 && !valid(res.GridImportOvershoot) {
+		return errors.New("optimizer returned invalid import overshoot")
+	}
 	for i, b := range res.Batteries {
 		if !valid(b.ChargingPower) || !valid(b.DischargingPower) || !valid(b.StateOfCharge) {
 			return errors.New("optimizer returned invalid battery energy")
@@ -138,7 +147,7 @@ func validateEnergyResult(req energyRequest, res optimizer.OptimizationResult) e
 		}
 		for t, goal := range cfg.SGoal {
 			if goal > 0 && b.StateOfCharge[t]+1 < goal {
-				return fmt.Errorf("optimizer cannot meet battery %d departure goal", i)
+				return fmt.Errorf("%w: battery %d departure goal", errEnergyInfeasible, i)
 			}
 		}
 		for j, available := range cfg.Availability {
@@ -153,11 +162,28 @@ func validateEnergyResult(req energyRequest, res optimizer.OptimizationResult) e
 	return nil
 }
 
+func energyGridImport(req optimizer.OptimizationInput, res optimizer.OptimizationResult, t int) float32 {
+	imp := res.GridImport[t]
+	if (req.Grid.PMaxImp == 0 || req.Grid.PrcPExcImp == 0) && t < len(res.GridImportOvershoot) {
+		imp += res.GridImportOvershoot[t]
+	}
+	return imp
+}
+
 func energyCost(req energyRequest, res optimizer.OptimizationResult) float64 {
 	var cost float64
-	for t, imp := range res.GridImport {
+	demandRate := req.Grid.PMaxImp != 0 && req.Grid.PrcPExcImp != 0
+	var peakOvershoot float64
+	for t := range res.GridImport {
+		imp := energyGridImport(req.OptimizationInput, res, t)
+		if t < len(res.GridImportOvershoot) {
+			if demandRate && t < len(req.TimeSeries.Dt) && req.TimeSeries.Dt[t] > 0 {
+				peakOvershoot = max(peakOvershoot, float64(res.GridImportOvershoot[t])*3600/float64(req.TimeSeries.Dt[t]))
+			}
+		}
 		cost += float64(imp*req.TimeSeries.PN[t] - res.GridExport[t]*req.TimeSeries.PE[t])
 	}
+	cost += peakOvershoot * float64(req.Grid.PrcPExcImp)
 	for i, b := range res.Batteries {
 		cfg := req.Batteries[i]
 		etaD := float64(req.EtaD)
@@ -184,6 +210,85 @@ func fixedFirstAction(req energyRequest, res optimizer.OptimizationResult) energ
 	return req
 }
 
+type energyFirstAction struct {
+	name    string
+	request energyRequest
+}
+
+func executableFirstActions(req energyRequest, details requestDetails, base optimizer.OptimizationResult) ([]energyFirstAction, error) {
+	if len(req.TimeSeries.Dt) == 0 || len(details.BatteryDetails) != len(req.Batteries) {
+		return nil, errors.New("executable actions require complete device details")
+	}
+	index := -1
+	net := float64(req.TimeSeries.Gt[0] - req.TimeSeries.Ft[0])
+	hours := float64(req.TimeSeries.Dt[0]) / 3600
+	for i, detail := range details.BatteryDetails {
+		if detail.Type == batteryTypeBattery {
+			if index >= 0 {
+				return nil, errors.New("robust dispatch requires one home battery: shared inverter allocation is unknown")
+			}
+			index = i
+			continue
+		}
+		charge := float64(base.Batteries[i].ChargingPower[0])
+		// Full power and stop have a stable EV command. A partial command can
+		// instead invoke PV tracking, phase switching or minimum-current gates.
+		if charge > .1 && charge < float64(req.Batteries[i].CMax)*hours-.1 {
+			return nil, errors.New("robust dispatch cannot fix a partial EV first action: PV tracking and current gates remain authoritative")
+		}
+		net += charge - float64(base.Batteries[i].DischargingPower[0])
+	}
+	if index < 0 {
+		return nil, errors.New("robust battery-mode evaluation requires a home battery")
+	}
+	bat := req.Batteries[index]
+	etaC, etaD := float64(req.EtaC), float64(req.EtaD)
+	if bat.EtaC != nil {
+		etaC = *bat.EtaC
+	}
+	if bat.EtaD != nil {
+		etaD = *bat.EtaD
+	}
+	chargeMax := max(0, min(float64(bat.CMax)*hours, float64(bat.SMax-bat.SInitial)/etaC))
+	capacity := max(bat.SCapacity, bat.SMax)
+	solarChargeMax := max(0, min(float64(bat.CMax)*hours, float64(capacity-bat.SInitial)/etaC))
+	dischargeMax := max(0, min(float64(bat.DMax)*hours, float64(bat.SInitial-bat.SMin)*etaD))
+	var actions []energyFirstAction
+	for _, mode := range []string{"normal", "hold", "holdcharge", "charge"} {
+		charge, discharge := 0.0, 0.0
+		if mode != "holdcharge" {
+			charge = min(max(0, -net), solarChargeMax)
+		}
+		if mode == "normal" || mode == "holdcharge" {
+			discharge = min(max(0, net), dischargeMax)
+		}
+		if mode == "charge" {
+			if !bat.ChargeFromGrid || chargeMax == 0 {
+				continue
+			}
+			charge = chargeMax
+		}
+		// SMax is the grid-charge ceiling. Normal PV charging can go to
+		// physical capacity; omit a mode the current solver cannot represent
+		// rather than pretending the inverter stops harvesting at that ceiling.
+		if charge > chargeMax+.1 {
+			continue
+		}
+		duplicate := false
+		for _, action := range actions {
+			prior := action.request.Batteries[index]
+			duplicate = duplicate || (math.Abs(*prior.FirstStepCharge-charge) < .1 && math.Abs(*prior.FirstStepDischarge-discharge) < .1)
+		}
+		if duplicate {
+			continue
+		}
+		fixed := fixedFirstAction(req, base)
+		fixed.Batteries[index].FirstStepCharge, fixed.Batteries[index].FirstStepDischarge = &charge, &discharge
+		actions = append(actions, energyFirstAction{mode, fixed})
+	}
+	return actions, nil
+}
+
 func scenarioRequest(base energyRequest, forecast []energyForecastSlot, highDemand bool) energyRequest {
 	res := base
 	res.TimeSeries.Gt, res.TimeSeries.Ft = slices.Clone(base.TimeSeries.Gt), slices.Clone(base.TimeSeries.Ft)
@@ -201,41 +306,61 @@ func scenarioRequest(base energyRequest, forecast []energyForecastSlot, highDema
 	return res
 }
 
-// robustEnergy evaluates at most three joint first actions in three futures (nine solves total).
+// robustEnergy evaluates at most three distinct executable mode vectors in three
+// futures (nine constrained solves, plus the initial unconstrained EV plan).
 func (site *Site) robustEnergy(ctx context.Context, req energyRequest, details requestDetails, base optimizer.OptimizationResult) (optimizer.OptimizationResult, *energyScenarios, error) {
 	requests := []energyRequest{req, scenarioRequest(req, site.energyInsights.Forecast, true), scenarioRequest(req, site.energyInsights.Forecast, false)}
-	results := []optimizer.OptimizationResult{base, {}, {}}
-	for i := 1; i < len(results); i++ {
-		res, err := site.solveEnergy(ctx, requests[i])
-		if err != nil {
-			return base, nil, fmt.Errorf("scenario envelope: %w", err)
-		}
-		results[i] = res
+	actions, err := executableFirstActions(req, details, base)
+	if err != nil {
+		return base, nil, err
 	}
-	costs := make([][]float64, len(results))
-	paths := make([][]optimizer.OptimizationResult, len(results))
-	for candidate := range results {
-		costs[candidate], paths[candidate] = make([]float64, 3), make([]optimizer.OptimizationResult, 3)
+	var costs [][]float64
+	var paths [][]optimizer.OptimizationResult
+	var names []string
+	for _, action := range actions {
+		row, path := make([]float64, 3), make([]optimizer.OptimizationResult, 3)
+		feasible := true
 		for scenario := range requests {
-			res := results[scenario]
-			fixed := fixedFirstAction(requests[scenario], results[candidate])
-			if scenario != candidate {
-				var err error
-				res, err = site.solveEnergy(ctx, fixed)
-				if err != nil {
-					return base, nil, fmt.Errorf("common first action %d, scenario %d: %w", candidate, scenario, err)
+			fixed := requests[scenario]
+			fixed.Batteries = action.request.Batteries
+			res, err := site.solveEnergy(ctx, fixed)
+			if err != nil {
+				if !errors.Is(err, errEnergyInfeasible) {
+					return base, nil, err
 				}
+				feasible = false
+				break // e.g. hold cannot meet an immediate explicit goal
 			}
-			costs[candidate][scenario] = energyCost(fixed, res)
-			paths[candidate][scenario] = res
+			// Reject mode translations that cannot execute this vector.
+			suggestions := make(map[string]types.Suggestion)
+			for i, detail := range details.BatteryDetails {
+				if detail.Type != batteryTypeBattery {
+					continue
+				}
+				s := currentSlotSuggestion(detail, fixed.Batteries[i].BatteryConfig, res.Batteries[i], energyGridImport(fixed.OptimizationInput, res, 0), res.GridExport[0], float64(fixed.TimeSeries.Dt[0])/3600)
+				if s.Action != action.name {
+					feasible = false
+				}
+				suggestions[detail.key()] = s
+			}
+			if scenario == 0 && batteryModeCandidate(suggestions, fixed.ordinary(), res, details.BatteryDetails).vetoReason != vetoReasonNone {
+				feasible = false
+			}
+			if !feasible {
+				break
+			}
+			row[scenario] = energyCost(fixed, res)
+			path[scenario] = res
+		}
+		if feasible {
+			costs, paths, names = append(costs, row), append(paths, path), append(names, action.name)
 		}
 	}
 	selected := minimaxRegret(costs)
 	if selected < 0 {
 		return base, nil, errors.New("scenario costs unavailable")
 	}
-	names := []string{"base", "highDemandLowSolar", "lowDemandHighSolar"}
-	info := &energyScenarios{Status: "evaluated", Selected: names[selected]}
+	info := &energyScenarios{Status: "evaluated", Selected: names[selected], Reason: "Executable battery modes at current modeled net demand; EV full-power/stop commands held fixed. Forecast changes and hardware safety gates remain authoritative."}
 	for i, row := range costs {
 		info.Evaluations = append(info.Evaluations, energyScenarioEvaluation{Action: names[i], Costs: row})
 	}

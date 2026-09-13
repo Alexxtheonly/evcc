@@ -162,17 +162,23 @@ type energyScenarios struct {
 }
 
 type optimizerInsights struct {
-	Updated    time.Time                  `json:"updated"`
-	Automatic  bool                       `json:"automatic"`
-	Status     string                     `json:"status"`
-	Reason     string                     `json:"reason,omitempty"`
-	Settings   EnergyIntelligenceSettings `json:"settings"`
-	Profile    *metrics.ProfileQuality    `json:"profile,omitempty"`
-	Forecast   []energyForecastSlot       `json:"forecast,omitempty"`
-	Devices    []energyDevice             `json:"devices,omitempty"`
-	Economics  []energyEconomics          `json:"economics,omitempty"`
-	Scenarios  *energyScenarios           `json:"scenarios,omitempty"`
-	SnapshotID *uint64                    `json:"snapshotId,omitempty"`
+	ArrivalNotes []energyArrivalNote        `json:"arrivalNotes,omitempty"`
+	Updated      time.Time                  `json:"updated"`
+	Automatic    bool                       `json:"automatic"`
+	Status       string                     `json:"status"`
+	Reason       string                     `json:"reason,omitempty"`
+	Settings     EnergyIntelligenceSettings `json:"settings"`
+	Profile      *metrics.ProfileQuality    `json:"profile,omitempty"`
+	Forecast     []energyForecastSlot       `json:"forecast,omitempty"`
+	Devices      []energyDevice             `json:"devices,omitempty"`
+	Economics    []energyEconomics          `json:"economics,omitempty"`
+	Scenarios    *energyScenarios           `json:"scenarios,omitempty"`
+	SnapshotID   *uint64                    `json:"snapshotId,omitempty"`
+}
+
+type energyArrivalNote struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 func (site *Site) publishEnergyInsights(err error) {

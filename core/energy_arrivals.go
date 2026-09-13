@@ -12,6 +12,23 @@ import (
 	optimizer "github.com/evcc-io/optimizer/client"
 )
 
+type energyChargerReservation struct {
+	charger  string
+	from, to time.Time
+}
+
+func chargerWindowAvailable(reserved []energyChargerReservation, charger string, from, to time.Time) bool {
+	if charger == "" || !to.After(from) {
+		return false
+	}
+	for _, existing := range reserved {
+		if existing.charger == charger && from.Before(existing.to) && to.After(existing.from) {
+			return false
+		}
+	}
+	return true
+}
+
 func expectedPlanGoal(v vehicle.API, after, horizon time.Time) (time.Time, int) {
 	if at, soc := v.GetPlanSoc(); at.After(time.Now()) && soc > 0 {
 		return at, soc
@@ -76,6 +93,13 @@ func (site *Site) addExpectedVehicles(req *energyRequest, details *requestDetail
 	stamp := time.Now()
 	last := len(details.Timestamps) - 1
 	horizon := details.Timestamps[last].Add(time.Duration(req.TimeSeries.Dt[last]) * time.Second)
+	var reserved []energyChargerReservation
+	for _, lp := range site.Loadpoints() {
+		if lp.GetStatus() == api.StatusB || lp.GetStatus() == api.StatusC {
+			// A charging deadline is not evidence that the cable will be removed.
+			reserved = append(reserved, energyChargerReservation{lp.GetTitle(), stamp, horizon})
+		}
+	}
 	for _, v := range site.Vehicles().Settings() {
 		if !v.GetAdaptivePlanLearning() || v.Instance() == nil || v.GetMode() == api.ModeOff {
 			continue
@@ -115,10 +139,16 @@ func (site *Site) addExpectedVehicles(req *energyRequest, details *requestDetail
 			continue
 		}
 		var minPower, maxPower float64
+		matches := 0
 		for _, lp := range site.Loadpoints() {
 			if lp.GetTitle() == lastSession.Loadpoint {
+				matches++
 				minPower, maxPower = lp.EffectiveMinPower(), lp.EffectiveMaxPower()
 			}
+		}
+		if matches != 1 || !chargerWindowAvailable(reserved, lastSession.Loadpoint, arrival.Time, departure) {
+			site.energyInsights.ArrivalNotes = append(site.energyInsights.ArrivalNotes, energyArrivalNote{Name: v.Name(), Reason: "Expected vehicle omitted: historical charger is missing, ambiguous, connected, or reserved by an overlapping expected session."})
+			continue
 		}
 		bat, ok := expectedVehicleBattery(instance.Capacity(), arrival.Soc, minPower, maxPower, goal, arrival.Time, departure, details.Timestamps, req.TimeSeries.Dt)
 		if !ok {
@@ -128,6 +158,7 @@ func (site *Site) addExpectedVehicles(req *energyRequest, details *requestDetail
 			return fmt.Errorf("expected vehicles exceed optimizer battery limit")
 		}
 		req.Batteries = append(req.Batteries, bat)
+		reserved = append(reserved, energyChargerReservation{lastSession.Loadpoint, arrival.Time, departure})
 		details.BatteryDetails = append(details.BatteryDetails, batteryDetail{Type: batteryTypeVehicle, Name: v.Name(), Title: instance.GetTitle(), Capacity: instance.Capacity(), arrival: &arrival.Time, departure: &departure})
 	}
 	return nil

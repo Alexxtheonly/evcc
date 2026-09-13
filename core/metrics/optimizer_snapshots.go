@@ -25,16 +25,17 @@ type OptimizerSnapshot struct {
 
 // SnapshotBatteryEconomics describes the assumptions used for one stable device identity.
 type SnapshotBatteryEconomics struct {
-	MeasurementPlane string   `json:"measurementPlane,omitempty"`
-	Name             string   `json:"name"`
-	CapacityKWh      float64  `json:"capacityKWh"`
-	EtaC             float64  `json:"etaC"`
-	EtaD             float64  `json:"etaD"`
-	FloorFrac        float64  `json:"floorFrac"`
-	MaxChargeKWh     float64  `json:"maxChargeKWh"`
-	MaxDischargeKWh  float64  `json:"maxDischargeKWh"`
-	WearPerKWh       *float64 `json:"wearPerKWh,omitempty"`
-	Source           string   `json:"source"`
+	ChargeCeilingFrac *float64 `json:"chargeCeilingFrac,omitempty"`
+	MeasurementPlane  string   `json:"measurementPlane,omitempty"`
+	Name              string   `json:"name"`
+	CapacityKWh       float64  `json:"capacityKWh"`
+	EtaC              float64  `json:"etaC"`
+	EtaD              float64  `json:"etaD"`
+	FloorFrac         float64  `json:"floorFrac"`
+	MaxChargeKWh      float64  `json:"maxChargeKWh"`
+	MaxDischargeKWh   float64  `json:"maxDischargeKWh"`
+	WearPerKWh        *float64 `json:"wearPerKWh,omitempty"`
+	Source            string   `json:"source"`
 }
 
 // SaveOptimizerSnapshot bounds payload size and retention without rewriting prior runs.
@@ -97,6 +98,12 @@ func GetOptimizerSnapshot(id uint64) (*OptimizerSnapshot, error) {
 // BindControlSlotSnapshot links only the slot's first observed decision.
 func BindControlSlotSnapshot(ts time.Time, id uint64) error {
 	return bindSnapshot(new(controlSlot), ts, id)
+}
+
+// InvalidateControlSlotSnapshot refuses a whole-slot replay when its planning
+// assumptions changed mid-slot. Keep the original audit link, never reprice it.
+func InvalidateControlSlotSnapshot(ts time.Time) error {
+	return db.Instance.Model(new(controlSlot)).Where("ts = ?", ts.Unix()).Update("snapshot_unavailable", true).Error
 }
 
 // BindOptimizerRunSnapshot links an archived diagnostic run to its frozen inputs.

@@ -230,16 +230,12 @@ func (site *Site) archiveEnergyRun(req energyRequest, details requestDetails, re
 	slot := stamp.Truncate(tariff.SlotDuration)
 	var action string
 	for i, detail := range details.BatteryDetails {
-		s := currentSlotSuggestion(detail, req.Batteries[i].BatteryConfig, res.Batteries[i], res.GridImport[0], res.GridExport[0], float64(req.TimeSeries.Dt[0])/3600)
+		s := currentSlotSuggestion(detail, req.Batteries[i].BatteryConfig, res.Batteries[i], energyGridImport(req.OptimizationInput, res, 0), res.GridExport[0], float64(req.TimeSeries.Dt[0])/3600)
 		action += detail.Name + ":" + s.Action + ";"
 	}
 	site.RLock()
 	previousSnapshot := site.energySnapshotID
 	site.RUnlock()
-	if previousSnapshot != nil && slot.Equal(site.energySnapshotSlot) && action == site.energySnapshotAction {
-		site.energyInsights.SnapshotID = previousSnapshot
-		return nil
-	}
 	var batteries []metrics.SnapshotBatteryEconomics
 	for i, detail := range details.BatteryDetails {
 		if detail.Type != batteryTypeBattery {
@@ -247,11 +243,13 @@ func (site *Site) archiveEnergyRun(req energyRequest, details requestDetails, re
 		}
 		b := req.Batteries[i]
 		floor := 0.0
+		ceiling := 1.0
 		if detail.Capacity > 0 {
 			floor = float64(b.SMin) / (detail.Capacity * 1000)
+			ceiling = float64(b.SMax) / (detail.Capacity * 1000)
 		}
 		batteries = append(batteries, metrics.SnapshotBatteryEconomics{Name: detail.Name, CapacityKWh: detail.Capacity,
-			EtaC: detail.etaC, EtaD: detail.etaD, FloorFrac: floor,
+			EtaC: detail.etaC, EtaD: detail.etaD, FloorFrac: floor, ChargeCeilingFrac: &ceiling,
 			MaxChargeKWh: float64(b.CMax) / 4000, MaxDischargeKWh: float64(b.DMax) / 4000,
 			WearPerKWh: detail.wearPerKWh, Source: "decision_snapshot", MeasurementPlane: site.energyInsights.Settings.BatteryEnergyPlane[detail.Name]})
 	}
@@ -265,6 +263,37 @@ func (site *Site) archiveEnergyRun(req energyRequest, details requestDetails, re
 			return fmt.Errorf("optimizer snapshot: %w", err)
 		}
 		encoded[i] = value
+	}
+	// Freeze material configuration/goals, but not inventory, forecasts or the
+	// shrinking current interval: those routinely change on every control tick.
+	identityReq := req
+	identityReq.Batteries = append([]energyBattery(nil), req.Batteries...)
+	identityReq.TimeSeries = optimizer.TimeSeries{}
+	var identities []any
+	for i := range identityReq.Batteries {
+		identityReq.Batteries[i].SInitial = 0
+		identityReq.Batteries[i].PDemand = nil
+		identityReq.Batteries[i].FirstStepCharge = nil
+		identityReq.Batteries[i].FirstStepDischarge = nil
+		d := details.BatteryDetails[i]
+		identities = append(identities, []any{d.Type, d.Name, d.loadpoint, d.controllable, d.arrival, d.departure})
+	}
+	identity, err := json.Marshal([]any{identityReq, identities, encoded[2], site.energyInsights.Settings})
+	if err != nil {
+		return err
+	}
+	changed := site.energySnapshotAssumptions != "" && slot.Equal(site.energySnapshotSlot) && string(identity) != site.energySnapshotAssumptions
+	if previousSnapshot != nil && slot.Equal(site.energySnapshotSlot) && action == site.energySnapshotAction && !changed {
+		site.energyInsights.SnapshotID = previousSnapshot
+		return nil
+	}
+	if changed {
+		site.Lock()
+		site.energyUnpricedSlot = slot
+		site.Unlock()
+		if err := metrics.InvalidateControlSlotSnapshot(slot); err != nil {
+			return err
+		}
 	}
 	version := util.Version
 	if version == "" {
@@ -280,6 +309,7 @@ func (site *Site) archiveEnergyRun(req energyRequest, details requestDetails, re
 	site.Unlock()
 	site.energyInsights.SnapshotID = &id
 	site.energySnapshotSlot, site.energySnapshotAction = slot, action
+	site.energySnapshotAssumptions = string(identity)
 	return metrics.BindOptimizerRunSnapshot(slot, id)
 }
 

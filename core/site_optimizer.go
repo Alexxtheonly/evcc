@@ -710,6 +710,7 @@ func (site *Site) persistControlSlot() {
 	healthOk := site.optimizerHealthOk
 	price := site.optimizerChargePrice
 	snapshot := site.energySnapshotID
+	unpriced := slot.Equal(site.energyUnpricedSlot)
 	site.RUnlock()
 
 	// price only means something alongside an actually accepted charge
@@ -738,7 +739,11 @@ func (site *Site) persistControlSlot() {
 		site.log.ERROR.Printf("persist control slot: %v", err)
 		return
 	}
-	if snapshot != nil && healthOk && sm != nil {
+	if unpriced {
+		if err := metrics.InvalidateControlSlotSnapshot(slot); err != nil {
+			site.log.ERROR.Printf("invalidate control snapshot: %v", err)
+		}
+	} else if snapshot != nil && healthOk && sm != nil {
 		if err := metrics.BindControlSlotSnapshot(slot, *snapshot); err != nil {
 			site.log.ERROR.Printf("link control snapshot: %v", err)
 		}
@@ -1401,7 +1406,7 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 	slotHours := (time.Duration(req.TimeSeries.Dt[0]) * time.Second).Hours()
 	var gridImport, gridExport float32
 	if len(res.GridImport) > 0 {
-		gridImport = res.GridImport[0]
+		gridImport = energyGridImport(req, res, 0)
 	}
 	if len(res.GridExport) > 0 {
 		gridExport = res.GridExport[0]

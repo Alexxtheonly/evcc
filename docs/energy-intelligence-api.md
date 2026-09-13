@@ -45,13 +45,20 @@ The state/WebSocket key `optimizerInsights` contains:
   `expectedVehicle`), `capacityKWh`, `initialSoc`, optional `arrival`, `departure`,
   and `plan` slots (`start`, `chargeWh`, `dischargeWh`, `soc`). Expected vehicles
   never receive a live control suggestion.
+- `arrivalNotes`: optional array of `name`, `reason` explaining omitted expected
+  vehicles when their historical charger is occupied, ambiguous or already reserved.
 - `economics`: one row per battery with `name`, `chargeEfficiency`,
   `dischargeEfficiency`, `source`, optional `candidateChargeEfficiency`,
   `candidateDischargeEfficiency`, `wearPerKWh`.
   `calibrationReason` and `measurementPlane` explain unsupported candidates.
 - `scenarios`: optional `status`, `reason`, `selected`, `evaluations`,
   `costLow`, `costHigh`, `batterySocLow`, `batterySocHigh`. Evaluations compare
-  the same first battery action across three empirical forecast scenarios.
+  the same executable first battery mode across three empirical forecast scenarios.
+  `selected`/evaluation `action` are `normal`, `hold`, `holdcharge`, or `charge`.
+  At most three distinct mode vectors require nine constrained solves plus one
+  initial EV plan. First-slot partial EV setpoints and multiple home batteries
+  with unknown physical dispatch allocation are explicitly unsupported. Full-power
+  or stopped EV commands are held fixed; physical gates remain authoritative.
 - `snapshotId`: optional identifier of the frozen request/result record.
 
 Missing optional values are omitted or null, never fabricated zeros. Forecast
