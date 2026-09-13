@@ -283,12 +283,12 @@ func TestSimulateSlotStepModes(t *testing.T) {
 	// prices. The AC-side charge/discharge energy is not returned by design - it is
 	// the SoC delta over EtaC / EtaD, so asserting it separately restated the SoC
 	// assertion already in the same subtest.
-	t.Run("hold never moves energy", func(t *testing.T) {
+	t.Run("hold permits surplus charging", func(t *testing.T) {
 		soc, flow, ok := simulateSlotStep(batteryModeHold, 2, 5, 5, phys)
 		require.True(t, ok)
-		require.InDelta(t, 5, soc, 1e-9) // unchanged: neither charged nor discharged
+		require.InDelta(t, 7.7, soc, 1e-9)
 		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
-		require.InDelta(t, 3, flow.ExportKWh, 1e-9) // 5-2 surplus goes straight to export
+		require.InDelta(t, 0, flow.ExportKWh, 1e-9)
 	})
 
 	t.Run("normal charges from surplus only", func(t *testing.T) {
@@ -325,18 +325,15 @@ func TestSimulateSlotStepModes(t *testing.T) {
 		soc, flow, ok := simulateSlotStep(batteryModeHoldCharge, 1, 0, 0, phys)
 		require.True(t, ok)
 		require.InDelta(t, 1, flow.ImportKWh, 1e-9) // the deficit is bought, nothing more
-		require.InDelta(t, 0, soc, 1e-9)            // no surplus to absorb, and it never discharges
+		require.InDelta(t, 0, soc, 1e-9)            // empty battery cannot cover the deficit
 	})
 
-	// the subtest above runs holdcharge with pv=0, so its charge half never executes -
-	// stubbing out the SoC update left the whole package green. holdcharge is the mode
-	// the optimizer actuates, so its absorbing half is pinned here with real surplus.
-	t.Run("holdcharge absorbs surplus without importing", func(t *testing.T) {
+	t.Run("holdcharge exports surplus without charging", func(t *testing.T) {
 		soc, flow, ok := simulateSlotStep(batteryModeHoldCharge, 1, 4, 5, phys)
 		require.True(t, ok)
-		require.InDelta(t, 7.7, soc, 1e-9)          // 3 kWh surplus absorbed at EtaC 0.9
-		require.InDelta(t, 0, flow.ImportKWh, 1e-9) // the surplus-only charge never buys
-		require.InDelta(t, 0, flow.ExportKWh, 1e-9) // and it took all of it
+		require.InDelta(t, 5, soc, 1e-9)
+		require.InDelta(t, 0, flow.ImportKWh, 1e-9)
+		require.InDelta(t, 3, flow.ExportKWh, 1e-9)
 	})
 
 	// an unrecognised mode used to land in the same branch as normal and be priced as

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/server/db"
+	"github.com/evcc-io/evcc/tariff"
 	"gorm.io/gorm"
 )
 
@@ -82,20 +83,43 @@ func decodeSuggestedMode(mode *string) *string {
 	return mode
 }
 
-// DecisionDeltas replays every control_slots row in [from,to). set and phys should
-// come from the same request's ComputeChain/buildLedgerSlots call so the replay uses
-// the identical slot data and battery assumptions the chain was priced with; phys may
-// be nil (no battery, or physics unavailable), in which case every row is still
-// returned but SlotFlowDeltaEUR is always nil.
-func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet, phys *batteryPhysics) ([]DecisionRow, error) {
+// DecisionDeltas returns decisions in [from,to), following completed evidence beyond the view.
+func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet, phys *batteryPhysics, feedInStatic ...*float64) ([]DecisionRow, error) {
+	completedThrough := time.Now().Truncate(tariff.SlotDuration)
+	evidenceEnd := to.Add(48*time.Hour - tariff.SlotDuration)
+	if completedThrough.Before(evidenceEnd) {
+		evidenceEnd = completedThrough
+	}
+	queryEnd := to
+	if evidenceEnd.After(queryEnd) {
+		queryEnd = evidenceEnd
+	}
 	var rows []controlSlot
-	if err := db.Instance.WithContext(ctx).Where("ts >= ? AND ts < ?", from.Unix(), to.Unix()).Order("ts").Find(&rows).Error; err != nil {
+	if err := db.Instance.WithContext(ctx).Where("ts >= ? AND ts < ?", from.Unix(), queryEnd.Unix()).Order("ts").Find(&rows).Error; err != nil {
 		return nil, err
+	}
+	if len(rows) == 0 || rows[0].Timestamp >= to.Unix() {
+		return []DecisionRow{}, nil
 	}
 
 	bySlot := make(map[int64]slotData, len(set.Slots))
 	for _, s := range set.Slots {
-		bySlot[s.Start.Unix()] = s
+		if !s.Start.Add(tariff.SlotDuration).After(completedThrough) {
+			bySlot[s.Start.Unix()] = s
+		}
+	}
+	if len(rows) > 0 && rows[len(rows)-1].Timestamp >= to.Unix() && evidenceEnd.After(to) {
+		var feedIn *float64
+		if len(feedInStatic) > 0 {
+			feedIn = feedInStatic[0]
+		}
+		future, err := buildLedgerSlots(ctx, to, evidenceEnd, true, true, feedIn)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range future.Slots {
+			bySlot[s.Start.Unix()] = s
+		}
 	}
 	snapshots := make(map[uint64]*OptimizerSnapshot)
 	for _, r := range rows {
@@ -113,6 +137,9 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 
 	out := make([]DecisionRow, 0, len(rows))
 	for i, r := range rows {
+		if r.Timestamp >= to.Unix() {
+			break
+		}
 		suggested := decodeSuggestedMode(r.SuggestedMode)
 		p, source, valid := batteryPhysics{}, "battery_physics_unavailable", false
 		if phys != nil {
@@ -172,7 +199,7 @@ func DecisionDeltas(ctx context.Context, from, to time.Time, set *ledgerSlotSet,
 
 		if suggested != nil && effectiveMode(r.AppliedMode) != effectiveMode(*suggested) {
 			if valid {
-				dr.Outcome = replayOutcome(i, rows, bySlot, p, source, to, snapshots)
+				dr.Outcome = replayOutcome(i, rows, bySlot, p, source, evidenceEnd, snapshots)
 			} else {
 				dr.Outcome = &DecisionOutcome{Status: "unpriced", Reason: source, AssumptionsSource: source}
 			}

@@ -49,7 +49,7 @@ type Ledger struct {
 // feedInStatic is the site's currently configured feed-in price, and must be non-nil
 // only when that tariff declares itself time-invariant - see buildLedgerSlots and
 // feedInFallback. The same value goes to every slot-set build below, so the realised
-// figure, the chain and the decision replay always cover the identical slots.
+// figure and chain retain the requested period; decision outcomes may follow later slots.
 func ComputeLedger(ctx context.Context, from, to time.Time, feedInStatic *float64) (*Ledger, error) {
 	realised, err := ComputeRealisedCost(ctx, from, to, feedInStatic)
 	if err != nil {
@@ -83,7 +83,7 @@ func ComputeLedger(ctx context.Context, from, to time.Time, feedInStatic *float6
 		phys = chain.BatteryPhysics
 	}
 
-	decisions, err := DecisionDeltas(ctx, from, to, set, phys)
+	decisions, err := DecisionDeltas(ctx, from, to, set, phys, feedInStatic)
 	if err != nil {
 		return nil, err
 	}

@@ -564,16 +564,13 @@ func batteryHistoryRows(ctx context.Context, ids []int) ([]batteryHistoryRow, er
 // function directly - computeW2 calls simulateNormalStep - so the runtime dispatch,
 // and the ok it has to return, exist only where a mode is really unvalidated input.
 //
-// Mode semantics modeled here (inferred from the mode names and how
-// core/site_battery.go uses them, not re-derived from inverter docs - stated plainly
-// rather than buried, since it is an assumption the euro figures rest on):
-//   - hold: no charge, no discharge.
+// Directional limits match the BatteryController contract and the Fronius model 124 template:
+//   - hold: prevent discharge, permit surplus charging.
 //   - normal: charge from surplus only, discharge to cover a deficit only - the "dumb
 //     rule" W2 is defined as.
 //   - charge: forces a charge from surplus AND, if surplus doesn't fill the
 //     headroom, the grid. Never discharges.
-//   - holdcharge: hold's "never discharge" combined with charge's "still absorb
-//     surplus", but never draws from the grid - the charge half is surplus-only.
+//   - holdcharge: prevent charging, permit discharge to cover a deficit.
 //
 // ok is false when mode is not one of the four modeled above, in which case every
 // other return value is zero and MUST NOT be priced. There is no "close enough"
@@ -591,7 +588,8 @@ func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryP
 
 	switch mode {
 	case batteryModeHold:
-		return socKWh, worldFlow{ImportKWh: deficit, ExportKWh: surplus}, true
+		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
+		return socKWh + chargeAC*phys.EtaC, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, true
 
 	case batteryModeCharge:
 		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC)
@@ -601,9 +599,9 @@ func simulateSlotStep(mode string, homeKWh, pvKWh, socKWh float64, phys batteryP
 		return newSoc, worldFlow{ImportKWh: deficit + fromGrid, ExportKWh: max(0, surplus-fromSurplus)}, true
 
 	case batteryModeHoldCharge:
-		chargeAC := min(phys.MaxChargeKWh, headroomKWh/phys.EtaC, surplus)
-		newSoc := socKWh + chargeAC*phys.EtaC
-		return newSoc, worldFlow{ImportKWh: deficit, ExportKWh: surplus - chargeAC}, true
+		availableKWh := max(0, socKWh-phys.FloorFrac*phys.CapacityKWh)
+		dischargeAC := min(phys.MaxDischargeKWh, availableKWh*phys.EtaD, deficit)
+		return socKWh - dischargeAC/phys.EtaD, worldFlow{ImportKWh: deficit - dischargeAC, ExportKWh: surplus}, true
 
 	case batteryModeNormal:
 		newSoc, flow := simulateNormalStep(homeKWh, pvKWh, socKWh, phys)
