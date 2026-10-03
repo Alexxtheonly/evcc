@@ -46,6 +46,9 @@ func (site *Site) SetBatteryMode(batMode api.BatteryMode) {
 
 	if site.batteryMode != batMode {
 		site.setBatteryMode(batMode)
+		if !site.optimizerBatteryModeUpdated.IsZero() {
+			site.publishOptimizerDecisionLocked()
+		}
 	}
 
 	if site.batteryModeExternal == api.BatteryUnknown {
@@ -165,7 +168,7 @@ func (site *Site) batterySuggestionMode(rate api.Rate) (api.BatteryMode, bool) {
 		return api.BatteryUnknown, false
 	}
 
-	if time.Since(site.optimizerBatteryModeUpdated) > optimizerBatteryModeValidity {
+	if age := site.optimizerTime().Sub(site.optimizerBatteryModeUpdated); !site.optimizerModeFresh(age) {
 		return api.BatteryUnknown, false
 	}
 
@@ -212,9 +215,11 @@ func (site *Site) batteryMaxSocReached(dev config.Device[api.Meter]) (bool, erro
 func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
 	fromToCharge := mode == api.BatteryCharge || mode == api.BatteryUnknown && site.batteryMode == api.BatteryCharge
 
+	site.Lock()
 	if site.batteryModeApplied == nil {
 		site.batteryModeApplied = make(map[string]api.BatteryMode)
 	}
+	site.Unlock()
 
 	for _, dev := range site.batteryMeters {
 		meter := dev.Instance()
@@ -242,7 +247,10 @@ func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
 
 		// don't re-apply the mode the battery is already in
 		name := dev.Config().Name
-		if devMode == api.BatteryUnknown || devMode == site.batteryModeApplied[name] {
+		site.RLock()
+		previous := site.batteryModeApplied[name]
+		site.RUnlock()
+		if devMode == api.BatteryUnknown || devMode == previous {
 			continue
 		}
 
@@ -253,11 +261,32 @@ func (site *Site) applyBatteryMode(mode api.BatteryMode) error {
 			continue
 		}
 
+		site.Lock()
 		site.batteryModeApplied[name] = devMode
+		if !site.optimizerBatteryModeUpdated.IsZero() {
+			site.publishOptimizerDecisionLocked()
+		}
+		site.Unlock()
 		site.log.DEBUG.Printf("set battery %s mode: %s", deviceTitleOrName(dev), devMode)
 	}
 
 	return nil
+}
+
+// batteryAppliedModeLocked returns a consensus of successful device commands, not measured power.
+func (site *Site) batteryAppliedModeLocked() api.BatteryMode {
+	mode := api.BatteryUnknown
+	for _, dev := range site.batteryMeters {
+		if !api.HasCap[api.BatteryController](dev.Instance()) {
+			continue
+		}
+		applied := site.batteryModeApplied[dev.Config().Name]
+		if applied == api.BatteryUnknown || mode != api.BatteryUnknown && mode != applied {
+			return api.BatteryUnknown
+		}
+		mode = applied
+	}
+	return mode
 }
 
 func (site *Site) tariffRates(usage api.TariffUsage) (api.Rates, error) {

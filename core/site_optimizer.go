@@ -295,8 +295,10 @@ func currentSlotSuggestion(detail batteryDetail, cfg optimizer.BatteryConfig, re
 
 	charge := float64(res.ChargingPower[0]) / slotHours
 	discharge := float64(res.DischargingPower[0]) / slotHours
-	gridImporting := gridImport > 0
-	gridExporting := gridExport > 0
+	// Float32 balance residuals must not turn passive self-consumption into an override.
+	const gridDirectionTolerance = 0.01 // W
+	gridImporting := float64(gridImport)/slotHours > gridDirectionTolerance
+	gridExporting := float64(gridExport)/slotHours > gridDirectionTolerance
 
 	s := types.Suggestion{
 		Charge:    charge,
@@ -387,6 +389,7 @@ const (
 
 // optimizerDecision is the vetted outcome of one optimizer run.
 type optimizerDecision struct {
+	economics *energyControlEconomics
 	// mode is the applyable candidate that setOptimizerBatteryMode's state
 	// machine acts on - api.BatteryUnknown when vetoed (vetoReasonPayback) or
 	// batteries disagree (vetoReasonForcedIdle), so a rejected suggestion is
@@ -507,8 +510,9 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 	return optimizerDecision{mode: mode, suggestedMode: mode, price: float64(pn[0]) * 1e3}
 }
 
-// setOptimizerBatteryMode stores the damped battery-mode decision derived
-// from the latest optimizer run. A new active mode (including a switch
+// setOptimizerBatteryMode stores the battery-mode decision from the latest run.
+// Robust results have already applied economic hysteresis. For ordinary results,
+// a new active mode (including a switch
 // between two active modes) only takes effect once two runs at least
 // optimizerBatteryModeConfirmDelay apart agree, so a degenerate LP optimum on
 // a flat price plateau cannot flap the battery every cycle. Reverting to
@@ -533,12 +537,13 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 	defer site.Unlock()
 
 	candidate := d.mode
-	now := time.Now()
+	now := site.optimizerTime()
 
 	apply := func(mode api.BatteryMode) {
 		site.optimizerBatteryMode = mode
 		site.optimizerBatteryModeConfirmedAt = now
 		site.optimizerBatteryModePending = api.BatteryUnknown
+		site.optimizerBatteryModePendingSince = time.Time{}
 		site.optimizerChargePrice = d.price
 	}
 
@@ -546,6 +551,11 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 	site.optimizerChargeVetoed = d.chargeVetoed
 	site.optimizerVetoReason = d.vetoReason
 	site.optimizerSuggestedMode = d.suggestedMode
+	site.optimizerEconomics = d.economics
+	site.optimizerModeExpiresAt = time.Time{}
+	if d.economics != nil {
+		site.optimizerModeExpiresAt = d.economics.validUntil
+	}
 
 	switch {
 	case !site.Automatic():
@@ -559,16 +569,30 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 		// persistControlSlot needs it to compare what the optimizer would
 		// have done against what was actually applied even while advisory.
 		apply(api.BatteryUnknown)
+		site.optimizerResetReason = "automaticDisabled"
 	case candidate == api.BatteryUnknown:
 		apply(api.BatteryUnknown)
+		site.optimizerResetReason = "candidateUnavailable"
+	case d.economics != nil && !d.economics.validUntil.IsZero() && !now.Before(d.economics.validUntil):
+		apply(api.BatteryUnknown)
+		site.optimizerResetReason = "candidateExpired"
+	case d.economics != nil:
+		apply(candidate)
+		site.optimizerResetReason = "economicDecision"
 	case candidate == site.optimizerBatteryMode:
 		apply(candidate)
+		site.optimizerResetReason = "confirmed"
 	case candidate == site.optimizerBatteryModePending:
 		if age := now.Sub(site.optimizerBatteryModePendingSince); age >= optimizerBatteryModeConfirmDelay && age <= optimizerBatteryModeValidity {
 			apply(candidate)
-		} else if age > optimizerBatteryModeValidity {
+			site.optimizerResetReason = "confirmed"
+		} else if age > optimizerBatteryModeValidity || age < 0 {
 			// candidate went stale before confirming: treat as a fresh observation
 			site.optimizerBatteryModePendingSince = now
+			site.optimizerResetReason = "candidateExpired"
+			if age < 0 {
+				site.optimizerResetReason = "clockChanged"
+			}
 			if candidate == api.BatteryCharge {
 				site.optimizerVetoReason = vetoReasonDamping
 			}
@@ -578,6 +602,7 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 	default:
 		site.optimizerBatteryModePending = candidate
 		site.optimizerBatteryModePendingSince = now
+		site.optimizerResetReason = "candidateChanged"
 		if candidate == api.BatteryCharge {
 			site.optimizerVetoReason = vetoReasonDamping
 		}
@@ -600,25 +625,54 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 // published for the forecast view's slot-0 annotation. Kept separate from the
 // internal optimizerDecision so the payload shape does not follow it.
 type optimizerDecisionPublish struct {
-	Mode         api.BatteryMode     `json:"mode"`
-	ChargeVetoed bool                `json:"chargeVetoed"`
-	VetoReason   optimizerVetoReason `json:"vetoReason,omitempty"`
-	Price        float64             `json:"price,omitempty"`
-	Updated      time.Time           `json:"updated"`
-	ValidFor     int64               `json:"validFor"` // ms Updated stays current, mirrors optimizerBatteryModeValidity
+	AppliedMode     api.BatteryMode         `json:"appliedMode"`
+	CandidateMode   api.BatteryMode         `json:"candidateMode"`
+	ControlStrategy string                  `json:"controlStrategy"`
+	PendingMode     *api.BatteryMode        `json:"pendingMode,omitempty"`
+	PendingSince    *time.Time              `json:"pendingSince,omitempty"`
+	EligibleAt      *time.Time              `json:"eligibleAt,omitempty"`
+	ExpiresAt       *time.Time              `json:"expiresAt,omitempty"`
+	ResetReason     string                  `json:"resetReason,omitempty"`
+	Economics       *energyControlEconomics `json:"economics,omitempty"`
+	Mode            api.BatteryMode         `json:"mode"`
+	ChargeVetoed    bool                    `json:"chargeVetoed"`
+	VetoReason      optimizerVetoReason     `json:"vetoReason,omitempty"`
+	Price           float64                 `json:"price,omitempty"`
+	Updated         time.Time               `json:"updated"`
+	ValidFor        int64                   `json:"validFor"` // ms Updated stays current
 }
 
 // publishOptimizerDecisionLocked publishes the current optimizer decision.
 // Caller must already hold site.Lock or site.RLock.
 func (site *Site) publishOptimizerDecisionLocked() {
-	site.publish(keys.OptimizerDecision, optimizerDecisionPublish{
-		Mode:         site.optimizerBatteryMode,
-		ChargeVetoed: site.optimizerChargeVetoed,
-		VetoReason:   site.optimizerVetoReason,
-		Price:        site.optimizerChargePrice,
-		Updated:      site.optimizerBatteryModeUpdated,
-		ValidFor:     optimizerBatteryModeValidity.Milliseconds(),
-	})
+	decision := optimizerDecisionPublish{
+		AppliedMode:     site.batteryAppliedModeLocked(),
+		CandidateMode:   site.optimizerSuggestedMode,
+		ControlStrategy: "confirmation",
+		ResetReason:     site.optimizerResetReason,
+		Economics:       site.optimizerEconomics,
+		Mode:            site.optimizerBatteryMode,
+		ChargeVetoed:    site.optimizerChargeVetoed,
+		VetoReason:      site.optimizerVetoReason,
+		Price:           site.optimizerChargePrice,
+		Updated:         site.optimizerBatteryModeUpdated,
+		ValidFor:        optimizerBatteryModeValidity.Milliseconds(),
+	}
+	if site.optimizerEconomics != nil {
+		decision.ControlStrategy = "economic"
+		if !site.optimizerModeExpiresAt.IsZero() {
+			expires := site.optimizerModeExpiresAt
+			decision.ExpiresAt = &expires
+			decision.ValidFor = max(0, min(decision.ValidFor, expires.Sub(decision.Updated).Milliseconds()))
+		}
+	}
+	if site.optimizerBatteryModePending != api.BatteryUnknown {
+		mode, since := site.optimizerBatteryModePending, site.optimizerBatteryModePendingSince
+		eligible, expires := since.Add(optimizerBatteryModeConfirmDelay), since.Add(optimizerBatteryModeValidity)
+		decision.PendingMode, decision.PendingSince = &mode, &since
+		decision.EligibleAt, decision.ExpiresAt = &eligible, &expires
+	}
+	site.publish(keys.OptimizerDecision, decision)
 }
 
 // appliedBatteryMode is site.GetBatteryMode() translated into the mode the
@@ -837,7 +891,8 @@ func (site *Site) publishOptimizerHealthGate(reason optimizerHealthReason) {
 // GetBatteryGridChargeLimit() is structurally nil while Automatic() is true
 // (see core/site_api.go), so under automatic mode such a check would be dead.
 func (site *Site) liveRateVetoLocked(rate api.Rate) bool {
-	fresh := time.Since(site.optimizerBatteryModeUpdated) <= optimizerBatteryModeValidity
+	age := site.optimizerTime().Sub(site.optimizerBatteryModeUpdated)
+	fresh := site.optimizerModeFresh(age)
 	active := site.optimizerBatteryMode == api.BatteryCharge && fresh
 
 	return active && rate.Value > site.optimizerChargePrice+optimizerChargePriceTolerance
@@ -896,6 +951,9 @@ func (site *Site) ResetOptimizerBatteryMode() {
 	site.optimizerChargeVetoed = false
 	site.optimizerVetoReason = vetoReasonNone
 	site.optimizerSuggestedMode = api.BatteryUnknown
+	site.optimizerEconomics = nil
+	site.optimizerModeExpiresAt = time.Time{}
+	site.optimizerResetReason = "toggled"
 
 	site.publishOptimizerDecisionLocked()
 }
@@ -1418,6 +1476,10 @@ func (site *Site) optimizerUpdate(battery []types.Measurement) error {
 // applyOptimizerResult maps the optimizer response onto suggestions, battery
 // forecast and notifications
 func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details []batteryDetail, res optimizer.OptimizationResult) {
+	site.applyOptimizerResultWithEconomics(req, details, res, nil)
+}
+
+func (site *Site) applyOptimizerResultWithEconomics(req optimizer.OptimizationInput, details []batteryDetail, res optimizer.OptimizationResult, economics *energyControlEconomics) {
 	slotHours := (time.Duration(req.TimeSeries.Dt[0]) * time.Second).Hours()
 	var gridImport, gridExport float32
 	if len(res.GridImport) > 0 {
@@ -1467,7 +1529,9 @@ func (site *Site) applyOptimizerResult(req optimizer.OptimizationInput, details 
 
 	// derive and damp the battery mode to apply from the home battery
 	// suggestions; setOptimizerBatteryMode re-checks Automatic() under lock
-	site.setOptimizerBatteryMode(batteryModeCandidate(suggestions, req, res, details))
+	decision := batteryModeCandidate(suggestions, req, res, details)
+	decision.economics = economics
+	site.setOptimizerBatteryMode(decision)
 
 	site.publishBattery()
 

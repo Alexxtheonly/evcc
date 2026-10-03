@@ -151,12 +151,14 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 		site.persistOptimizerRun(status, res)
 		return err
 	}
+	var control *energyControlEconomics
 	if cfg.Robust {
 		res, site.energyInsights.Scenarios, err = site.robustEnergy(ctx, extended, details, res)
 		if err != nil {
 			site.energyInsights.Scenarios = &energyScenarios{Status: "unavailable", Reason: err.Error()}
 			return err
 		}
+		control = site.energyInsights.Scenarios.Control
 	}
 	firstEnd := details.Timestamps[0].Add(time.Duration(req.TimeSeries.Dt[0]) * time.Second)
 	if err := validateEnergyPlanInputs(firstEnd, time.Now(), cfg, site.GetEnergyIntelligenceSettings()); err != nil {
@@ -164,6 +166,9 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 	}
 	if err := site.validateEnergyDevices(details); err != nil {
 		return err
+	}
+	if control != nil {
+		control.validUntil = firstEnd
 	}
 	site.persistOptimizerRun(string(res.Status), res)
 	ordinary := extended.ordinary()
@@ -173,7 +178,7 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 	}
 	site.populateEnergyGrid(ordinary, res)
 	site.publish("evopt", optimizerResult{Updated: time.Now(), Req: ordinary, Res: res, Details: details})
-	site.applyOptimizerResult(ordinary, details.BatteryDetails, res)
+	site.applyOptimizerResultWithEconomics(ordinary, details.BatteryDetails, res, control)
 	return nil
 }
 

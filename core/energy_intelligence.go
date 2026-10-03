@@ -154,6 +154,8 @@ type energyScenarioEvaluation struct {
 }
 
 type energyScenarios struct {
+	Excluded       []energyScenarioExclusion  `json:"excluded,omitempty"`
+	Control        *energyControlEconomics    `json:"control,omitempty"`
 	Status         string                     `json:"status"`
 	Reason         string                     `json:"reason,omitempty"`
 	Selected       string                     `json:"selected,omitempty"`
@@ -162,6 +164,12 @@ type energyScenarios struct {
 	CostHigh       *float64                   `json:"costHigh,omitempty"`
 	BatterySocLow  []float64                  `json:"batterySocLow,omitempty"`
 	BatterySocHigh []float64                  `json:"batterySocHigh,omitempty"`
+}
+
+type energyScenarioExclusion struct {
+	Action   string `json:"action"`
+	Reason   string `json:"reason"`
+	Scenario int    `json:"scenario"`
 }
 
 type optimizerInsights struct {

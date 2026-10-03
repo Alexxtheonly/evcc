@@ -332,6 +332,8 @@ func (site *Site) robustEnergy(ctx context.Context, req energyRequest, details r
 	var costs [][]float64
 	var paths [][]optimizer.OptimizationResult
 	var names []string
+	var feasibleActions []energyFirstAction
+	var excluded []energyScenarioExclusion
 	for _, action := range actions {
 		row, path := make([]float64, 3), make([]optimizer.OptimizationResult, 3)
 		feasible := true
@@ -344,6 +346,7 @@ func (site *Site) robustEnergy(ctx context.Context, req energyRequest, details r
 					return base, nil, err
 				}
 				feasible = false
+				excluded = append(excluded, energyScenarioExclusion{action.name, "infeasible", scenario})
 				break // e.g. hold cannot meet an immediate explicit goal
 			}
 			// Reject mode translations that cannot execute this vector.
@@ -355,11 +358,13 @@ func (site *Site) robustEnergy(ctx context.Context, req energyRequest, details r
 				s := currentSlotSuggestion(detail, fixed.Batteries[i].BatteryConfig, res.Batteries[i], energyGridImport(fixed.OptimizationInput, res, 0), res.GridExport[0], float64(fixed.TimeSeries.Dt[0])/3600)
 				if s.Action != action.name {
 					feasible = false
+					excluded = append(excluded, energyScenarioExclusion{action.name, "translated:" + s.Action, scenario})
 				}
 				suggestions[detail.key()] = s
 			}
 			if scenario == 0 && batteryModeCandidate(suggestions, fixed.ordinary(), res, details.BatteryDetails).vetoReason != vetoReasonNone {
 				feasible = false
+				excluded = append(excluded, energyScenarioExclusion{action.name, "controlVeto", scenario})
 			}
 			if !feasible {
 				break
@@ -369,13 +374,16 @@ func (site *Site) robustEnergy(ctx context.Context, req energyRequest, details r
 		}
 		if feasible {
 			costs, paths, names = append(costs, row), append(paths, path), append(names, action.name)
+			feasibleActions = append(feasibleActions, action)
 		}
 	}
-	selected := minimaxRegret(costs)
+	selected, control := selectEnergyAction(req, feasibleActions, costs, site.energyPreferredAction())
 	if selected < 0 {
 		return base, nil, errors.New("scenario costs unavailable")
 	}
 	info := &energyScenarios{Status: "evaluated", Selected: names[selected], Reason: "Executable battery modes at current modeled net demand; EV full-power/stop commands held fixed. Forecast changes and hardware safety gates remain authoritative."}
+	info.Control = control
+	info.Excluded = excluded
 	for i, row := range costs {
 		info.Evaluations = append(info.Evaluations, energyScenarioEvaluation{Action: names[i], Costs: row})
 	}
