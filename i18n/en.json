@@ -1145,6 +1145,7 @@
   },
   "forecast": {
     "energyPrices": {
+      "estimatedEndpoints": "The monthly estimate includes {count} battery charge endpoints inferred from energy flows.",
       "gridShort": "Grid",
       "effectiveShort": "Effective",
       "reasons": {

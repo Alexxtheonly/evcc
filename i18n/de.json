@@ -1145,6 +1145,7 @@
   },
   "forecast": {
     "energyPrices": {
+      "estimatedEndpoints": "Die Monatsschätzung enthält {count} aus Energieflüssen geschätzte Batterieladestände.",
       "gridShort": "Netz",
       "effectiveShort": "Effektiv",
       "reasons": {

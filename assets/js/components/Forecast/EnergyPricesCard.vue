@@ -177,12 +177,28 @@
 				>
 			</p>
 			<p class="small text-muted">{{ $t("forecast.energyPrices.cashOnly") }}</p>
-			<details v-if="bucket.inventoryBenefit != null" class="mt-3">
+			<details class="mt-3" data-testid="inventory-estimate">
 				<summary>{{ $t("forecast.energyPrices.inventory") }}</summary>
 				<p class="mt-2 mb-1 fw-semibold">{{ money(bucket.inventoryBenefit) }}</p>
+				<p v-if="inventory?.reason" class="small mb-1">
+					{{ inventoryDetail(inventory.reason) }}
+				</p>
+				<p v-else-if="bucket.inventoryBenefit == null" class="small mb-1">
+					{{ reason(report.comparison.reason || "unavailable") }}
+				</p>
+				<p v-if="inventory?.assumptionsSource" class="small mb-1">
+					{{ inventoryDetail(inventory.assumptionsSource) }}
+				</p>
+				<p v-if="inventory?.estimatedEndpoints" class="small mb-1">
+					{{
+						$t("forecast.energyPrices.estimatedEndpoints", {
+							count: inventory.estimatedEndpoints,
+						})
+					}}
+				</p>
 				<p class="small mb-1">{{ $t("forecast.energyPrices.inventoryNote") }}</p>
 				<p
-					v-if="report.comparison.inventoryAdjusted?.wearAdjustment == null"
+					v-if="bucket.inventoryBenefit != null && inventory?.wearAdjustment == null"
 					class="small mb-1"
 				>
 					{{ $t("forecast.energy.wearExcluded") }}
@@ -308,6 +324,9 @@ export default defineComponent({
 				? this.report.month === today.slice(0, 7)
 				: this.date === today;
 		},
+		inventory() {
+			return this.report?.comparison.inventoryAdjusted;
+		},
 		evTiming() {
 			return (
 				this.bucket?.evTiming ??
@@ -336,6 +355,20 @@ export default defineComponent({
 		this.fetchReport();
 	},
 	methods: {
+		inventoryDetail(value: string): string {
+			const keys: Record<string, string> = {
+				no_priced_slots: "noPrices",
+				historical_snapshot_unavailable_or_assumptions_changed: "changedAssumptions",
+				unsupported_historical_economics: "unsupportedEconomics",
+				missing_soc: "missingSoc",
+				separate_inventory_neutral_segments_at_gaps_or_assumption_changes: "segments",
+				legacy_assumed_efficiency_and_observed_limits: "legacy",
+				optimizer_snapshots: "snapshots",
+				mixed_snapshots_and_explicit_legacy_assumptions: "mixed",
+			};
+			const key = Object.hasOwn(keys, value) ? keys[value] : undefined;
+			return key ? this.$t(`forecast.energy.inventoryDetails.${key}`) : this.reason(value);
+		},
 		reason(value: string) {
 			const known = [
 				"no_priced_slots",

@@ -234,3 +234,41 @@ describe("energy prices", () => {
     wrapper.unmount();
   });
 });
+
+test.each([en, de])(
+  "inventory estimates remain visible when unavailable and explain historical assumptions",
+  async (messages) => {
+    const data = report();
+    data.comparison.inventoryAdjusted = {
+      status: "unavailable",
+      reason: "missing_soc",
+      segments: 1,
+      estimatedEndpoints: 2,
+      assumptionsSource: "mixed_snapshots_and_explicit_legacy_assumptions",
+      valuation: "",
+    };
+    vi.mocked(api.get).mockResolvedValue({ data });
+    const wrapper = shallowMount(EnergyPricesCard, { global: translations(messages) });
+    await flushPromises();
+    const detail = wrapper.get('[data-testid="inventory-estimate"]');
+    expect(detail.text()).toContain(messages.forecast.energyPrices.unavailable);
+    expect(detail.text()).toContain(messages.forecast.energy.inventoryDetails.missingSoc);
+    expect(detail.text()).toContain(messages.forecast.energy.inventoryDetails.mixed);
+    expect(detail.text()).toContain(
+      messages.forecast.energyPrices.estimatedEndpoints.replace("{count}", "2")
+    );
+    expect(detail.text()).not.toMatch(/(?:€0|0[,.]00)/);
+    expect(detail.text()).not.toContain("missing_soc");
+    expect(detail.text()).not.toContain("forecast.energy");
+
+    delete data.comparison.inventoryAdjusted;
+    vi.mocked(api.get).mockResolvedValue({ data: { ...data } });
+    await wrapper.vm.fetchReport();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="inventory-estimate"]').text()).toContain(
+      messages.forecast.energyPrices.reasons.unavailable
+    );
+    expect(detail.text()).not.toMatch(/(?:€0|0[,.]00)/);
+    wrapper.unmount();
+  }
+);
