@@ -105,7 +105,9 @@ func TestEnergyControlCostSweep(t *testing.T) {
 			index := slices.IndexFunc(source, func(s struct {
 				ID                       uint64
 				Request, Result, Quality string
-			}) bool { return s.ID == row.ID })
+			}) bool {
+				return s.ID == row.ID
+			})
 			require.GreaterOrEqual(t, index, 0)
 			var req energyRequest
 			var result optimizer.OptimizationResult
