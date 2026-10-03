@@ -19,7 +19,11 @@
 			</span>
 		</h3>
 		<div class="toolbar" data-testid="savings-ledger-toolbar">
-			<div class="d-flex align-items-center gap-1" data-testid="savings-ledger-period-nav">
+			<div
+				v-if="!requestedWindow"
+				class="d-flex align-items-center gap-1"
+				data-testid="savings-ledger-period-nav"
+			>
 				<DateNavigatorButton
 					prev
 					:on-click="() => page(-1)"
@@ -219,6 +223,7 @@ import {
 	clampWindowToEarliest,
 	EV_TIMING_NOTE,
 	type SettlementHeadline,
+	type LedgerWindow,
 } from "./savingsLedgerChain";
 import { waterfallLayout, type WaterfallLayout } from "./savingsLedgerWaterfall";
 
@@ -245,13 +250,14 @@ export default defineComponent({
 		active: { type: Boolean, default: true },
 		currency: { type: String as PropType<CURRENCY> },
 		settlement: { type: Object as PropType<EnergySettings>, default: undefined },
+		requestedWindow: { type: Object as PropType<LedgerWindow>, default: undefined },
 	},
 	// The decisions card shares this response: one request per period change.
 	emits: ["update:decisions"],
 	data() {
 		return {
-			win: defaultWindow(new Date()),
-			headline: "periodAverage" as SettlementHeadline,
+			win: this.requestedWindow ?? defaultWindow(new Date()),
+			headline: (this.requestedWindow ? "perSlot" : "periodAverage") as SettlementHeadline,
 			loading: false,
 			ledger: null as SavingsLedger | null,
 			refusal: null as string | null,
@@ -477,6 +483,9 @@ export default defineComponent({
 		},
 	},
 	watch: {
+		requestedWindow(value: LedgerWindow | undefined) {
+			if (value) this.win = value;
+		},
 		win: {
 			handler() {
 				this.fetch();
@@ -577,7 +586,12 @@ export default defineComponent({
 					// same guards the refusal clamp below uses. When narrowing would not
 					// honestly help the divergent period renders as-is, with
 					// diagramSubsetWarning naming the real figure.
-					if (this.isAtPresent && !this.hasClampedChain && ledger.chainEarliest) {
+					if (
+						!this.requestedWindow &&
+						this.isAtPresent &&
+						!this.hasClampedChain &&
+						ledger.chainEarliest
+					) {
 						const clamped = clampWindowToEarliest(this.win, ledger.chainEarliest);
 						if (clamped) {
 							this.hasClampedChain = true;
@@ -594,7 +608,12 @@ export default defineComponent({
 					// into the past and hit a genuine "before any data exists" refusal must
 					// see that refusal, never a silent redirect to a period they did not ask
 					// for. One attempt per navigation, so it cannot retry forever.
-					if (this.isAtPresent && !this.hasClampedTariff && body?.earliest) {
+					if (
+						!this.requestedWindow &&
+						this.isAtPresent &&
+						!this.hasClampedTariff &&
+						body?.earliest
+					) {
 						const clamped = clampWindowToEarliest(this.win, body.earliest);
 						if (clamped) {
 							this.hasClampedTariff = true;

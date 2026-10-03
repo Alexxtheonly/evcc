@@ -168,6 +168,7 @@ export default defineComponent({
 		month: { type: Number, required: true },
 		year: { type: Number, required: true },
 		startDate: { type: Date, required: true },
+		today: { type: Date, default: () => new Date() },
 		showDay: Boolean,
 		showMonth: Boolean,
 		showYear: Boolean,
@@ -188,7 +189,7 @@ export default defineComponent({
 		},
 		hasNextDay() {
 			const next = new Date(this.year, this.month - 1, this.day + 1);
-			return dateOnly(next).getTime() <= dateOnly(new Date()).getTime();
+			return dateOnly(next).getTime() <= dateOnly(this.today).getTime();
 		},
 		hasPrevMonth() {
 			return (
@@ -197,14 +198,14 @@ export default defineComponent({
 			);
 		},
 		hasNextMonth() {
-			const now = new Date();
+			const now = this.today;
 			return this.year < now.getFullYear() || this.month < now.getMonth() + 1;
 		},
 		hasPrevYear() {
 			return this.year > this.startDate.getFullYear();
 		},
 		hasNextYear() {
-			return this.year < new Date().getFullYear();
+			return this.year < this.today.getFullYear();
 		},
 		dayOptions(): SelectOption<number>[] {
 			const total = daysInMonth(this.year, this.month);
@@ -221,7 +222,7 @@ export default defineComponent({
 		},
 		monthYearOptions() {
 			const first = this.startDate;
-			const last = new Date();
+			const last = this.today;
 			const yearMonths = [];
 			for (let year = first.getFullYear(); year <= last.getFullYear(); year++) {
 				const startMonth = year === first.getFullYear() ? first.getMonth() + 1 : 1;
@@ -237,7 +238,7 @@ export default defineComponent({
 		},
 		yearOptions(): SelectOption<number>[] {
 			const first = this.startDate;
-			const last = new Date();
+			const last = this.today;
 			const years = [];
 			for (let year = first.getFullYear(); year <= last.getFullYear(); year++) {
 				years.push({ name: year.toString(), value: year });
@@ -260,7 +261,7 @@ export default defineComponent({
 			return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 		},
 		dayIsoMax() {
-			const d = new Date();
+			const d = this.today;
 			const pad = (n: number) => String(n).padStart(2, "0");
 			return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 		},

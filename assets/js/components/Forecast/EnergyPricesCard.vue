@@ -1,0 +1,442 @@
+<template>
+	<Card class="box-pull-out mb-4 energy-prices">
+		<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+			<h3 class="evcc-card-title fw-normal m-0">{{ $t("forecast.energyPrices.title") }}</h3>
+			<button
+				type="button"
+				class="btn btn-outline-secondary btn-sm"
+				:disabled="loading"
+				@click="fetchReport(requestedMonth || undefined)"
+			>
+				{{ $t("forecast.energyPrices.refresh") }}
+			</button>
+		</div>
+		<div
+			v-if="report"
+			class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3"
+		>
+			<SelectGroup
+				id="energyPricePeriod"
+				:options="periodOptions"
+				:model-value="period"
+				:aria-label="$t('forecast.energyPrices.period')"
+				@update:model-value="setPeriod"
+			/>
+			<DateNavigator
+				v-if="active"
+				:day="selectedDate.getDate()"
+				:month="selectedDate.getMonth() + 1"
+				:year="selectedDate.getFullYear()"
+				:start-date="earliestDate"
+				:today="siteToday"
+				:show-day="period === 'day'"
+				:show-month="period === 'month'"
+				:show-year="period === 'month'"
+				@update-date="selectDate"
+			/>
+		</div>
+		<p v-if="loading" role="status" class="text-muted py-3">
+			{{ $t("forecast.energyPrices.loading") }}
+		</p>
+		<p v-else-if="error" role="status" class="alert alert-warning">{{ error }}</p>
+		<template v-else-if="report && bucket">
+			<p class="small text-muted mb-1">
+				{{
+					$t("forecast.energyPrices.through", {
+						time: through,
+						timezone: report.timezone,
+					})
+				}}
+			</p>
+			<p v-if="partialPeriod" class="small mb-1">
+				{{ $t("forecast.energyPrices.partialPeriod") }}
+			</p>
+			<p class="small mb-3">{{ settlementLabel }}</p>
+			<div class="row g-3 mb-3">
+				<div class="col-md-6">
+					<div class="price-metric rounded p-3 h-100">
+						<h4 class="fs-6">{{ $t("forecast.energyPrices.gridPrice") }}</h4>
+						<div class="fs-3 fw-semibold">{{ price(bucket.grid.weightedPrice) }}</div>
+						<p class="small mb-1">{{ $t("forecast.energyPrices.gridFormula") }}</p>
+						<p v-if="bucket.grid.coverage.validSlots" class="small mb-1">
+							{{
+								$t("forecast.energyPrices.gridTotals", {
+									cost: money(bucket.grid.importCost),
+									energy: energy(bucket.grid.importKWh),
+								})
+							}}
+						</p>
+						<p v-if="bucket.grid.weightedPrice == null" class="small mb-1">
+							{{
+								$t(
+									bucket.grid.coverage.validSlots
+										? "forecast.energyPrices.noImport"
+										: "forecast.energyPrices.noData"
+								)
+							}}
+						</p>
+						<p class="small text-muted mb-0">{{ coverage(bucket.grid.coverage) }}</p>
+					</div>
+				</div>
+				<div class="col-md-6">
+					<div class="price-metric rounded p-3 h-100">
+						<h4 class="fs-6">{{ $t("forecast.energyPrices.effectivePrice") }}</h4>
+						<div class="fs-3 fw-semibold">
+							{{ price(bucket.consumption.effectivePrice) }}
+						</div>
+						<p class="small mb-1">{{ $t("forecast.energyPrices.effectiveFormula") }}</p>
+						<p v-if="bucket.consumption.coverage.validSlots" class="small mb-1">
+							{{
+								$t("forecast.energyPrices.consumptionTotals", {
+									cost: money(bucket.consumption.netCost),
+									energy: energy(bucket.consumption.consumptionKWh),
+								})
+							}}
+						</p>
+						<p v-if="bucket.consumption.effectivePrice == null" class="small mb-1">
+							{{
+								$t(
+									bucket.consumption.coverage.validSlots
+										? "forecast.energyPrices.noConsumption"
+										: "forecast.energyPrices.noData"
+								)
+							}}
+						</p>
+						<p class="small text-muted mb-0">
+							{{ coverage(bucket.consumption.coverage) }}
+						</p>
+					</div>
+				</div>
+			</div>
+			<p v-if="bucket.consumption.coverage.validSlots" class="small">
+				{{
+					$t("forecast.energyPrices.cashBreakdown", {
+						imports: money(bucket.consumption.importCost),
+						exports: money(bucket.consumption.exportRevenue),
+						exported: energy(bucket.consumption.exportKWh),
+					})
+				}}
+			</p>
+			<p class="small text-muted">{{ $t("forecast.energyPrices.measurementNote") }}</p>
+			<h4 class="fs-6 mt-4">{{ $t("forecast.energyPrices.comparison") }}</h4>
+			<p class="small">{{ $t("forecast.energyPrices.comparisonNote") }}</p>
+			<div v-if="worlds.length" class="table-responsive">
+				<table class="table table-sm align-middle price-comparison">
+					<caption class="small">
+						{{
+							coverage(worlds[0]!.coverage)
+						}}
+						·
+						{{
+							$t("forecast.energyPrices.comparisonCoverage")
+						}}
+					</caption>
+					<thead>
+						<tr>
+							<th scope="col">{{ $t("forecast.energyPrices.level") }}</th>
+							<th
+								scope="col"
+								class="text-end"
+								:aria-label="$t('forecast.energyPrices.gridPrice')"
+							>
+								{{ $t("forecast.energyPrices.gridShort")
+								}}<span class="d-block small">/kWh</span>
+							</th>
+							<th
+								scope="col"
+								class="text-end"
+								:aria-label="$t('forecast.energyPrices.effectivePrice')"
+							>
+								{{ $t("forecast.energyPrices.effectiveShort")
+								}}<span class="d-block small">/kWh</span>
+							</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr v-for="world in worlds" :key="world.label">
+							<th scope="row" class="fw-normal">
+								{{ $t(`forecast.energyPrices.worlds.${world.label}`) }}
+								<span class="d-block small text-muted">{{
+									$t(
+										world.label === "W3"
+											? "forecast.energyPrices.measured"
+											: "forecast.energyPrices.modeled"
+									)
+								}}</span>
+							</th>
+							<td class="text-end">{{ money(world.weightedPrice, 4) }}</td>
+							<td class="text-end">{{ money(world.effectivePrice, 4) }}</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			<p v-else class="text-muted">
+				{{ $t("forecast.energyPrices.comparisonUnavailable")
+				}}<span v-if="report.comparison.reason">
+					{{ reason(report.comparison.reason) }}</span
+				>
+			</p>
+			<p class="small text-muted">{{ $t("forecast.energyPrices.cashOnly") }}</p>
+			<details v-if="bucket.inventoryBenefit != null" class="mt-3">
+				<summary>{{ $t("forecast.energyPrices.inventory") }}</summary>
+				<p class="mt-2 mb-1 fw-semibold">{{ money(bucket.inventoryBenefit) }}</p>
+				<p class="small mb-1">{{ $t("forecast.energyPrices.inventoryNote") }}</p>
+				<p
+					v-if="report.comparison.inventoryAdjusted?.wearAdjustment == null"
+					class="small mb-1"
+				>
+					{{ $t("forecast.energy.wearExcluded") }}
+				</p>
+			</details>
+			<details v-if="evTiming" class="mt-3">
+				<summary>{{ $t("forecast.energyPrices.evTiming") }}</summary>
+				<template v-if="evTiming.status !== 'unavailable' && evTiming.savings != null">
+					<p class="mt-2 mb-1 fw-semibold">{{ money(evTiming.savings) }}</p>
+					<p class="small mb-1">
+						{{
+							$t("forecast.energyPrices.evComparison", {
+								actual: money(evTiming.actualTariffCost),
+								immediate: money(evTiming.immediateTariffCost),
+							})
+						}}
+					</p>
+				</template>
+				<p v-else class="mt-2 mb-1">{{ $t("forecast.energyPrices.evUnavailable") }}</p>
+				<p class="small mb-1">{{ $t("forecast.energyPrices.evNote") }}</p>
+				<p class="small mb-1">
+					{{
+						$t("forecast.energyPrices.evCoverage", {
+							included: evTiming.includedSessions,
+							excluded: evTiming.excludedSessions,
+						})
+					}}
+				</p>
+				<p
+					v-if="evTiming.reason && evTiming.reason !== 'tariff_only_connection_cohort'"
+					class="small mb-1"
+				>
+					{{ reason(evTiming.reason) }}
+				</p>
+			</details>
+		</template>
+		<p v-else-if="report" class="text-muted">
+			{{ $t("forecast.energyPrices.noCompletedSlots") }}
+		</p>
+	</Card>
+</template>
+<script lang="ts">
+import { defineComponent, type PropType } from "vue";
+import api from "@/api";
+import Card from "../Helper/Card.vue";
+import SelectGroup from "../Helper/SelectGroup.vue";
+import DateNavigator from "../Sessions/DateNavigator.vue";
+import { CURRENCY } from "@/types/evcc";
+import type { LedgerCoverage } from "./savingsLedger.types";
+import type { EnergySettings } from "./energyIntelligence";
+import {
+	calendarDate,
+	calendarKey,
+	siteCalendarDate,
+	type EnergyPriceReport,
+	type EnergyPriceBucket,
+} from "./energyPrices";
+
+export default defineComponent({
+	components: { Card, SelectGroup, DateNavigator },
+	props: {
+		active: { type: Boolean, default: true },
+		currency: { type: String as PropType<CURRENCY>, default: CURRENCY.EUR },
+		settlement: { type: Object as PropType<EnergySettings>, default: undefined },
+	},
+	emits: ["update:window"],
+	data: () => ({
+		report: null as EnergyPriceReport | null,
+		period: "day" as "day" | "month",
+		date: "",
+		loading: false,
+		error: "",
+		fetchSeq: 0,
+		requestedMonth: "",
+	}),
+	computed: {
+		worlds() {
+			return this.bucket?.worlds || [];
+		},
+		selectedWindow() {
+			const bucket = this.bucket;
+			return !this.loading &&
+				!this.error &&
+				bucket &&
+				new Date(bucket.to) > new Date(bucket.from)
+				? { from: new Date(bucket.from), to: new Date(bucket.to) }
+				: null;
+		},
+		periodOptions() {
+			return ["day", "month"].map((value) => ({
+				value,
+				name: this.$t(`forecast.energyPrices.${value}`),
+			}));
+		},
+		bucket(): EnergyPriceBucket | undefined {
+			return this.period === "month"
+				? this.report?.totals
+				: (this.report?.days || []).find((day) => day.date === this.date);
+		},
+		selectedDate() {
+			return calendarDate(this.date || this.report?.month || "1970-01-01");
+		},
+		siteToday() {
+			return calendarDate(
+				this.report?.today || siteCalendarDate(new Date(), this.report?.timezone || "UTC")
+			);
+		},
+		earliestDate() {
+			const value = this.report?.earliest;
+			return value
+				? calendarDate(siteCalendarDate(new Date(value), this.report!.timezone))
+				: calendarDate(this.report?.month || "1970-01");
+		},
+		through() {
+			return new Date(this.bucket!.to).toLocaleString(this.$i18n.locale, {
+				timeZone: this.report!.timezone,
+			});
+		},
+		partialPeriod() {
+			if (!this.report || !this.bucket) return false;
+			const today = this.report.today || siteCalendarDate(new Date(), this.report.timezone);
+			return this.period === "month"
+				? this.report.month === today.slice(0, 7)
+				: this.date === today;
+		},
+		evTiming() {
+			return (
+				this.bucket?.evTiming ??
+				(this.period === "month" ? this.report?.evTiming : undefined)
+			);
+		},
+
+		settlementLabel() {
+			const declared =
+				this.settlement?.settlementMode === "interval" && this.settlement.settlementFrom;
+			const billed =
+				declared && this.bucket && new Date(this.bucket.from) >= new Date(declared);
+			return this.$t(
+				billed
+					? "forecast.energyPrices.intervalBasis"
+					: "forecast.energyPrices.simulationBasis"
+			);
+		},
+	},
+	watch: {
+		selectedWindow(value) {
+			this.$emit("update:window", value);
+		},
+	},
+	mounted() {
+		this.fetchReport();
+	},
+	methods: {
+		reason(value: string) {
+			const known = [
+				"no_priced_slots",
+				"battery_physics_unavailable",
+				"historical_evidence_unavailable",
+				"no_completed_sessions",
+			];
+			return this.$t(
+				`forecast.energyPrices.reasons.${known.includes(value) ? value : "unavailable"}`
+			);
+		},
+		setPeriod(value: string | number | boolean | null) {
+			this.period = value === "month" ? "month" : "day";
+		},
+		selectDate(value: { year: number; month?: number; day?: number }) {
+			const month = value.month ?? this.selectedDate.getMonth() + 1;
+			const key = calendarKey(value.year, month);
+			const today =
+				this.report?.today || siteCalendarDate(new Date(), this.report?.timezone || "UTC");
+			if (calendarKey(value.year, month, value.day ?? 1) > today) return;
+			this.date = calendarKey(value.year, month, value.day ?? 1);
+			if (key !== this.report?.month) this.fetchReport(key);
+		},
+		async fetchReport(month?: string) {
+			const seq = ++this.fetchSeq;
+			this.requestedMonth = month || "";
+			this.loading = true;
+			this.error = "";
+			this.$emit("update:window", null);
+			try {
+				const response = await api.get<EnergyPriceReport>("energyprices", {
+					params: month ? { month } : undefined,
+				});
+				if (seq !== this.fetchSeq) return;
+				const report = response.data;
+				this.requestedMonth = report.month;
+				if (!this.date.startsWith(report.month)) {
+					const today = report.today || siteCalendarDate(new Date(), report.timezone);
+					this.date = today.startsWith(report.month) ? today : `${report.month}-01`;
+				}
+				this.report = report;
+			} catch (error) {
+				if (seq !== this.fetchSeq) return;
+				this.error = error instanceof Error ? error.message : String(error);
+			} finally {
+				if (seq === this.fetchSeq) this.loading = false;
+			}
+		},
+		price(value: number | undefined) {
+			return value == null || !Number.isFinite(value)
+				? this.$t("forecast.energyPrices.unavailable")
+				: `${this.money(value, 4)}/kWh`;
+		},
+		money(value: number | undefined, digits = 2) {
+			return value == null || !Number.isFinite(value)
+				? this.$t("forecast.energyPrices.unavailable")
+				: new Intl.NumberFormat(this.$i18n.locale, {
+						style: "currency",
+						currency: this.currency,
+						minimumFractionDigits: 2,
+						maximumFractionDigits: digits,
+					}).format(value);
+		},
+		energy(value: number) {
+			return `${value.toLocaleString(this.$i18n.locale, { maximumFractionDigits: 2 })} kWh`;
+		},
+		coverage(value: LedgerCoverage) {
+			return this.$t("forecast.energyPrices.coverage", {
+				valid: value.validSlots,
+				total: value.totalSlots,
+				percent: (100 * value.fraction).toLocaleString(this.$i18n.locale, {
+					maximumFractionDigits: 1,
+				}),
+			});
+		},
+	},
+});
+</script>
+<style scoped>
+.energy-prices {
+	overflow-wrap: anywhere;
+}
+.price-metric {
+	background: var(--bs-tertiary-bg);
+}
+.price-comparison {
+	font-variant-numeric: tabular-nums;
+}
+.price-comparison th,
+.price-comparison td {
+	min-width: 4rem;
+	padding: 0.65rem 0.25rem;
+}
+.price-comparison td {
+	font-size: 0.875rem;
+	white-space: nowrap;
+}
+.price-comparison th:first-child {
+	width: 38%;
+}
+summary {
+	cursor: pointer;
+}
+</style>

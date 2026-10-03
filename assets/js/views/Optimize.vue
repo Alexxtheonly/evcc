@@ -39,24 +39,44 @@
 			:aria-label="$t('forecast.energy.tabs.results')"
 		>
 			<p>{{ $t("forecast.energy.resultsNote") }}</p>
-			<SavingsLedgerCard
+			<EnergyPricesCard
+				:active="activeTab === 'results'"
 				:currency="currency"
 				:settlement="optimizerInsights?.settings"
-				:active="activeTab === 'results'"
-				@update:decisions="ledgerDecisions = $event"
+				@update:window="priceWindow = $event"
 			/>
-			<Card
-				v-if="ledgerDecisions"
-				:title="$t('forecast.savingsLedger.decisions.title')"
-				edge-to-edge
-				class="box-pull-out mb-4"
+			<details
+				v-if="priceWindow"
+				:open="legacyDetailsOpen"
+				class="mb-4"
+				@toggle="onLegacyToggle"
 			>
-				<SavingsLedgerDecisions
-					:decisions="ledgerDecisions"
-					:currency="currency"
-					:active="activeTab === 'results'"
-				/>
-			</Card>
+				<summary>{{ $t("forecast.energyPrices.legacyDetails") }}</summary>
+				<template v-if="legacyDetailsOpen">
+					<p class="small text-muted mt-3">
+						{{ $t("forecast.energyPrices.legacyNote") }}
+					</p>
+					<SavingsLedgerCard
+						:currency="currency"
+						:settlement="optimizerInsights?.settings"
+						:active="activeTab === 'results'"
+						:requested-window="priceWindow"
+						@update:decisions="ledgerDecisions = $event"
+					/>
+					<Card
+						v-if="ledgerDecisions"
+						:title="$t('forecast.savingsLedger.decisions.title')"
+						edge-to-edge
+						class="box-pull-out mb-4"
+					>
+						<SavingsLedgerDecisions
+							:decisions="ledgerDecisions"
+							:currency="currency"
+							:active="activeTab === 'results'"
+						/>
+					</Card>
+				</template>
+			</details>
 		</section>
 		<section
 			v-if="activeTab === 'diagnostics'"
@@ -208,6 +228,8 @@ import Header from "../components/Top/Header.vue";
 import Card from "../components/Helper/Card.vue";
 import OptimizeHeader from "../components/Optimize/OptimizeHeader.vue";
 import AutomaticModeStrip from "../components/Optimize/AutomaticModeStrip.vue";
+import EnergyPricesCard from "../components/Forecast/EnergyPricesCard.vue";
+import type { LedgerWindow } from "../components/Forecast/savingsLedgerChain";
 import EnergyPlanCard from "../components/Forecast/EnergyPlanCard.vue";
 import SavingsLedgerCard from "../components/Forecast/SavingsLedgerCard.vue";
 import SavingsLedgerDecisions from "../components/Forecast/SavingsLedgerDecisions.vue";
@@ -239,6 +261,7 @@ export default defineComponent({
 		CopyButton,
 		AutomaticModeStrip,
 		EnergyPlanCard,
+		EnergyPricesCard,
 		SavingsLedgerCard,
 		SavingsLedgerDecisions,
 	},
@@ -248,6 +271,8 @@ export default defineComponent({
 			pending: false,
 			tabs: ["plan", "results", "diagnostics"],
 			resultsVisited: false,
+			legacyDetailsOpen: false,
+			priceWindow: null as LedgerWindow | null,
 			ledgerDecisions: null as LedgerDecisionRow[] | null,
 		};
 	},
@@ -379,6 +404,9 @@ export default defineComponent({
 		},
 	},
 	methods: {
+		onLegacyToggle(event: Event) {
+			this.legacyDetailsOpen = (event.target as HTMLDetailsElement).open;
+		},
 		restoreSettingsFocus() {
 			if (this.activeTab !== "plan") {
 				(this.$refs["sections"] as HTMLElement)

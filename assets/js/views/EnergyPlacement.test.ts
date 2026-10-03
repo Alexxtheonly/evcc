@@ -5,6 +5,7 @@ import Optimize from "./Optimize.vue";
 import Forecast from "./Forecast.vue";
 import Config from "./Config.vue";
 import MoreMenu from "../components/BottomTabs/MoreMenu.vue";
+import EnergyPricesCard from "../components/Forecast/EnergyPricesCard.vue";
 import EnergyPlanCard from "../components/Forecast/EnergyPlanCard.vue";
 import BatteryControlStatus from "../components/Forecast/BatteryControlStatus.vue";
 import EnergySettings from "../components/Forecast/EnergySettings.vue";
@@ -35,6 +36,22 @@ const navigation = async (path: string) => {
   });
   await router.push(path);
   return router;
+};
+const selectPriceWindow = async (
+  wrapper: ReturnType<typeof shallowMount>,
+  from = liveSample.from,
+  to = liveSample.to
+) => {
+  wrapper
+    .getComponent(EnergyPricesCard)
+    .vm.$emit("update:window", { from: new Date(from), to: new Date(to) });
+  await flushPromises();
+};
+const openLedgerDetails = async (wrapper: ReturnType<typeof shallowMount>) => {
+  await selectPriceWindow(wrapper);
+  const details = wrapper.get("details");
+  (details.element as HTMLDetailsElement).open = true;
+  await details.trigger("toggle");
 };
 beforeEach(() => {
   store.reset();
@@ -125,6 +142,8 @@ describe("energy planning placement", () => {
         stubs: { SavingsLedgerCard: false },
       },
     });
+    expect(api.get).not.toHaveBeenCalled();
+    await openLedgerDetails(wrapper);
     await router.push("/optimize?tab=plan");
     complete({ status: 200, data: liveSample });
     await flushPromises();
@@ -151,6 +170,10 @@ describe("energy planning placement", () => {
     expect(api.get).not.toHaveBeenCalled();
     await router.push("/optimize?tab=results");
     await flushPromises();
+    expect(wrapper.findComponent(EnergyPricesCard).exists()).toBe(true);
+    expect(wrapper.findComponent(SavingsLedgerCard).exists()).toBe(false);
+    await openLedgerDetails(wrapper);
+    await flushPromises();
     const ledger = wrapper.getComponent(SavingsLedgerCard);
     expect(api.get).toHaveBeenCalledTimes(1);
     expect(wrapper.findComponent(SavingsLedgerDecisions).exists()).toBe(true);
@@ -158,7 +181,7 @@ describe("energy planning placement", () => {
       "forecast.energy.settlementUnavailable"
     );
     await ledger.setData({ headline: "perSlot" });
-    ledger.vm.page(-1);
+    await selectPriceWindow(wrapper, "2026-08-22T00:00:00Z", "2026-08-23T00:00:00Z");
     await flushPromises();
     expect(api.get).toHaveBeenCalledTimes(2);
     const window = ledger.vm.win;
@@ -190,9 +213,20 @@ describe("energy planning placement", () => {
       },
     });
     await flushPromises();
+    expect(wrapper.findComponent(EnergyPricesCard).exists()).toBe(true);
+    expect(wrapper.findComponent(SavingsLedgerCard).exists()).toBe(false);
+    expect(api.get).not.toHaveBeenCalled();
+    await openLedgerDetails(wrapper);
+    await flushPromises();
     expect(wrapper.getComponent(SavingsLedgerCard).props("active")).toBe(true);
     expect(api.get).toHaveBeenCalledTimes(1);
-    expect(api.get).toHaveBeenCalledWith("savingsledger", expect.anything());
+    expect(api.get).toHaveBeenCalledWith("savingsledger", {
+      params: {
+        from: new Date(liveSample.from).toISOString(),
+        to: new Date(liveSample.to).toISOString(),
+      },
+      validateStatus: expect.any(Function),
+    });
     expect(api.post).not.toHaveBeenCalled();
     wrapper.unmount();
   });
