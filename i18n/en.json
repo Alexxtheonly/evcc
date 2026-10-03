@@ -1308,6 +1308,7 @@
       "wearExcluded": "Battery wear is unconfigured for part or all of this period and is excluded from this estimate.",
       "control": {
         "title": "Battery control",
+        "siteMode": "Site control mode: {mode}",
         "applied": "Applied command: {mode}",
         "proposed": "Selected action: {mode}",
         "pending": "Awaiting confirmation: {mode}",

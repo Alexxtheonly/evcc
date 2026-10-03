@@ -2,7 +2,7 @@
 	<section class="border rounded p-3 my-3" :aria-label="$t('forecast.energy.control.title')">
 		<h4 class="fs-6 mb-2">{{ $t("forecast.energy.control.title") }}</h4>
 		<p class="mb-1">
-			{{ $t("forecast.energy.control.applied", { mode: modeLabel(currentMode) }) }}
+			{{ $t(commandLabel, { mode: modeLabel(currentMode) }) }}
 		</p>
 		<p class="small mb-0">
 			<span v-if="stateMessage">{{ $t(stateMessage) }}</span>
@@ -88,12 +88,23 @@ export default defineComponent({
 				? Date.parse(d.expiresAt)
 				: Date.parse(d?.updated || "") + (d?.validFor || 0);
 		},
+		decisionFresh() {
+			return !this.offline && this.now < this.expires;
+		},
 		fresh() {
-			return this.automatic && !this.offline && this.now < this.expires;
+			return this.automatic && this.decisionFresh;
+		},
+		hasDeviceCommand() {
+			return this.decisionFresh && this.decision?.appliedMode != null;
+		},
+		commandLabel() {
+			return this.hasDeviceCommand
+				? "forecast.energy.control.applied"
+				: "forecast.energy.control.siteMode";
 		},
 		currentMode() {
 			if (this.offline) return undefined;
-			return this.appliedMode ?? (this.fresh ? this.decision?.appliedMode : undefined);
+			return this.hasDeviceCommand ? this.decision?.appliedMode : this.appliedMode;
 		},
 		stateMessage() {
 			if (this.offline) return "forecast.energy.control.offline";

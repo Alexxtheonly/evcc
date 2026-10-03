@@ -154,4 +154,25 @@ describe("battery control status", () => {
     expect(wrapper.text()).not.toContain("forecast.energy.control.eligibleIn");
     wrapper.unmount();
   });
+  test("fresh device command takes precedence over the site request", async () => {
+    const wrapper = mount(BatteryControlStatus, {
+      props: {
+        automatic: true,
+        appliedMode: BATTERY_MODE.CHARGE,
+        decision: { ...decision, appliedMode: 2 },
+      },
+      global,
+    });
+    expect(wrapper.text()).toContain("forecast.energy.control.applied");
+    expect(wrapper.text()).toContain('"mode":"forecast.optimizer.modeHold');
+    expect(wrapper.text()).not.toContain("forecast.optimizer.modeCharge");
+    await wrapper.setProps({ decision: { ...decision, appliedMode: 0 } });
+    expect(wrapper.text()).toContain("forecast.energy.control.unknownMode");
+    expect(wrapper.text()).not.toContain("forecast.optimizer.modeCharge");
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(wrapper.text()).toContain("forecast.energy.control.siteMode");
+    expect(wrapper.text()).toContain('"mode":"forecast.optimizer.modeCharge');
+    expect(wrapper.text()).not.toContain("forecast.energy.control.applied");
+    wrapper.unmount();
+  });
 });

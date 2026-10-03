@@ -1308,6 +1308,7 @@
       "wearExcluded": "Batterieverschleiß ist für Teile oder den gesamten Zeitraum nicht konfiguriert und in dieser Schätzung nicht enthalten.",
       "control": {
         "title": "Batteriesteuerung",
+        "siteMode": "Steuerungsmodus der Anlage: {mode}",
         "applied": "Angewendeter Befehl: {mode}",
         "proposed": "Gewählte Aktion: {mode}",
         "pending": "Bestätigung ausstehend: {mode}",
