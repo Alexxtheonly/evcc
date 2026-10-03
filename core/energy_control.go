@@ -48,7 +48,7 @@ func (site *Site) energyPreferredAction() string {
 }
 
 func (site *Site) optimizerModeFresh(age time.Duration) bool {
-	return age >= 0 && age <= optimizerBatteryModeValidity &&
+	return age >= 0 && age < optimizerBatteryModeValidity &&
 		(site.optimizerModeExpiresAt.IsZero() || site.optimizerTime().Before(site.optimizerModeExpiresAt))
 }
 

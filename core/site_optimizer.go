@@ -625,21 +625,22 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 // published for the forecast view's slot-0 annotation. Kept separate from the
 // internal optimizerDecision so the payload shape does not follow it.
 type optimizerDecisionPublish struct {
-	AppliedMode     api.BatteryMode         `json:"appliedMode"`
-	CandidateMode   api.BatteryMode         `json:"candidateMode"`
-	ControlStrategy string                  `json:"controlStrategy"`
-	PendingMode     *api.BatteryMode        `json:"pendingMode,omitempty"`
-	PendingSince    *time.Time              `json:"pendingSince,omitempty"`
-	EligibleAt      *time.Time              `json:"eligibleAt,omitempty"`
-	ExpiresAt       *time.Time              `json:"expiresAt,omitempty"`
-	ResetReason     string                  `json:"resetReason,omitempty"`
-	Economics       *energyControlEconomics `json:"economics,omitempty"`
-	Mode            api.BatteryMode         `json:"mode"`
-	ChargeVetoed    bool                    `json:"chargeVetoed"`
-	VetoReason      optimizerVetoReason     `json:"vetoReason,omitempty"`
-	Price           float64                 `json:"price,omitempty"`
-	Updated         time.Time               `json:"updated"`
-	ValidFor        int64                   `json:"validFor"` // ms Updated stays current
+	AppliedMode      api.BatteryMode         `json:"appliedMode"`
+	CandidateMode    api.BatteryMode         `json:"candidateMode"`
+	ControlStrategy  string                  `json:"controlStrategy"`
+	PendingMode      *api.BatteryMode        `json:"pendingMode,omitempty"`
+	PendingSince     *time.Time              `json:"pendingSince,omitempty"`
+	EligibleAt       *time.Time              `json:"eligibleAt,omitempty"`
+	ExpiresAt        *time.Time              `json:"expiresAt,omitempty"`
+	PendingExpiresAt *time.Time              `json:"pendingExpiresAt,omitempty"`
+	ResetReason      string                  `json:"resetReason,omitempty"`
+	Economics        *energyControlEconomics `json:"economics,omitempty"`
+	Mode             api.BatteryMode         `json:"mode"`
+	ChargeVetoed     bool                    `json:"chargeVetoed"`
+	VetoReason       optimizerVetoReason     `json:"vetoReason,omitempty"`
+	Price            float64                 `json:"price,omitempty"`
+	Updated          time.Time               `json:"updated"`
+	ValidFor         int64                   `json:"validFor"` // ms Updated stays current
 }
 
 // publishOptimizerDecisionLocked publishes the current optimizer decision.
@@ -658,10 +659,17 @@ func (site *Site) publishOptimizerDecisionLocked() {
 		Updated:         site.optimizerBatteryModeUpdated,
 		ValidFor:        optimizerBatteryModeValidity.Milliseconds(),
 	}
+	if !decision.Updated.IsZero() {
+		expires := decision.Updated.Add(optimizerBatteryModeValidity)
+		decision.ExpiresAt = &expires
+	}
 	if site.optimizerEconomics != nil {
 		decision.ControlStrategy = "economic"
 		if !site.optimizerModeExpiresAt.IsZero() {
 			expires := site.optimizerModeExpiresAt
+			if validity := decision.Updated.Add(optimizerBatteryModeValidity); validity.Before(expires) {
+				expires = validity
+			}
 			decision.ExpiresAt = &expires
 			decision.ValidFor = max(0, min(decision.ValidFor, expires.Sub(decision.Updated).Milliseconds()))
 		}
@@ -670,7 +678,7 @@ func (site *Site) publishOptimizerDecisionLocked() {
 		mode, since := site.optimizerBatteryModePending, site.optimizerBatteryModePendingSince
 		eligible, expires := since.Add(optimizerBatteryModeConfirmDelay), since.Add(optimizerBatteryModeValidity)
 		decision.PendingMode, decision.PendingSince = &mode, &since
-		decision.EligibleAt, decision.ExpiresAt = &eligible, &expires
+		decision.EligibleAt, decision.PendingExpiresAt = &eligible, &expires
 	}
 	site.publish(keys.OptimizerDecision, decision)
 }

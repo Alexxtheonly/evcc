@@ -28,6 +28,8 @@ Robust decisions expire at the first modeled slot's end or six minutes after pub
 whichever comes first. A backward clock invalidates freshness. The ordinary timer reports
 pending start, five-minute eligibility, six-minute expiry and reset reasons. Neither path
 overrides current-rate revalidation, solver failure release, HEMS, external control or max SoC.
+The decision's `expiresAt` is its freshness cutoff. `pendingExpiresAt` separately marks the
+latest time an ordinary pending candidate can confirm without restarting its observation window.
 
 `optimizerDecision` distinguishes the candidate, confirmed optimizer mode and applied device
 command consensus. Applied means the last successful command, not measured power; `unknown`

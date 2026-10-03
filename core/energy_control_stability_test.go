@@ -147,6 +147,13 @@ func TestEnergyControlProvenanceAndPendingClock(t *testing.T) {
 	now = now.Add(-time.Minute)
 	site.setOptimizerBatteryMode(d)
 	assert.Equal(t, "clockChanged", lastOptimizerDecision(t, params).ResetReason)
+	now = now.Add(time.Minute)
+	site.setOptimizerBatteryMode(d)
+	pub = lastOptimizerDecision(t, params)
+	require.NotNil(t, pub.PendingExpiresAt)
+	require.NotNil(t, pub.ExpiresAt)
+	assert.Equal(t, pub.PendingSince.Add(6*time.Minute), *pub.PendingExpiresAt)
+	assert.True(t, pub.PendingExpiresAt.Before(*pub.ExpiresAt), "pending confirmation deadline differs from last-result freshness")
 	now = now.Add(7 * time.Minute)
 	site.setOptimizerBatteryMode(d)
 	assert.Equal(t, "candidateExpired", lastOptimizerDecision(t, params).ResetReason)
@@ -209,4 +216,45 @@ func TestEnergyControlCanonicalEquivalentActions(t *testing.T) {
 	require.Len(t, actions, 2)
 	assert.Equal(t, "normal", actions[0].name, "equivalent idle modes canonicalize to normal")
 	assert.Equal(t, "charge", actions[1].name)
+}
+
+func TestEnergyControlPublishedExpiryMatchesSixMinuteCutoff(t *testing.T) {
+	enableAutomatic(t)
+	now := time.Date(2026, 10, 3, 11, 0, 0, 0, time.UTC)
+	params := make(chan util.Param, 16)
+	site := &Site{log: util.NewLogger("test"), optimizerNow: func() time.Time { return now }, valueChan: params}
+	site.setOptimizerBatteryMode(optimizerDecision{
+		mode: api.BatteryCharge, suggestedMode: api.BatteryCharge, price: .2,
+		economics: &energyControlEconomics{SelectedAction: "charge", validUntil: now.Add(15 * time.Minute)},
+	})
+	pub := lastOptimizerDecision(t, params)
+	require.NotNil(t, pub.ExpiresAt)
+	assert.Equal(t, now.Add(6*time.Minute), *pub.ExpiresAt)
+	assert.Equal(t, pub.Updated.Add(time.Duration(pub.ValidFor)*time.Millisecond), *pub.ExpiresAt)
+	now = pub.ExpiresAt.Add(-time.Nanosecond)
+	_, valid := site.batterySuggestionMode(api.Rate{Value: .2})
+	assert.True(t, valid)
+	now = *pub.ExpiresAt
+	_, valid = site.batterySuggestionMode(api.Rate{Value: .2})
+	assert.False(t, valid, "published expiry must not outlive the accepted control decision")
+}
+
+func TestEnergyControlPendingExpiryDoesNotExpireFreshAppliedDecision(t *testing.T) {
+	enableAutomatic(t)
+	now := time.Date(2026, 10, 3, 11, 0, 0, 0, time.UTC)
+	params := make(chan util.Param, 16)
+	site := &Site{log: util.NewLogger("test"), optimizerNow: func() time.Time { return now }, valueChan: params,
+		optimizerBatteryMode: api.BatteryHold, optimizerBatteryModeConfirmedAt: now}
+	d := optimizerDecision{mode: api.BatteryCharge, suggestedMode: api.BatteryCharge, price: .2}
+	site.setOptimizerBatteryMode(d)
+	now = now.Add(4 * time.Minute)
+	site.setOptimizerBatteryMode(d)
+	pub := lastOptimizerDecision(t, params)
+	require.NotNil(t, pub.PendingExpiresAt)
+	require.NotNil(t, pub.ExpiresAt)
+	now = pub.PendingExpiresAt.Add(time.Second)
+	assert.True(t, now.Before(*pub.ExpiresAt))
+	mode, valid := site.batterySuggestionMode(api.Rate{Value: .2})
+	assert.True(t, valid, "a missed pending confirmation deadline is not the applied decision's freshness deadline")
+	assert.Equal(t, api.BatteryHold, mode)
 }
