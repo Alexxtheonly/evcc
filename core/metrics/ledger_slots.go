@@ -312,11 +312,15 @@ func (s *ledgerSlotSet) coverage() Coverage {
 // group (grid, pv, battery, home), summed/averaged across every entity in that group
 // so a multi-meter site (e.g. two PV strings) reduces to one series per group.
 type groupSlotRow struct {
-	Ts           int64
-	Energy       float64
-	ReturnEnergy float64
-	SocFrac      sql.NullFloat64 // AVG(soc_temp), percent; only meaningful for battery
-	Excluded     bool            // any contributing row this slot was recovered or incomplete
+	Ts                int64
+	Energy            float64
+	ReturnEnergy      float64
+	SocFrac           sql.NullFloat64 // AVG(soc_temp), percent; only meaningful for battery
+	Count             int             // number of distinct contributing entities
+	EnergyCount       int
+	ReturnEnergyCount int
+	SocCount          int
+	Excluded          bool // any contributing row this slot was recovered or incomplete
 }
 
 // queryGroupSlots aggregates the meters table by slot for every entity in the given
@@ -325,6 +329,11 @@ type groupSlotRow struct {
 // valid" rather than "every slot excluded", which is why this is a distinct return
 // value instead of an empty map.
 func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (rows map[int64]groupSlotRow, hasEntities bool, err error) {
+	return queryGroupSlotsCoverage(ctx, group, from, to, false)
+}
+
+// requireAll refuses ambiguous partial groups; entity history has no retirement timestamps.
+func queryGroupSlotsCoverage(ctx context.Context, group string, from, to time.Time, requireAll bool) (rows map[int64]groupSlotRow, hasEntities bool, err error) {
 	ids, err := groupEntityIDs(ctx, group)
 	if err != nil {
 		return nil, false, err
@@ -340,7 +349,7 @@ func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (row
 		// as false (not recovered, not incomplete), matching
 		// Collector.LastSlotEnergy's convention and batteryHistoryRows below.
 		Select(`ts, COALESCE(SUM(energy), 0) AS energy, COALESCE(SUM(return_energy), 0) AS return_energy,
-			AVG(soc_temp) AS soc_frac,
+			AVG(soc_temp) AS soc_frac, COUNT(DISTINCT meter) AS count, COUNT(energy) AS energy_count, COUNT(return_energy) AS return_energy_count, COUNT(soc_temp) AS soc_count,
 			MAX(CASE WHEN COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0 THEN 0 ELSE 1 END) AS excluded`).
 		Where("meter IN ? AND ts >= ? AND ts < ?", ids, from.Unix(), to.Unix()).
 		Group("ts").
@@ -350,6 +359,7 @@ func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (row
 
 	rows = make(map[int64]groupSlotRow, len(res))
 	for _, r := range res {
+		r.Excluded = r.Excluded || requireAll && r.Count != len(ids)
 		rows[r.Ts] = r
 	}
 	return rows, true, nil

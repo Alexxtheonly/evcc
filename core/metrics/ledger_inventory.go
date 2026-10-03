@@ -26,11 +26,36 @@ type InventoryAdjustedChain struct {
 	Valuation          string         `json:"valuation"`
 }
 
+// inventoryReplay loads historical assumptions once, then values cumulative prefixes
+// of the same month. Daily differences telescope without restarting the battery.
+type inventoryReplay struct {
+	template  InventoryAdjustedChain
+	slots     []slotData
+	physics   []batteryPhysics
+	endpoints map[int64]float64
+}
+
+func (r *inventoryReplay) through(n int) *InventoryAdjustedChain {
+	res := r.template
+	if n == 0 || len(r.slots) == 0 {
+		return &res
+	}
+	return inventoryAdjustedFromSlots(r.slots[:n], r.physics[:n], &res, r.endpoints)
+}
+
 func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback batteryPhysics) (*InventoryAdjustedChain, error) {
+	replay, err := loadInventoryReplay(ctx, set, fallback)
+	if err != nil {
+		return nil, err
+	}
+	return replay.through(len(set.Slots)), nil
+}
+
+func loadInventoryReplay(ctx context.Context, set *ledgerSlotSet, fallback batteryPhysics) (*inventoryReplay, error) {
 	res := &InventoryAdjustedChain{Status: "unavailable", AssumptionsSource: "legacy_assumed_efficiency_and_observed_limits", Valuation: "stored DC energy valued at last nonnegative grid price times discharge efficiency; period-average uses nonnegative mean price"}
 	if len(set.Slots) == 0 {
 		res.Reason = "no_priced_slots"
-		return res, nil
+		return &inventoryReplay{template: *res}, nil
 	}
 	first, last := set.Slots[0].Start, set.Slots[len(set.Slots)-1].Start
 	var controls []controlSlot
@@ -42,7 +67,7 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 	for _, r := range controls {
 		if r.SnapshotUnavailable {
 			res.Reason = "historical_snapshot_unavailable_or_assumptions_changed"
-			return res, nil
+			return &inventoryReplay{template: *res}, nil
 		}
 		bySlot[r.Timestamp] = r.OptimizerSnapshotID
 		if r.OptimizerSnapshotID == nil {
@@ -52,7 +77,8 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 		if _, ok := snapshots[id]; ok {
 			continue
 		}
-		s, err := GetOptimizerSnapshot(id)
+		s := new(OptimizerSnapshot)
+		err := db.Instance.WithContext(ctx).First(s, id).Error
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
@@ -67,7 +93,7 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 			p, _, ok = snapshotPhysics(snapshots[*id], fallback)
 			if !ok {
 				res.Reason = "unsupported_historical_economics"
-				return res, nil
+				return &inventoryReplay{template: *res}, nil
 			}
 			historical++
 		}
@@ -80,7 +106,7 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 	}
 	endpoints := make(map[int64]float64)
 	var measured []meter
-	if err := db.Instance.Table("meters m").Select("m.ts,m.soc_temp").Joins(`JOIN entities e ON e.id=m.meter AND e."group" = ?`, Battery).Where("m.ts > ? AND m.ts <= ? AND m.soc_temp IS NOT NULL AND COALESCE(m.recovered,0)=0 AND COALESCE(m.incomplete,0)=0", first.Unix(), last.Add(tariff.SlotDuration).Unix()).Find(&measured).Error; err != nil {
+	if err := db.Instance.WithContext(ctx).Table("meters m").Select("m.ts,m.soc_temp").Joins(`JOIN entities e ON e.id=m.meter AND e."group" = ?`, Battery).Where("m.ts > ? AND m.ts <= ? AND m.soc_temp IS NOT NULL AND COALESCE(m.recovered,0)=0 AND COALESCE(m.incomplete,0)=0", first.Unix(), last.Add(tariff.SlotDuration).Unix()).Find(&measured).Error; err != nil {
 		return nil, err
 	}
 	for _, r := range measured {
@@ -88,7 +114,7 @@ func computeInventoryAdjusted(ctx context.Context, set *ledgerSlotSet, fallback 
 			endpoints[r.Timestamp] = *r.SocTemp / 100
 		}
 	}
-	return inventoryAdjustedFromSlots(set.Slots, physics, res, endpoints), nil
+	return &inventoryReplay{template: *res, slots: set.Slots, physics: physics, endpoints: endpoints}, nil
 }
 
 func inventoryAdjustedFromSlots(slots []slotData, physics []batteryPhysics, res *InventoryAdjustedChain, endpoints map[int64]float64) *InventoryAdjustedChain {
