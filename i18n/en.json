@@ -1312,6 +1312,7 @@
         "applied": "Applied command: {mode}",
         "proposed": "Selected action: {mode}",
         "pending": "Awaiting confirmation: {mode}",
+        "pendingExpired": "The confirmation window expired. Waiting for a fresh decision.",
         "eligibleIn": "Eligible for confirmation in {time}",
         "awaitingCheck": "Waiting for the next control check",
         "confirming": "A change is awaiting confirmation.",

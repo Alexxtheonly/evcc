@@ -7,7 +7,10 @@
 		<p class="small mb-0">
 			<span v-if="stateMessage">{{ $t(stateMessage) }}</span>
 			<template v-if="fresh">
-				<span v-if="pending">
+				<span v-if="pendingExpired">{{
+					$t("forecast.energy.control.pendingExpired")
+				}}</span>
+				<span v-else-if="pending">
 					{{
 						$t("forecast.energy.control.pending", {
 							mode: modeLabel(decision?.pendingMode),
@@ -112,6 +115,10 @@ export default defineComponent({
 			if (!this.decision) return "forecast.energy.control.unavailable";
 			if (!this.fresh) return "forecast.energy.control.stale";
 			return undefined;
+		},
+		pendingExpired() {
+			const expiry = Date.parse(this.decision?.pendingExpiresAt || "");
+			return this.pending && Number.isFinite(expiry) && this.now >= expiry;
 		},
 		pending() {
 			return this.fresh && this.decision?.pendingMode != null;

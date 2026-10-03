@@ -175,4 +175,28 @@ describe("battery control status", () => {
     expect(wrapper.text()).not.toContain("forecast.energy.control.applied");
     wrapper.unmount();
   });
+  test("pending expiry ends confirmation without hiding a fresh device command", async () => {
+    const wrapper = mount(BatteryControlStatus, {
+      props: {
+        automatic: true,
+        decision: {
+          ...decision,
+          appliedMode: 2,
+          pendingMode: 3,
+          eligibleAt: "2026-10-03T11:51:00Z",
+          pendingExpiresAt: "2026-10-03T11:52:00Z",
+          expiresAt: "2026-10-03T11:56:00Z",
+        },
+      },
+      global,
+    });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(wrapper.text()).toContain("forecast.energy.control.pendingExpired");
+    expect(wrapper.text()).toContain('"mode":"forecast.optimizer.modeHold');
+    expect(wrapper.text()).toContain("forecast.energy.control.applied");
+    expect(wrapper.text()).not.toContain("forecast.energy.control.awaitingCheck");
+    expect(wrapper.text()).not.toContain("forecast.energy.control.eligibleIn");
+    expect(wrapper.text()).not.toContain("forecast.energy.control.stale");
+    wrapper.unmount();
+  });
 });

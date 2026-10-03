@@ -1538,6 +1538,7 @@ export interface OptimizerDecision {
   candidateMode?: BATTERY_MODE | number;
   pendingMode?: BATTERY_MODE | number;
   pendingSince?: string;
+  pendingExpiresAt?: string;
   eligibleAt?: string;
   expiresAt?: string;
   resetReason?: string;

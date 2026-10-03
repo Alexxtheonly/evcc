@@ -1312,6 +1312,7 @@
         "applied": "Angewendeter Befehl: {mode}",
         "proposed": "Gewählte Aktion: {mode}",
         "pending": "Bestätigung ausstehend: {mode}",
+        "pendingExpired": "Das Bestätigungsfenster ist abgelaufen. Warten auf eine neue Entscheidung.",
         "eligibleIn": "Bestätigung frühestens in {time}",
         "awaitingCheck": "Warten auf die nächste Steuerungsprüfung",
         "confirming": "Eine Änderung wartet auf Bestätigung.",
