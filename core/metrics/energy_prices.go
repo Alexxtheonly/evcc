@@ -142,7 +142,7 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 			return groupSlotRow{}, !required
 		}
 		r, ok := g.rows[ts]
-		return r, ok && !r.Excluded && r.EnergyCount == r.Count && finite(r.Energy) && r.Energy >= 0
+		return r, ok && !r.Excluded && !r.InvalidEnergy && r.EnergyCount == r.Count && finite(r.Energy) && r.Energy >= 0
 	}
 	dayIndex := 0
 	for ts := from; ts.Before(end); ts = ts.Add(tariff.SlotDuration) {
@@ -166,7 +166,7 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 			bucket.Grid.ImportCost += g.Energy * p.Grid
 			bucket.Grid.Coverage.ValidSlots++
 		}
-		if g.ReturnEnergyCount != g.Count || !finite(g.ReturnEnergy) || g.ReturnEnergy < 0 {
+		if g.InvalidReturnEnergy || g.ReturnEnergyCount != g.Count || !finite(g.ReturnEnergy) || g.ReturnEnergy < 0 {
 			continue
 		}
 		h, ok := valid(Home, ts.Unix(), true)
@@ -202,7 +202,7 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 		}
 		if set.HasBattery {
 			b, ok := valid(Battery, ts.Unix(), true)
-			if !ok || b.SocCount != b.Count || b.ReturnEnergyCount != b.Count || !finite(b.ReturnEnergy) || b.ReturnEnergy < 0 || !b.SocFrac.Valid || !finite(b.SocFrac.Float64) || b.SocFrac.Float64 < 0 || b.SocFrac.Float64 > 100 {
+			if !ok || b.InvalidSoc || b.InvalidReturnEnergy || b.SocCount != b.Count || b.ReturnEnergyCount != b.Count || !finite(b.ReturnEnergy) || b.ReturnEnergy < 0 || !b.SocFrac.Valid || !finite(b.SocFrac.Float64) || b.SocFrac.Float64 < 0 || b.SocFrac.Float64 > 100 {
 				continue
 			}
 			soc := b.SocFrac.Float64 / 100

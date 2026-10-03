@@ -311,3 +311,25 @@ func TestEnergyPricesNullReadingIsNotMeasuredZero(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.Grid.Coverage.ValidSlots)
 	assert.Zero(t, report.Totals.Consumption.Coverage.ValidSlots)
 }
+
+func TestEnergyPricesNegativeMemberCannotCancelIntoValidSum(t *testing.T) {
+	grid, home := setupEnergyPrices(t)
+	other := mustCreateEntity(t, Grid, "other-grid")
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	p, f := .2, .05
+	require.NoError(t, PersistTariffs(start, &p, &f, nil, nil))
+	require.NoError(t, persist(grid, start, 1, 1, nil, false, false))
+	require.NoError(t, persist(other, start, -.5, -.5, nil, false, false))
+	require.NoError(t, persist(home, start, 1, 0, nil, false, false))
+	report, err := ComputeEnergyPrices(context.Background(), "", start.Add(15*time.Minute), nil)
+	require.NoError(t, err)
+	assert.Zero(t, report.Totals.Grid.Coverage.ValidSlots)
+	require.NoError(t, db.Instance.Model(new(meter)).Where("meter = ?", other.Id).Update("energy", .5).Error)
+	report, err = ComputeEnergyPrices(context.Background(), "", start.Add(15*time.Minute), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Totals.Grid.Coverage.ValidSlots)
+	assert.Zero(t, report.Totals.Consumption.Coverage.ValidSlots, "negative export member must not cancel into a positive group sum")
+	legacy, _, err := queryGroupSlots(context.Background(), Grid, start, start.Add(15*time.Minute))
+	require.NoError(t, err)
+	assert.False(t, legacy[start.Unix()].Excluded, "legacy query semantics remain unchanged")
+}

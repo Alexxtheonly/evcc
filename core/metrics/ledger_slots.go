@@ -312,15 +312,18 @@ func (s *ledgerSlotSet) coverage() Coverage {
 // group (grid, pv, battery, home), summed/averaged across every entity in that group
 // so a multi-meter site (e.g. two PV strings) reduces to one series per group.
 type groupSlotRow struct {
-	Ts                int64
-	Energy            float64
-	ReturnEnergy      float64
-	SocFrac           sql.NullFloat64 // AVG(soc_temp), percent; only meaningful for battery
-	Count             int             // number of distinct contributing entities
-	EnergyCount       int
-	ReturnEnergyCount int
-	SocCount          int
-	Excluded          bool // any contributing row this slot was recovered or incomplete
+	Ts                  int64
+	Energy              float64
+	ReturnEnergy        float64
+	SocFrac             sql.NullFloat64 // AVG(soc_temp), percent; only meaningful for battery
+	Count               int             // number of distinct contributing entities
+	EnergyCount         int
+	ReturnEnergyCount   int
+	SocCount            int
+	InvalidEnergy       bool
+	InvalidReturnEnergy bool
+	InvalidSoc          bool
+	Excluded            bool // any contributing row this slot was recovered or incomplete
 }
 
 // queryGroupSlots aggregates the meters table by slot for every entity in the given
@@ -350,6 +353,9 @@ func queryGroupSlotsCoverage(ctx context.Context, group string, from, to time.Ti
 		// Collector.LastSlotEnergy's convention and batteryHistoryRows below.
 		Select(`ts, COALESCE(SUM(energy), 0) AS energy, COALESCE(SUM(return_energy), 0) AS return_energy,
 			AVG(soc_temp) AS soc_frac, COUNT(DISTINCT meter) AS count, COUNT(energy) AS energy_count, COUNT(return_energy) AS return_energy_count, COUNT(soc_temp) AS soc_count,
+            MAX(CASE WHEN energy < 0 THEN 1 ELSE 0 END) AS invalid_energy,
+            MAX(CASE WHEN return_energy < 0 THEN 1 ELSE 0 END) AS invalid_return_energy,
+            MAX(CASE WHEN soc_temp < 0 OR soc_temp > 100 THEN 1 ELSE 0 END) AS invalid_soc,
 			MAX(CASE WHEN COALESCE(recovered, 0) = 0 AND COALESCE(incomplete, 0) = 0 THEN 0 ELSE 1 END) AS excluded`).
 		Where("meter IN ? AND ts >= ? AND ts < ?", ids, from.Unix(), to.Unix()).
 		Group("ts").
