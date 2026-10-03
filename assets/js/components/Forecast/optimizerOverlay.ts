@@ -2,6 +2,7 @@
 // timeline overlays the price chart renders. Kept framework-free for unit testing.
 
 import type { EvOpt, OptimizerDecision, RepeatingPlan } from "@/types/evcc";
+import { decodeBatteryMode } from "@/utils/batteryMode";
 import { BATTERY_MODE } from "@/types/evcc";
 import { loadpointTitle } from "../Optimize/chart";
 
@@ -273,6 +274,6 @@ export function shouldAnnotateOptimizerDecision(
 ): boolean {
   if (!d || !automaticEnabled) return false;
   if (nowMs - new Date(d.updated).getTime() > d.validFor) return false;
-  if (d.mode === BATTERY_MODE.UNKNOWN && !d.vetoReason) return false;
+  if (decodeBatteryMode(d.mode) === BATTERY_MODE.UNKNOWN && !d.vetoReason) return false;
   return true;
 }

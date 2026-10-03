@@ -44,6 +44,7 @@ import type {
 	UiForecastSlot,
 	Vehicle,
 } from "@/types/evcc";
+import { decodeBatteryMode } from "@/utils/batteryMode";
 import { BATTERY_MODE } from "@/types/evcc";
 
 export default defineComponent({
@@ -203,7 +204,8 @@ export default defineComponent({
 				[BATTERY_MODE.CHARGE]: "forecast.optimizer.modeCharge",
 				[BATTERY_MODE.UNKNOWN]: "forecast.optimizer.modeUnknown",
 			};
-			const modeKey = modeKeys[d.mode];
+			const mode = decodeBatteryMode(d.mode);
+			const modeKey = mode ? modeKeys[mode] : undefined;
 			if (!modeKey) return undefined;
 
 			let label = this.$t(modeKey) as string;

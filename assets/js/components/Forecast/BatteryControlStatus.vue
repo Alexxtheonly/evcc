@@ -55,16 +55,10 @@
 </template>
 <script lang="ts">
 import { defineComponent, type PropType } from "vue";
-import { BATTERY_MODE, CURRENCY, type OptimizerDecision } from "@/types/evcc";
+import { type BATTERY_MODE, CURRENCY, type OptimizerDecision } from "@/types/evcc";
+import { decodeBatteryMode } from "@/utils/batteryMode";
 import { reasonLabelKey } from "./savingsLedgerDecisions";
 
-const modes = [
-	BATTERY_MODE.UNKNOWN,
-	BATTERY_MODE.NORMAL,
-	BATTERY_MODE.HOLD,
-	BATTERY_MODE.CHARGE,
-	BATTERY_MODE.HOLDCHARGE,
-];
 const modeKeys: Record<string, string> = {
 	normal: "forecast.optimizer.modeNormal",
 	hold: "forecast.optimizer.modeHold",
@@ -152,7 +146,7 @@ export default defineComponent({
 	},
 	methods: {
 		modeLabel(value: BATTERY_MODE | number | undefined) {
-			const mode = typeof value === "number" ? modes[value] : value;
+			const mode = decodeBatteryMode(value);
 			return this.$t(
 				mode && modeKeys[mode] ? modeKeys[mode]! : "forecast.energy.control.unknownMode"
 			);

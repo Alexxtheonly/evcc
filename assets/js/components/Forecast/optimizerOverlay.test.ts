@@ -343,6 +343,10 @@ describe("shouldAnnotateOptimizerDecision", () => {
     expect(shouldAnnotateOptimizerDecision(base, true, edge)).toBe(true);
   });
 
+  it("does not render numeric Unknown with no veto reason", () => {
+    expect(shouldAnnotateOptimizerDecision({ ...base, mode: 0 }, true, now)).toBe(false);
+  });
+
   it("does not render an Unknown mode with no veto reason", () => {
     const d: OptimizerDecision = { ...base, mode: BATTERY_MODE.UNKNOWN };
     expect(shouldAnnotateOptimizerDecision(d, true, now)).toBe(false);
