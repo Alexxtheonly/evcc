@@ -25,6 +25,9 @@
 				@settings-closed="restoreSettingsFocus"
 				:insights="optimizerInsights"
 				:health="optimizerHealth"
+				:decision="optimizerDecision"
+				:applied-mode="batteryMode"
+				:offline="offline"
 				:automatic="optimizerAutomatic"
 				:currency="currency"
 				:configured-batteries="configuredBatteries"
@@ -261,6 +264,15 @@ export default defineComponent({
 		},
 		optimizerInsights() {
 			return store.state.optimizerInsights;
+		},
+		optimizerDecision() {
+			return store.state.optimizerDecision;
+		},
+		batteryMode() {
+			return store.state.batteryMode;
+		},
+		offline() {
+			return store.state.offline;
 		},
 		optimizerHealth() {
 			return store.state.optimizerHealth;

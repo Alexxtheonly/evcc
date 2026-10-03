@@ -1533,7 +1533,24 @@ export enum OPTIMIZER_VETO_REASON {
 
 /** Vetted outcome of the optimizer's last run, for the forecast view's slot-0 annotation. */
 export interface OptimizerDecision {
-  mode: BATTERY_MODE;
+  mode: BATTERY_MODE | number;
+  appliedMode?: BATTERY_MODE | number;
+  candidateMode?: BATTERY_MODE | number;
+  pendingMode?: BATTERY_MODE | number;
+  pendingSince?: string;
+  eligibleAt?: string;
+  expiresAt?: string;
+  resetReason?: string;
+  controlStrategy?: "confirmation" | "economic";
+  economics?: {
+    bestAction: string;
+    selectedAction: string;
+    preferredAction?: string;
+    regretGap?: number;
+    materiality?: number;
+    reason: "minimumRegret" | "economicTie" | "preferredUnavailable";
+    evaluations: { action: string; costs: number[]; regret: number }[];
+  };
   chargeVetoed: boolean;
   vetoReason?: OPTIMIZER_VETO_REASON;
   price?: number;

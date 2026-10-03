@@ -1151,7 +1151,11 @@
       "unknownLevel": "Unbekannter Ladestand",
       "configure": "Planungseinstellungen",
       "pageTitle": "Energieplanung",
-      "tabs": { "plan": "Plan", "results": "Ergebnisse", "diagnostics": "Diagnose" },
+      "tabs": {
+        "plan": "Plan",
+        "results": "Ergebnisse",
+        "diagnostics": "Diagnose"
+      },
       "viewPlan": "Energieplan ansehen",
       "viewResults": "Einsparungen und frühere Entscheidungen",
       "optimizerDisabled": "Der Optimierer ist aus. Frühere Ergebnisse bleiben verfügbar; es wird kein neuer Plan berechnet.",
@@ -1192,7 +1196,11 @@
       "efficiencyCustom": "Eigene Wirkungsgrade",
       "efficiencyPending": "Automatische Werte stehen mit dem nächsten Plan bereit. Eigene Werte erfordern beide Richtungen.",
       "effectiveEfficiency": "Aktueller Plan · {source}: Laden {charge}%, Entladen {discharge}%, Gesamt {roundtrip}%",
-      "sources": { "default": "Standard", "measured": "Gelernt", "configured": "Eigene Werte" },
+      "sources": {
+        "default": "Standard",
+        "measured": "Gelernt",
+        "configured": "Eigene Werte"
+      },
       "calibrationAndWear": "Messung und Verschleiß (optional)",
       "wearUnknown": "Unbekannt / nicht enthalten",
       "wearNote": "Bei unbekannten Kosten leer lassen. Trage 0 nur ein, wenn du bewusst keine Verschleißkosten annimmst. Die Einheit bezieht sich auf eine auf der DC-Seite entladene kWh.",
@@ -1297,7 +1305,32 @@
         "measurement": "Haus- und Solarenergiebilanzen sind bei gemischten AC- und DC-Messungen nur näherungsweise korrekt. Gemessene Batterieladestände haben Vorrang vor energiebasierten Schätzungen.",
         "valuation": "Verbleibende DC-Batterieenergie wird mit dem letzten nichtnegativen Netzpreis bewertet, abzüglich Entladeverlusten. Beim Periodendurchschnitt gilt der nichtnegative Mittelpreis."
       },
-      "wearExcluded": "Batterieverschleiß ist für Teile oder den gesamten Zeitraum nicht konfiguriert und in dieser Schätzung nicht enthalten."
+      "wearExcluded": "Batterieverschleiß ist für Teile oder den gesamten Zeitraum nicht konfiguriert und in dieser Schätzung nicht enthalten.",
+      "control": {
+        "title": "Batteriesteuerung",
+        "applied": "Angewendeter Befehl: {mode}",
+        "proposed": "Gewählte Aktion: {mode}",
+        "pending": "Bestätigung ausstehend: {mode}",
+        "eligibleIn": "Bestätigung frühestens in {time}",
+        "awaitingCheck": "Warten auf die nächste Steuerungsprüfung",
+        "confirming": "Eine Änderung wartet auf Bestätigung.",
+        "offline": "Verbindung unterbrochen. Der aktuelle Steuerungsstatus ist nicht verfügbar.",
+        "advisory": "Automatische Steuerung ist aus. Dieser Plan ist eine Vorschau.",
+        "unavailable": "Keine aktuelle Steuerungsentscheidung verfügbar.",
+        "stale": "Die letzte Entscheidung ist abgelaufen. Warten auf einen neuen Plan.",
+        "unknownMode": "Nicht verfügbar",
+        "planNote": "Geplante Energieflüsse sind Schätzungen. Batteriebefehle und Bestätigungszeiten stehen oben.",
+        "economics": "Warum diese Aktion?",
+        "economicTie": "Die Alternativen liegen wirtschaftlich nahe beieinander. Die bisherige Aktion bleibt bestehen.",
+        "minimumRegret": "Diese Aktion begrenzt den größten modellierten Nachteil über die Prognoseszenarien.",
+        "preferredUnavailable": "Die bisherige Aktion konnte nicht bewertet werden. Diese Aktion begrenzt den modellierten Nachteil unter den verfügbaren Alternativen.",
+        "regretGap": "Modellierter Nachteil beim Beibehalten der bisherigen Aktion: {gap}. Wechselschwelle: {threshold}.",
+        "scoreNote": "Dies sind Entscheidungswerte in der Standortwährung, keine gemessenen Einsparungen.",
+        "candidateChanged": "Bestätigung neu gestartet, weil sich die gewählte Aktion geändert hat.",
+        "candidateExpired": "Die zuvor ausstehende Aktion ist abgelaufen.",
+        "candidateUnavailable": "Die zuvor ausstehende Aktion ist nicht mehr verfügbar.",
+        "clockChanged": "Bestätigung nach einer Zeitänderung neu gestartet."
+      }
     },
     "co2": {
       "average": "Durchschnitt",

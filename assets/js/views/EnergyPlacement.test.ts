@@ -6,6 +6,7 @@ import Forecast from "./Forecast.vue";
 import Config from "./Config.vue";
 import MoreMenu from "../components/BottomTabs/MoreMenu.vue";
 import EnergyPlanCard from "../components/Forecast/EnergyPlanCard.vue";
+import BatteryControlStatus from "../components/Forecast/BatteryControlStatus.vue";
 import EnergySettings from "../components/Forecast/EnergySettings.vue";
 import GenericModal from "../components/Helper/GenericModal.vue";
 import SavingsLedgerCard from "../components/Forecast/SavingsLedgerCard.vue";
@@ -44,6 +45,39 @@ beforeEach(() => {
 });
 
 describe("energy planning placement", () => {
+  test("Plan connects live control status to the battery summary", async () => {
+    const decision = {
+      mode: 2,
+      appliedMode: 2,
+      candidateMode: 3,
+      pendingMode: 3,
+      chargeVetoed: false,
+      updated: new Date().toISOString(),
+      validFor: 600_000,
+    };
+    Object.assign(store.state, {
+      optimizerAutomatic: true,
+      optimizerDecision: decision,
+      batteryMode: "hold",
+    });
+    const router = await navigation("/optimize");
+    const wrapper = shallowMount(Optimize, {
+      global: {
+        plugins: [router],
+        mocks,
+        renderStubDefaultSlot: true,
+        stubs: { EnergyPlanCard: false },
+      },
+    });
+    const control = wrapper.getComponent(BatteryControlStatus);
+    expect(control.props("decision")).toEqual(decision);
+    expect(control.props("appliedMode")).toBe("hold");
+    expect(control.props("automatic")).toBe(true);
+    store.state.offline = true;
+    await flushPromises();
+    expect(control.props("offline")).toBe(true);
+    wrapper.unmount();
+  });
   test("closing settings after browser Back focuses the visible section, not the hidden invoker", async () => {
     const router = await navigation("/optimize?tab=results");
     const wrapper = shallowMount(Optimize, {

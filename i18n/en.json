@@ -1151,7 +1151,11 @@
       "unknownLevel": "Unknown charge level",
       "configure": "Planning settings",
       "pageTitle": "Energy planning",
-      "tabs": { "plan": "Plan", "results": "Results", "diagnostics": "Diagnostics" },
+      "tabs": {
+        "plan": "Plan",
+        "results": "Results",
+        "diagnostics": "Diagnostics"
+      },
       "viewPlan": "View energy plan",
       "viewResults": "Savings and past decisions",
       "optimizerDisabled": "The optimizer is off. Past results remain available; no new plan is being calculated.",
@@ -1192,7 +1196,11 @@
       "efficiencyCustom": "Custom efficiencies",
       "efficiencyPending": "Automatic values will be available with the next plan. Custom values require both directions.",
       "effectiveEfficiency": "Current plan · {source}: charge {charge}%, discharge {discharge}%, round trip {roundtrip}%",
-      "sources": { "default": "Default", "measured": "Learned", "configured": "Custom" },
+      "sources": {
+        "default": "Default",
+        "measured": "Learned",
+        "configured": "Custom"
+      },
       "calibrationAndWear": "Measurement and wear (optional)",
       "wearUnknown": "Unknown / not included",
       "wearNote": "Leave blank if unknown. Enter 0 only if you deliberately want to assume no wear cost. The unit is per kWh discharged on the battery's DC side.",
@@ -1297,7 +1305,32 @@
         "measurement": "Household and solar energy balances are approximate when AC and DC meters are mixed. Measured battery charge levels take precedence over energy-based estimates.",
         "valuation": "Remaining DC battery energy is valued at the last nonnegative grid price, adjusted for discharge losses. Period-average comparisons use the nonnegative mean price."
       },
-      "wearExcluded": "Battery wear is unconfigured for part or all of this period and is excluded from this estimate."
+      "wearExcluded": "Battery wear is unconfigured for part or all of this period and is excluded from this estimate.",
+      "control": {
+        "title": "Battery control",
+        "applied": "Applied command: {mode}",
+        "proposed": "Selected action: {mode}",
+        "pending": "Awaiting confirmation: {mode}",
+        "eligibleIn": "Eligible for confirmation in {time}",
+        "awaitingCheck": "Waiting for the next control check",
+        "confirming": "A change is awaiting confirmation.",
+        "offline": "Connection lost. Current control status is unavailable.",
+        "advisory": "Automatic control is off. This plan is a preview.",
+        "unavailable": "No current control decision is available.",
+        "stale": "The last decision has expired. Waiting for a fresh plan.",
+        "unknownMode": "Unavailable",
+        "planNote": "Planned energy transfers are estimates. Battery commands and confirmation delays are shown above.",
+        "economics": "Why this action?",
+        "economicTie": "The alternatives are economically close, so the previous action is retained.",
+        "minimumRegret": "This action limits the worst modeled disadvantage across forecast scenarios.",
+        "preferredUnavailable": "The previous action could not be evaluated. This action limits the modeled disadvantage among the available alternatives.",
+        "regretGap": "Modeled disadvantage of retaining the previous action: {gap}. Switching threshold: {threshold}.",
+        "scoreNote": "These are decision scores in the site currency, not measured savings.",
+        "candidateChanged": "Confirmation restarted because the selected action changed.",
+        "candidateExpired": "The previous pending action expired.",
+        "candidateUnavailable": "The previous pending action is no longer available.",
+        "clockChanged": "Confirmation restarted after a clock change."
+      }
     },
     "co2": {
       "average": "Average",

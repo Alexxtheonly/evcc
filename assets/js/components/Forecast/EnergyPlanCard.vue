@@ -18,6 +18,14 @@
 		<p v-if="status === 'unavailable'" role="status" class="alert alert-warning mt-3">
 			{{ $t("forecast.energy.status.unavailable") }}<span v-if="reason">: {{ reason }}</span>
 		</p>
+		<BatteryControlStatus
+			v-if="batteries.length || configuredBatteries.length || decision"
+			:decision="decision"
+			:applied-mode="appliedMode"
+			:automatic="automatic"
+			:offline="offline"
+			:currency="currency"
+		/>
 		<template v-if="slots.length">
 			<p class="fw-semibold mb-2">{{ horizon }}</p>
 			<div class="row g-2 mb-3">
@@ -37,6 +45,7 @@
 				</div>
 			</div>
 			<h4 class="fs-6 mb-2">{{ $t("forecast.energy.nextActions") }}</h4>
+			<p class="small text-muted">{{ $t("forecast.energy.control.planNote") }}</p>
 			<div class="row g-2 mb-3">
 				<div v-for="item in deviceSummaries" :key="item.device.key" class="col-md-6">
 					<div class="device-summary border rounded p-3 h-100">
@@ -293,6 +302,7 @@ import { defineComponent, type PropType } from "vue";
 import Card from "../Helper/Card.vue";
 import EnergySettings from "./EnergySettings.vue";
 import EnergyPlanChart from "./EnergyPlanChart.vue";
+import BatteryControlStatus from "./BatteryControlStatus.vue";
 import formatter from "@/mixins/formatter";
 import { is12hFormat } from "@/units";
 import {
@@ -301,15 +311,27 @@ import {
 	type EnergyDevice,
 	type EnergyInsights,
 } from "./energyIntelligence";
-import { CURRENCY, type BatteryMeter, type OptimizerHealth } from "@/types/evcc";
+import {
+	CURRENCY,
+	type BatteryMeter,
+	type OptimizerHealth,
+	type OptimizerDecision,
+	type BATTERY_MODE,
+} from "@/types/evcc";
 
 export default defineComponent({
-	components: { Card, EnergySettings, EnergyPlanChart },
+	components: { Card, EnergySettings, EnergyPlanChart, BatteryControlStatus },
 	emits: ["settingsClosed"],
 	mixins: [formatter],
 	props: {
 		insights: { type: Object as PropType<EnergyInsights>, default: undefined },
 		health: { type: Object as PropType<OptimizerHealth>, default: undefined },
+		decision: { type: Object as PropType<OptimizerDecision>, default: undefined },
+		appliedMode: {
+			type: [String, Number] as PropType<BATTERY_MODE | number>,
+			default: undefined,
+		},
+		offline: Boolean,
 		automatic: Boolean,
 		currency: { type: String as PropType<CURRENCY>, default: CURRENCY.EUR },
 		configuredBatteries: {
