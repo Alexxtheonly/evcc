@@ -168,7 +168,7 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 		return err
 	}
 	if control != nil {
-		control.validUntil = firstEnd
+		control.validUntil = energyDecisionExpiry(firstEnd)
 	}
 	site.persistOptimizerRun(string(res.Status), res)
 	ordinary := extended.ordinary()
@@ -182,9 +182,27 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 	return nil
 }
 
+// energyDecisionBoundaryGrace bounds how long a robust decision outlives its
+// slot while the new slot's first run is pending. Runs start every ~30 s and a
+// robust solve is cut off after 45 s, so 90 s covers one run that straddles
+// the boundary plus a typical replacement run. Without it, every boundary
+// released hold/charge to normal for ~20 s.
+const energyDecisionBoundaryGrace = 90 * time.Second
+
+// errOptimizerSlotElapsed is a run that finished after its first slot ended.
+// It supersedes nothing, so the previous decision keeps its bounded grace.
+var errOptimizerSlotElapsed = fmt.Errorf("%w: first slot elapsed", errOptimizerReplan)
+
+// energyDecisionExpiry is when a robust decision for the slot ending at
+// firstEnd stops controlling the battery unless a newer result replaces it.
+// The live-rate veto still drops a charge decision at the boundary itself.
+func energyDecisionExpiry(firstEnd time.Time) time.Time {
+	return firstEnd.Add(energyDecisionBoundaryGrace)
+}
+
 func validateEnergyPlanInputs(firstEnd, now time.Time, planned, current EnergyIntelligenceSettings) error {
 	if !firstEnd.After(now) {
-		return fmt.Errorf("optimizer schedule expired before completion: %w", errOptimizerReplan)
+		return fmt.Errorf("optimizer schedule expired before completion: %w", errOptimizerSlotElapsed)
 	}
 	if !reflect.DeepEqual(planned, current) {
 		return fmt.Errorf("energy settings changed while optimizing; waiting for a fresh plan: %w", errOptimizerReplan)

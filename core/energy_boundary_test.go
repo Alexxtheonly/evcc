@@ -9,10 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/util"
+	"github.com/evcc-io/evcc/util/config"
 	optimizer "github.com/evcc-io/optimizer/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 // Captured 2026-10-04 17:00-17:04 CEST: the companion rejected the normal
@@ -93,8 +96,8 @@ func TestFixedFirstStepStaysInsideZeroGridBoundary(t *testing.T) {
 		require.NoError(t, err, c.name)
 		discharge := *firstAction(t, actions, "normal").FirstStepDischarge
 		assert.GreaterOrEqual(t, discharge, 0.0, c.name)
-		assert.LessOrEqual(t, discharge, demand-margin*.99, c.name)
-		assert.Greater(t, discharge, demand-margin*1.01, "%s: margin must not grow into real import", c.name)
+		assert.LessOrEqual(t, discharge, demand-margin, c.name)
+		assert.InDelta(t, demand-margin, discharge, 1e-9, "%s: exactly the parsed demand less the margin", c.name)
 
 		// charge edge: the same values as PV surplus without grid charging
 		req, details, base = boundaryRequest(c.ft, c.gt, c.dt, false)
@@ -104,8 +107,8 @@ func TestFixedFirstStepStaysInsideZeroGridBoundary(t *testing.T) {
 		require.NoError(t, err, c.name)
 		charge := *firstAction(t, actions, "normal").FirstStepCharge
 		assert.GreaterOrEqual(t, charge, 0.0, c.name)
-		assert.LessOrEqual(t, charge, surplus-margin*.99, c.name)
-		assert.Greater(t, charge, surplus-margin*1.01, c.name)
+		assert.LessOrEqual(t, charge, surplus-margin, c.name)
+		assert.InDelta(t, surplus-margin, charge, 1e-9, c.name)
 	}
 	// The captured inputs reproduce both rounding directions.
 	assert.Equal(t, 3, above)
@@ -198,4 +201,106 @@ func TestRobustNormalSurvivesCapturedBoundary(t *testing.T) {
 			assert.True(t, slices.ContainsFunc(info.Evaluations, func(e energyScenarioEvaluation) bool { return e.Action == "normal" }), "%s surplus=%v", c.name, surplus)
 		}
 	}
+}
+
+func boundaryControlSite(t *testing.T, now *time.Time) (*Site, *api.MockBatteryController) {
+	t.Helper()
+	enableAutomatic(t)
+	batCon := api.NewMockBatteryController(gomock.NewController(t))
+	var bat api.Meter = &struct {
+		api.Meter
+		api.BatteryController
+	}{BatteryController: batCon}
+	site := &Site{
+		log: util.NewLogger("boundary"), valueChan: make(chan util.Param, 1024), optimizerNow: func() time.Time { return *now },
+		batteryMeters: []config.Device[api.Meter]{config.NewStaticDevice(config.Named{Name: "bat"}, bat)},
+	}
+	return site, batCon
+}
+
+func boundaryDecision(site *Site, mode api.BatteryMode, price float64, firstEnd time.Time) {
+	site.setOptimizerBatteryMode(optimizerDecision{
+		mode: mode, suggestedMode: mode, price: price,
+		economics: &energyControlEconomics{SelectedAction: mode.String(), validUntil: energyDecisionExpiry(firstEnd)},
+	})
+}
+
+func TestEnergyDecisionSurvivesSlotBoundaryUntilReplaced(t *testing.T) {
+	firstEnd := time.Date(2026, 10, 3, 21, 0, 0, 0, time.UTC)
+	now := firstEnd.Add(-33 * time.Second)
+	site, batCon := boundaryControlSite(t, &now)
+	rate := api.Rate{Value: .2}
+
+	batCon.EXPECT().SetBatteryMode(api.BatteryHold)
+	boundaryDecision(site, api.BatteryHold, 0, firstEnd)
+	site.updateBatteryMode(false, rate)
+
+	// 21:00:08 tonight released hold to normal; the mock rejects any write.
+	now = firstEnd.Add(8 * time.Second)
+	site.updateBatteryMode(false, rate)
+	assert.Equal(t, api.BatteryHold, site.GetBatteryMode())
+	assert.Equal(t, "hold", site.energyPreferredAction(), "the new slot's first run keeps its hysteresis incumbent")
+
+	// A run that straddled the boundary supersedes nothing.
+	site.finishOptimizerAttempt(validateEnergyPlanInputs(firstEnd, now, EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{}))
+	site.updateBatteryMode(false, rate)
+	assert.Equal(t, api.BatteryHold, site.GetBatteryMode())
+
+	// The new slot's first result replaces the carried decision.
+	now = firstEnd.Add(27 * time.Second)
+	boundaryDecision(site, api.BatteryHold, 0, firstEnd.Add(15*time.Minute))
+	now = energyDecisionExpiry(firstEnd).Add(time.Second)
+	site.updateBatteryMode(false, rate)
+	assert.Equal(t, api.BatteryHold, site.GetBatteryMode())
+}
+
+func TestEnergyDecisionReleasesWhenNoResultArrivesWithinGrace(t *testing.T) {
+	firstEnd := time.Date(2026, 10, 3, 21, 0, 0, 0, time.UTC)
+	now := firstEnd.Add(-33 * time.Second)
+	site, batCon := boundaryControlSite(t, &now)
+	rate := api.Rate{Value: .2}
+
+	batCon.EXPECT().SetBatteryMode(api.BatteryHold)
+	boundaryDecision(site, api.BatteryHold, 0, firstEnd)
+	site.updateBatteryMode(false, rate)
+
+	now = energyDecisionExpiry(firstEnd).Add(-time.Nanosecond)
+	site.updateBatteryMode(false, rate)
+	assert.Equal(t, api.BatteryHold, site.GetBatteryMode())
+
+	now = energyDecisionExpiry(firstEnd)
+	batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
+	site.updateBatteryMode(false, rate)
+	assert.Equal(t, api.BatteryNormal, site.GetBatteryMode())
+	assert.Empty(t, site.energyPreferredAction())
+
+	// Any other superseded plan still releases immediately.
+	now = firstEnd.Add(10 * time.Minute)
+	batCon.EXPECT().SetBatteryMode(api.BatteryHold)
+	boundaryDecision(site, api.BatteryHold, 0, firstEnd.Add(15*time.Minute))
+	site.updateBatteryMode(false, rate)
+	site.finishOptimizerAttempt(validateEnergyPlanInputs(firstEnd.Add(15*time.Minute), now, EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{Robust: true}))
+	batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
+	site.updateBatteryMode(false, rate)
+	assert.Equal(t, api.BatteryNormal, site.GetBatteryMode())
+}
+
+func TestEnergyChargeDecisionVetoedAtBoundaryReleases(t *testing.T) {
+	firstEnd := time.Date(2026, 10, 3, 14, 45, 0, 0, time.UTC)
+	now := firstEnd.Add(-20 * time.Second)
+	site, batCon := boundaryControlSite(t, &now)
+
+	batCon.EXPECT().SetBatteryMode(api.BatteryCharge)
+	boundaryDecision(site, api.BatteryCharge, .2, firstEnd)
+	site.updateBatteryMode(false, api.Rate{Value: .2})
+
+	// Same price in the new slot: the carried charge decision stands.
+	now = firstEnd.Add(5 * time.Second)
+	site.updateBatteryMode(false, api.Rate{Value: .2})
+	assert.Equal(t, api.BatteryCharge, site.GetBatteryMode())
+
+	// The new slot's price vetoes it inside the grace period.
+	batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
+	site.updateBatteryMode(false, api.Rate{Value: .5})
+	assert.Equal(t, api.BatteryNormal, site.GetBatteryMode())
 }

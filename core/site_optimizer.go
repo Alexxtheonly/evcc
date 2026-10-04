@@ -1046,12 +1046,21 @@ func (site *Site) publishSuggestions() {
 // clearSuggestions removes all suggestions and the battery forecast when the
 // optimizer result is stale
 func (site *Site) clearSuggestions() {
+	site.clearAdvice(false)
+}
+
+// clearAdvice clears the last run's advice. After a run that only missed its
+// slot, a robust battery decision is kept: its own expiry bounds it.
+func (site *Site) clearAdvice(slotElapsed bool) {
 	site.Lock()
 	site.energySnapshotID = nil
+	retain := slotElapsed && site.optimizerEconomics != nil
 	site.Unlock()
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
-	site.setOptimizerBatteryMode(optimizerDecision{})
+	if !retain {
+		site.setOptimizerBatteryMode(optimizerDecision{})
+	}
 
 	// the diagnostics of the last successful run must not linger with no
 	// staleness marker once a run fails - newOptimizerDiagnosticsPublish is
@@ -1227,7 +1236,7 @@ func (site *Site) finishOptimizerAttempt(err error) {
 		}
 
 		// stale advice must not linger
-		site.clearSuggestions()
+		site.clearAdvice(errors.Is(err, errOptimizerSlotElapsed))
 
 		reason := optimizerHealthReasonError
 		if errors.Is(err, errOptimizerNoTariff) {
