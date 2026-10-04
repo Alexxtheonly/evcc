@@ -161,6 +161,10 @@ type batteryResult struct {
 // suggestionThreshold ignores numerical noise in power comparisons (W)
 const suggestionThreshold = 50
 
+// gridDirectionTolerance (W) keeps float32 balance residuals from turning
+// passive self-consumption into a grid-direction override.
+const gridDirectionTolerance = 0.01
+
 // advisory actions for a loadpoint/vehicle slot; battery actions use api.BatteryMode
 const (
 	actionStop   = "stop"
@@ -295,8 +299,6 @@ func currentSlotSuggestion(detail batteryDetail, cfg optimizer.BatteryConfig, re
 
 	charge := float64(res.ChargingPower[0]) / slotHours
 	discharge := float64(res.DischargingPower[0]) / slotHours
-	// Float32 balance residuals must not turn passive self-consumption into an override.
-	const gridDirectionTolerance = 0.01 // W
 	gridImporting := float64(gridImport)/slotHours > gridDirectionTolerance
 	gridExporting := float64(gridExport)/slotHours > gridDirectionTolerance
 
