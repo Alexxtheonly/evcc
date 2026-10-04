@@ -84,6 +84,10 @@ type EnergyPriceReport struct {
 	FeedInFallbackPrice *float64 `json:"feedInFallbackPrice,omitempty"`
 }
 
+// notePriceWorldsEVTiming replaces the savings ledger's EV note, which describes a
+// EUR 0 attribution and a meterResidual field this report does not have.
+const notePriceWorldsEVTiming = "all four levels keep vehicle charging at its recorded times, so the level comparison contains no EV scheduling benefit; evTiming is a separate tariff-only estimate and is not added to it"
+
 // ErrEnergyPriceMonth rejects malformed and future calendar requests.
 var ErrEnergyPriceMonth = errors.New("month must be YYYY-MM and not in the future")
 
@@ -104,7 +108,7 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 	if to.Before(end) {
 		end = to
 	}
-	report := &EnergyPriceReport{Month: month, Timezone: reportTimezone(loc, now), Today: now.Format("2006-01-02"), From: from, To: to, EvaluatedTo: end, Days: []EnergyPriceBucket{}, Comparison: EnergyPriceComparison{Status: "unavailable", Reason: "no_priced_slots", Notes: []string{noteInvoiceComparability, noteEVTimingUnattributed, noteMeterResidual}}, EVTiming: EVTimingPrice{Status: "unavailable", Reason: "historical_evidence_unavailable"}}
+	report := &EnergyPriceReport{Month: month, Timezone: reportTimezone(loc, now), Today: now.Format("2006-01-02"), From: from, To: to, EvaluatedTo: end, Days: []EnergyPriceBucket{}, Comparison: EnergyPriceComparison{Status: "unavailable", Reason: "no_priced_slots", Notes: []string{noteInvoiceComparability, notePriceWorldsEVTiming}}, EVTiming: EVTimingPrice{Status: "unavailable", Reason: "historical_evidence_unavailable"}}
 	report.Totals = newEnergyPriceBucket(month, from, end)
 	for day := from; day.Before(end); day = day.AddDate(0, 0, 1) {
 		dayEnd := day.AddDate(0, 0, 1)

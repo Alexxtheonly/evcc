@@ -474,3 +474,17 @@ func TestEnergyPricesDiscloseOnlyPricedExportFallbacks(t *testing.T) {
 	assert.Equal(t, 1, report.Days[0].Consumption.FeedInFallbackSlots)
 	assert.Equal(t, 3, report.Totals.Grid.Coverage.ValidSlots)
 }
+
+func TestEnergyPriceNotesDescribeThisReport(t *testing.T) {
+	setupEnergyPrices(t)
+	report, err := ComputeEnergyPrices(context.Background(), "2026-10", time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC), nil)
+	require.NoError(t, err)
+	body, err := json.Marshal(report)
+	require.NoError(t, err)
+	for _, note := range report.Comparison.Notes {
+		assert.NotContains(t, note, "meterResidual", "the price report has no meterResidual field")
+		assert.NotContains(t, note, "EUR 0", "EV timing is estimated separately, not shown as zero")
+	}
+	assert.NotContains(t, string(body), "meterResidual")
+	assert.Equal(t, []string{noteInvoiceComparability, notePriceWorldsEVTiming}, report.Comparison.Notes)
+}
