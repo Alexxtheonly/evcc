@@ -1,7 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
 import {
-  alpha,
-  buildPlanChartOption,
   chartLayout,
   defaultVisibility,
   gridChargeBlocks,
@@ -15,10 +13,8 @@ import {
   stepPoints,
   timeAtX,
   xAtTime,
-  type ChartInput,
 } from "./planChartModel";
 import type { EnergyDevice, EnergyForecastSlot } from "./energyIntelligence";
-import { livePlanEvening } from "./__fixtures__/energyPlanLive";
 
 const slot = (start: string, end: string, extra: Partial<EnergyForecastSlot> = {}) =>
   ({
@@ -206,12 +202,6 @@ describe("series data", () => {
   });
 });
 
-test("translucent theme colours parse shorthand, 8-digit and non-hex values", () => {
-  expect(alpha("#fff", 0.1)).toBe("rgba(255, 255, 255, 0.1)");
-  expect(alpha(" #0fde41ff", 0.28)).toBe("rgba(15, 222, 65, 0.28)");
-  expect(alpha("rgb(1, 2, 3)", 0.5)).toBe("color-mix(in srgb, rgb(1, 2, 3) 50%, transparent)");
-});
-
 describe("visibility and option", () => {
   const energyOnly: EnergyDevice = {
     key: "loadpoint:heater",
@@ -273,79 +263,5 @@ describe("visibility and option", () => {
     expect(hidden.price).toBeUndefined();
     expect(hidden.devices.map((d) => d.key)).toEqual(["loadpoint:heater", "loadpoint:car"]);
     expect(slotDetails(5, slots, devices, visibility)).toBeUndefined();
-  });
-
-  const input = (overrides: Partial<ChartInput> = {}): ChartInput => ({
-    slots,
-    devices,
-    visibility: defaultVisibility(devices),
-    low: [10, 15],
-    high: [30, 25],
-    width: 800,
-    colors: {
-      text: "#28293e",
-      muted: "#93949e",
-      border: "#dddddd",
-      price: "#ff912f",
-      solar: "#0fde41",
-      devices: { "battery:a": "#0ba631", "loadpoint:car": "#60a5fa" },
-    },
-    formatHour: (date) => `${date.getHours()}`,
-    formatWeekday: () => "Mon",
-    formatPrice: (value) => `${value}`,
-    labels: { power: "kW", price: "ct/kWh", soc: "%" },
-    ...overrides,
-  });
-  const ids = (option: ReturnType<typeof buildPlanChartOption>) =>
-    (option.option.series as { id: string }[]).map((series) => series.id);
-
-  test("legend layers decide which series exist; the charge-level grid disappears when empty", () => {
-    expect(ids(buildPlanChartOption(input()))).toEqual([
-      "solar-range",
-      "solar",
-      "home-range",
-      "home",
-      "price",
-      "soc-range",
-      "soc-battery:a",
-      "soc-loadpoint:car",
-    ]);
-    const visibility = defaultVisibility(devices);
-    visibility.layers = { price: false, home: false, solar: true, grid: true };
-    visibility.soc = { "battery:a": false, "loadpoint:car": false };
-    visibility.power["battery:a"] = true;
-    const reduced = buildPlanChartOption(input({ visibility }));
-    expect(ids(reduced)).toEqual(["solar-range", "solar", "power-battery:a"]);
-    expect(reduced.layout.socHeight).toBe(0);
-    expect((reduced.option.yAxis as { show?: boolean }[])[1]!.show).toBe(false);
-  });
-
-  test("grid charging shading spans both grids and follows its toggle", () => {
-    const grid = slots.map((s) => ({ ...s, gridChargeMinWh: 400, gridChargeMaxWh: 400 }));
-    expect(ids(buildPlanChartOption(input({ slots: grid }))).slice(0, 2)).toEqual([
-      "grid-power",
-      "grid-soc",
-    ]);
-    const visibility = defaultVisibility(devices);
-    visibility.layers.grid = false;
-    expect(ids(buildPlanChartOption(input({ slots: grid, visibility })))).not.toContain(
-      "grid-power"
-    );
-  });
-
-  test("the real snapshot builds without non-finite coordinates", () => {
-    const live = livePlanEvening.optimizerInsights;
-    const option = buildPlanChartOption(
-      input({
-        slots: live.forecast!,
-        devices: live.devices!,
-        visibility: defaultVisibility(live.devices!),
-        low: live.scenarios?.batterySocLow,
-        high: live.scenarios?.batterySocHigh,
-      })
-    );
-    const data = (option.option.series as { data: unknown[] }[]).flatMap((series) => series.data);
-    expect(JSON.stringify(data)).not.toMatch(/NaN|Infinity/);
-    expect(ids(option)).toContain("soc-range");
   });
 });

@@ -190,7 +190,6 @@ import { CustomChart } from "echarts/charts";
 import type { EnergyDevice, EnergyForecastSlot } from "./energyIntelligence";
 import {
 	FORECAST_LAYERS,
-	buildPlanChartOption,
 	chartLayout,
 	defaultVisibility,
 	gridChargeBlocks,
@@ -206,6 +205,7 @@ import {
 	type GridChargeState,
 	type PointerMode,
 } from "./planChartModel";
+import { buildPlanChartOption } from "./planChartOption";
 
 echarts.use([CustomChart]);
 
@@ -293,6 +293,7 @@ export default defineComponent({
 				formatHour: (date) => this.hourShort(date),
 				formatWeekday: (date) => this.weekdayShort(date),
 				formatPrice: (value) => this.axisPrice(value),
+				formatPower: (value) => value.toLocaleString(this.$i18n.locale),
 				labels: {
 					power: "kW",
 					price: this.pricePerKWhUnit(this.currency),
