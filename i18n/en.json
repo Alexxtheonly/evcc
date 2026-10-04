@@ -1146,8 +1146,6 @@
   "forecast": {
     "energyPrices": {
       "estimatedEndpoints": "The monthly estimate includes {count} battery charge endpoints inferred from energy flows.",
-      "gridShort": "Grid",
-      "effectiveShort": "Effective",
       "reasons": {
         "no_priced_slots": "No complete intervals with recorded tariffs are available.",
         "battery_physics_unavailable": "The historical battery data is insufficient for this comparison.",
@@ -1162,7 +1160,6 @@
       "month": "Month",
       "loading": "Loading energy prices…",
       "through": "Completed intervals through {time} · {timezone}",
-      "partialPeriod": "This period is still in progress.",
       "gridPrice": "Grid purchase price",
       "effectivePrice": "Effective energy cost",
       "gridFormula": "Import cost divided by electricity bought from the grid.",
@@ -1198,11 +1195,23 @@
       "evCoverage": "{included} included sessions · {excluded} excluded sessions",
       "unavailable": "Unavailable",
       "noCompletedSlots": "No completed intervals for this day yet.",
-      "intervalBasis": "Calculated from recorded interval tariffs under your declared interval billing settings.",
-      "simulationBasis": "Calculated from recorded interval tariffs. Treat these as simulated tariff costs unless interval billing applies to this period.",
+      "intervalBasis": "Interval billing. Until your supplier receives smart meter data, your bill may still use a standard load profile.",
+      "simulationBasis": "Simulated with interval tariffs; your bill may differ.",
       "legacyDetails": "Savings and past control details",
       "legacyNote": "These detailed comparisons replay the selected period separately. Their battery estimates can differ from the month-based price comparison above.",
-      "timezoneFallback": "The site time zone {zone} is not known to this browser; times are shown in {browser}."
+      "timezoneFallback": "The site time zone {zone} is not known to this browser; times are shown in {browser}.",
+      "details": "Details",
+      "inProgress": "in progress",
+      "intervalDetail": "Calculated from recorded interval tariffs under your declared interval billing settings.",
+      "simulationDetail": "Calculated from recorded interval tariffs. Treat these as simulated tariff costs unless interval billing applies to this period.",
+      "netCost": "Net cost",
+      "change": "Change vs. row above",
+      "totalChange": "Total vs. grid only",
+      "changeNote": "Each change is the net cost difference to the row above: negative is cheaper, positive cost more. The changes add up to the total.",
+      "gridPurchases": "Grid purchases",
+      "bought": "Bought",
+      "avgPrice": "Avg. price",
+      "feedInFallback": "Exports without a recorded feed-in price are valued at the configured fixed feed-in price of {price}."
     },
     "energy": {
       "clear": "Clear",

@@ -1146,8 +1146,6 @@
   "forecast": {
     "energyPrices": {
       "estimatedEndpoints": "Die Monatsschätzung enthält {count} aus Energieflüssen geschätzte Batterieladestände.",
-      "gridShort": "Netz",
-      "effectiveShort": "Effektiv",
       "reasons": {
         "no_priced_slots": "Keine vollständigen Intervalle mit aufgezeichneten Tarifen verfügbar.",
         "battery_physics_unavailable": "Die historischen Batteriedaten reichen für diesen Vergleich nicht aus.",
@@ -1162,7 +1160,6 @@
       "month": "Monat",
       "loading": "Energiepreise werden geladen…",
       "through": "Abgeschlossene Intervalle bis {time} · {timezone}",
-      "partialPeriod": "Dieser Zeitraum läuft noch.",
       "gridPrice": "Preis für Netzbezug",
       "effectivePrice": "Effektive Energiekosten",
       "gridFormula": "Bezugskosten geteilt durch die aus dem Netz bezogene Energie.",
@@ -1198,11 +1195,23 @@
       "evCoverage": "{included} berücksichtigte Ladevorgänge · {excluded} ausgeschlossene Ladevorgänge",
       "unavailable": "Nicht verfügbar",
       "noCompletedSlots": "Für diesen Tag gibt es noch keine abgeschlossenen Intervalle.",
-      "intervalBasis": "Berechnet aus aufgezeichneten Intervalltarifen gemäß deinen Angaben zur Intervallabrechnung.",
-      "simulationBasis": "Berechnet aus aufgezeichneten Intervalltarifen. Als simulierte Tarifkosten zu verstehen, sofern für diesen Zeitraum keine Intervallabrechnung gilt.",
+      "intervalBasis": "Intervallabrechnung. Bis dein Lieferant Smart-Meter-Daten erhält, kann die Rechnung noch auf einem Standardlastprofil beruhen.",
+      "simulationBasis": "Mit Intervalltarifen simuliert; deine Rechnung kann abweichen.",
       "legacyDetails": "Einsparungen und vergangene Steuerungsentscheidungen",
       "legacyNote": "Diese Detailvergleiche berechnen den gewählten Zeitraum separat. Ihre Batterieschätzungen können vom monatsbasierten Preisvergleich oben abweichen.",
-      "timezoneFallback": "Die Zeitzone des Standorts {zone} ist diesem Browser unbekannt; Zeiten werden in {browser} angezeigt."
+      "timezoneFallback": "Die Zeitzone des Standorts {zone} ist diesem Browser unbekannt; Zeiten werden in {browser} angezeigt.",
+      "details": "Details",
+      "inProgress": "läuft noch",
+      "intervalDetail": "Berechnet aus aufgezeichneten Intervalltarifen gemäß deinen Angaben zur Intervallabrechnung.",
+      "simulationDetail": "Berechnet aus aufgezeichneten Intervalltarifen. Als simulierte Tarifkosten zu verstehen, sofern für diesen Zeitraum keine Intervallabrechnung gilt.",
+      "netCost": "Nettokosten",
+      "change": "Änderung zur Zeile darüber",
+      "totalChange": "Gesamt gegenüber nur Netz",
+      "changeNote": "Jede Änderung ist die Differenz der Nettokosten zur Zeile darüber: negativ ist günstiger, positiv hat mehr gekostet. Die Änderungen ergeben zusammen die Gesamtsumme.",
+      "gridPurchases": "Netzbezug",
+      "bought": "Bezogen",
+      "avgPrice": "Ø Preis",
+      "feedInFallback": "Einspeisung ohne aufgezeichneten Einspeisepreis wird mit dem eingestellten festen Einspeisepreis von {price} bewertet."
     },
     "energy": {
       "clear": "Leeren",

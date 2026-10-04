@@ -6,6 +6,7 @@ import api from "@/api";
 import en from "../../../../i18n/en.json";
 import de from "../../../../i18n/de.json";
 import type { EnergyPriceBucket, EnergyPriceReport } from "./energyPrices";
+import type { EnergySettings } from "./energyIntelligence";
 import { browserTimezone, siteCalendarDate, usableTimezone } from "./energyPrices";
 
 vi.mock("@/api", () => ({ default: { get: vi.fn() } }));
@@ -298,3 +299,85 @@ test.each([en, de])(
     wrapper.unmount();
   }
 );
+
+describe("level comparison and small print", () => {
+  const withWorlds = (net: number[], covered = 1) => {
+    const data = report();
+    data.totals.worlds = data.totals.worlds.map((world, i) => ({
+      ...world,
+      netCost: net[i]!,
+      importKWh: 10 - i,
+      coverage: { validSlots: covered, totalSlots: 4, fraction: covered / 4 },
+    }));
+    return data;
+  };
+
+  test("euro change per level telescopes, keeps losses positive and pairs grid prices with kWh", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: withWorlds([10, 6, 5, 5.5]) });
+    const wrapper = mountCard();
+    await flushPromises();
+    await wrapper.vm.setPeriod("month");
+    const changes = wrapper.findAll('[data-testid="level-change"]').map((cell) => cell.text());
+    expect(changes).toEqual(["–", "-€4.00", "-€1.00", "+€0.50"]);
+    expect(wrapper.get('[data-testid="total-change"]').text()).toBe("-€4.50");
+    const purchases = wrapper.get('[data-testid="level-purchases"]').text();
+    expect(purchases).toContain("10 kWh");
+    expect(purchases).toContain("7 kWh");
+    expect(purchases).toContain("€0.12/kWh");
+    wrapper.unmount();
+  });
+
+  test("a comparison without common intervals shows no fabricated zero", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: withWorlds([0, 0, 0, 0], 0) });
+    const wrapper = mountCard();
+    await flushPromises();
+    await wrapper.vm.setPeriod("month");
+    expect(wrapper.find('[data-testid="level-costs"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain(en.forecast.energyPrices.comparisonUnavailable);
+    wrapper.unmount();
+  });
+
+  test("caveats live behind the info toggle; status and basis stay visible", async () => {
+    const data = report();
+    data.feedInFallbackPrice = 0.081;
+    vi.mocked(api.get).mockResolvedValue({ data });
+    const wrapper = mountCard();
+    await flushPromises();
+    const t = en.forecast.energyPrices;
+    expect(wrapper.find('[data-testid="energy-price-details"]').exists()).toBe(false);
+    for (const hidden of [t.gridFormula, t.cashOnly, t.measurementNote, t.comparisonNote]) {
+      expect(wrapper.text()).not.toContain(hidden);
+    }
+    expect(wrapper.get('[data-testid="energy-prices-status"]').text()).toContain(t.inProgress);
+    expect(wrapper.get('[data-testid="settlement-basis"]').text()).toBe(t.simulationBasis);
+    expect(wrapper.text()).toContain("75% coverage");
+    await wrapper.get('[data-testid="energy-prices-info"]').trigger("click");
+    const details = wrapper.get('[data-testid="energy-price-details"]').text();
+    for (const shown of [t.gridFormula, t.cashOnly, t.measurementNote, t.changeNote]) {
+      expect(details).toContain(shown);
+    }
+    expect(details).toContain("€0.081/kWh");
+    wrapper.unmount();
+  });
+
+  test.each([en, de])("interval billing periods say the invoice may differ", async (messages) => {
+    const settlement: EnergySettings = {
+      robust: false,
+      arrivals: false,
+      useLearnedEfficiency: false,
+      batteryWear: {},
+      settlementMode: "interval",
+      settlementFrom: "2026-03-02T00:00:00+01:00",
+    };
+    const wrapper = shallowMount(EnergyPricesCard, {
+      props: { settlement },
+      global: translations(messages),
+    });
+    await flushPromises();
+    const basis = () => wrapper.get('[data-testid="settlement-basis"]').text();
+    expect(basis()).toBe(messages.forecast.energyPrices.intervalBasis);
+    await wrapper.vm.selectDate({ year: 2026, month: 3, day: 1 });
+    expect(basis()).toBe(messages.forecast.energyPrices.simulationBasis);
+    wrapper.unmount();
+  });
+});

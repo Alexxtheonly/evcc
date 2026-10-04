@@ -1,7 +1,21 @@
 <template>
 	<Card class="box-pull-out mb-4 energy-prices">
 		<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-			<h3 class="evcc-card-title fw-normal m-0">{{ $t("forecast.energyPrices.title") }}</h3>
+			<h3 class="evcc-card-title fw-normal m-0">
+				{{ $t("forecast.energyPrices.title") }}
+				<button
+					v-if="report"
+					type="button"
+					class="btn btn-link p-0 ms-1 align-baseline info-icon"
+					:aria-label="$t('forecast.energyPrices.details')"
+					:aria-expanded="showDetails"
+					aria-controls="energyPriceDetails"
+					data-testid="energy-prices-info"
+					@click="showDetails = !showDetails"
+				>
+					<shopicon-regular-info></shopicon-regular-info>
+				</button>
+			</h3>
 			<button
 				type="button"
 				class="btn btn-outline-secondary btn-sm"
@@ -40,13 +54,15 @@
 		</p>
 		<p v-else-if="error" role="status" class="alert alert-warning">{{ error }}</p>
 		<template v-else-if="report && bucket">
-			<p class="small text-muted mb-1">
+			<p class="small text-muted mb-1" data-testid="energy-prices-status">
 				{{
 					$t("forecast.energyPrices.through", {
 						time: through,
 						timezone: zone,
 					})
-				}}
+				}}<template v-if="partialPeriod">
+					· {{ $t("forecast.energyPrices.inProgress") }}</template
+				>
 			</p>
 			<p v-if="zoneFallback" class="small mb-1" data-testid="timezone-fallback">
 				{{
@@ -56,16 +72,22 @@
 					})
 				}}
 			</p>
-			<p v-if="partialPeriod" class="small mb-1">
-				{{ $t("forecast.energyPrices.partialPeriod") }}
-			</p>
-			<p class="small mb-3">{{ settlementLabel }}</p>
+			<p class="small mb-3" data-testid="settlement-basis">{{ settlementLabel }}</p>
+			<div
+				v-if="showDetails"
+				id="energyPriceDetails"
+				class="price-details rounded small p-3 mb-3"
+				data-testid="energy-price-details"
+			>
+				<ul class="mb-0 ps-3">
+					<li v-for="line in detailLines" :key="line">{{ line }}</li>
+				</ul>
+			</div>
 			<div class="row g-3 mb-3">
 				<div class="col-md-6">
 					<div class="price-metric rounded p-3 h-100">
 						<h4 class="fs-6">{{ $t("forecast.energyPrices.gridPrice") }}</h4>
 						<div class="fs-3 fw-semibold">{{ price(bucket.grid.weightedPrice) }}</div>
-						<p class="small mb-1">{{ $t("forecast.energyPrices.gridFormula") }}</p>
 						<p v-if="bucket.grid.coverage.validSlots" class="small mb-1">
 							{{
 								$t("forecast.energyPrices.gridTotals", {
@@ -92,7 +114,6 @@
 						<div class="fs-3 fw-semibold">
 							{{ price(bucket.consumption.effectivePrice) }}
 						</div>
-						<p class="small mb-1">{{ $t("forecast.energyPrices.effectiveFormula") }}</p>
 						<p v-if="bucket.consumption.coverage.validSlots" class="small mb-1">
 							{{
 								$t("forecast.energyPrices.consumptionTotals", {
@@ -116,75 +137,98 @@
 					</div>
 				</div>
 			</div>
-			<p v-if="bucket.consumption.coverage.validSlots" class="small">
-				{{
-					$t("forecast.energyPrices.cashBreakdown", {
-						imports: money(bucket.consumption.importCost),
-						exports: money(bucket.consumption.exportRevenue),
-						exported: energy(bucket.consumption.exportKWh),
-					})
-				}}
-			</p>
-			<p class="small text-muted">{{ $t("forecast.energyPrices.measurementNote") }}</p>
 			<h4 class="fs-6 mt-4">{{ $t("forecast.energyPrices.comparison") }}</h4>
-			<p class="small">{{ $t("forecast.energyPrices.comparisonNote") }}</p>
-			<div v-if="worlds.length" class="table-responsive">
-				<table class="table table-sm align-middle price-comparison">
-					<caption class="small">
-						{{
-							coverage(worlds[0]!.coverage)
-						}}
-						·
-						{{
-							$t("forecast.energyPrices.comparisonCoverage")
-						}}
-					</caption>
-					<thead>
-						<tr>
-							<th scope="col">{{ $t("forecast.energyPrices.level") }}</th>
-							<th
-								scope="col"
-								class="text-end"
-								:aria-label="$t('forecast.energyPrices.gridPrice')"
-							>
-								{{ $t("forecast.energyPrices.gridShort")
-								}}<span class="d-block small">/kWh</span>
-							</th>
-							<th
-								scope="col"
-								class="text-end"
-								:aria-label="$t('forecast.energyPrices.effectivePrice')"
-							>
-								{{ $t("forecast.energyPrices.effectiveShort")
-								}}<span class="d-block small">/kWh</span>
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						<tr v-for="world in worlds" :key="world.label">
-							<th scope="row" class="fw-normal">
-								{{ $t(`forecast.energyPrices.worlds.${world.label}`) }}
-								<span class="d-block small text-muted">{{
-									$t(
-										world.label === "W3"
-											? "forecast.energyPrices.measured"
-											: "forecast.energyPrices.modeled"
-									)
-								}}</span>
-							</th>
-							<td class="text-end">{{ money(world.weightedPrice, 4) }}</td>
-							<td class="text-end">{{ money(world.effectivePrice, 4) }}</td>
-						</tr>
-					</tbody>
-				</table>
-			</div>
+			<template v-if="worlds.length">
+				<div class="table-responsive">
+					<table
+						class="table table-sm align-middle price-comparison"
+						data-testid="level-costs"
+					>
+						<caption class="small">
+							{{
+								coverage(worlds[0]!.coverage)
+							}}
+						</caption>
+						<thead>
+							<tr>
+								<th scope="col">{{ $t("forecast.energyPrices.level") }}</th>
+								<th scope="col" class="text-end">
+									{{ $t("forecast.energyPrices.netCost") }}
+								</th>
+								<th scope="col" class="text-end">
+									{{ $t("forecast.energyPrices.change") }}
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr v-for="(world, i) in worlds" :key="world.label">
+								<th scope="row" class="fw-normal">
+									{{ $t(`forecast.energyPrices.worlds.${world.label}`) }}
+									<span class="d-block small text-muted">{{
+										worldKind(world.label)
+									}}</span>
+								</th>
+								<td class="text-end">
+									{{ money(world.netCost) }}
+									<span class="d-block small text-muted">{{
+										price(world.effectivePrice)
+									}}</span>
+								</td>
+								<td class="text-end" data-testid="level-change">
+									{{
+										i === 0
+											? "–"
+											: signedMoney(world.netCost - worlds[i - 1]!.netCost)
+									}}
+								</td>
+							</tr>
+						</tbody>
+						<tfoot>
+							<tr>
+								<th scope="row" colspan="2" class="fw-normal">
+									{{ $t("forecast.energyPrices.totalChange") }}
+								</th>
+								<td class="text-end fw-semibold" data-testid="total-change">
+									{{ signedMoney(worlds.at(-1)!.netCost - worlds[0]!.netCost) }}
+								</td>
+							</tr>
+						</tfoot>
+					</table>
+				</div>
+				<div class="table-responsive">
+					<table
+						class="table table-sm align-middle price-comparison"
+						data-testid="level-purchases"
+					>
+						<thead>
+							<tr>
+								<th scope="col">{{ $t("forecast.energyPrices.gridPurchases") }}</th>
+								<th scope="col" class="text-end">
+									{{ $t("forecast.energyPrices.bought") }}
+								</th>
+								<th scope="col" class="text-end">
+									{{ $t("forecast.energyPrices.avgPrice") }}
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr v-for="world in worlds" :key="world.label">
+								<th scope="row" class="fw-normal">
+									{{ $t(`forecast.energyPrices.worlds.${world.label}`) }}
+								</th>
+								<td class="text-end">{{ energy(world.importKWh) }}</td>
+								<td class="text-end">{{ price(world.weightedPrice) }}</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+			</template>
 			<p v-else class="text-muted">
 				{{ $t("forecast.energyPrices.comparisonUnavailable")
 				}}<span v-if="report.comparison.reason">
 					{{ reason(report.comparison.reason) }}</span
 				>
 			</p>
-			<p class="small text-muted">{{ $t("forecast.energyPrices.cashOnly") }}</p>
 			<details class="mt-3" data-testid="inventory-estimate">
 				<summary>{{ $t("forecast.energyPrices.inventory") }}</summary>
 				<p class="mt-2 mb-1 fw-semibold">{{ money(bucket.inventoryBenefit) }}</p>
@@ -251,6 +295,7 @@
 <script lang="ts">
 import { defineComponent, type PropType } from "vue";
 import api from "@/api";
+import "@h2d2/shopicons/es/regular/info";
 import Card from "../Helper/Card.vue";
 import SelectGroup from "../Helper/SelectGroup.vue";
 import DateNavigator from "../Sessions/DateNavigator.vue";
@@ -265,6 +310,7 @@ import {
 	usableTimezone,
 	type EnergyPriceReport,
 	type EnergyPriceBucket,
+	type WorldPriceMetric,
 } from "./energyPrices";
 
 export default defineComponent({
@@ -283,10 +329,45 @@ export default defineComponent({
 		error: "",
 		fetchSeq: 0,
 		requestedMonth: "",
+		showDetails: false,
 	}),
 	computed: {
-		worlds() {
-			return this.bucket?.worlds || [];
+		worlds(): WorldPriceMetric[] {
+			const worlds = this.bucket?.worlds || [];
+			// Without a common covered interval every level would read as a fabricated zero.
+			return worlds[0]?.coverage.validSlots ? worlds : [];
+		},
+		detailLines(): string[] {
+			const t = (key: string, params?: Record<string, unknown>) =>
+				this.$t(`forecast.energyPrices.${key}`, params ?? {});
+			const c = this.bucket?.consumption;
+			const lines = [
+				this.billed ? t("intervalDetail") : t("simulationDetail"),
+				t("gridFormula"),
+				t("effectiveFormula"),
+			];
+			if (c?.coverage.validSlots) {
+				lines.push(
+					t("cashBreakdown", {
+						imports: this.money(c.importCost),
+						exports: this.money(c.exportRevenue),
+						exported: this.energy(c.exportKWh),
+					})
+				);
+			}
+			if (this.report?.feedInFallbackPrice != null) {
+				lines.push(
+					t("feedInFallback", { price: this.price(this.report.feedInFallbackPrice) })
+				);
+			}
+			lines.push(
+				t("measurementNote"),
+				t("comparisonNote"),
+				t("changeNote"),
+				t("comparisonCoverage"),
+				t("cashOnly")
+			);
+			return lines;
 		},
 		selectedWindow() {
 			const bucket = this.bucket;
@@ -318,9 +399,7 @@ export default defineComponent({
 			return calendarDate(this.date || this.report?.month || "1970-01-01");
 		},
 		siteToday() {
-			return calendarDate(
-				this.report?.today || siteCalendarDate(new Date(), this.zone)
-			);
+			return calendarDate(this.report?.today || siteCalendarDate(new Date(), this.zone));
 		},
 		earliestDate() {
 			const value = this.report?.earliest;
@@ -350,13 +429,14 @@ export default defineComponent({
 			);
 		},
 
-		settlementLabel() {
+		billed(): boolean {
 			const declared =
 				this.settlement?.settlementMode === "interval" && this.settlement.settlementFrom;
-			const billed =
-				declared && this.bucket && new Date(this.bucket.from) >= new Date(declared);
+			return !!declared && !!this.bucket && new Date(this.bucket.from) >= new Date(declared);
+		},
+		settlementLabel() {
 			return this.$t(
-				billed
+				this.billed
 					? "forecast.energyPrices.intervalBasis"
 					: "forecast.energyPrices.simulationBasis"
 			);
@@ -402,8 +482,7 @@ export default defineComponent({
 		selectDate(value: { year: number; month?: number; day?: number }) {
 			const month = value.month ?? this.selectedDate.getMonth() + 1;
 			const key = calendarKey(value.year, month);
-			const today =
-				this.report?.today || siteCalendarDate(new Date(), this.zone);
+			const today = this.report?.today || siteCalendarDate(new Date(), this.zone);
 			if (calendarKey(value.year, month, value.day ?? 1) > today) return;
 			this.date = calendarKey(value.year, month, value.day ?? 1);
 			if (key !== this.report?.month) this.fetchReport(key);
@@ -424,7 +503,10 @@ export default defineComponent({
 				if (!this.date.startsWith(report.month)) {
 					const today =
 						report.today ||
-						siteCalendarDate(new Date(), usableTimezone(report.timezone) ?? browserTimezone());
+						siteCalendarDate(
+							new Date(),
+							usableTimezone(report.timezone) ?? browserTimezone()
+						);
 					this.date = today.startsWith(report.month) ? today : `${report.month}-01`;
 				}
 				this.report = report;
@@ -434,6 +516,21 @@ export default defineComponent({
 			} finally {
 				if (seq === this.fetchSeq) this.loading = false;
 			}
+		},
+		worldKind(label: WorldPriceMetric["label"]) {
+			return this.$t(
+				label === "W3" ? "forecast.energyPrices.measured" : "forecast.energyPrices.modeled"
+			);
+		},
+		// A level that cost more shows a positive amount; savings are negative. Never clamped.
+		signedMoney(value: number) {
+			return Number.isFinite(value)
+				? new Intl.NumberFormat(this.$i18n.locale, {
+						style: "currency",
+						currency: this.currency,
+						signDisplay: "exceptZero",
+					}).format(value)
+				: this.$t("forecast.energyPrices.unavailable");
 		},
 		price(value: number | undefined) {
 			return value == null || !Number.isFinite(value)
@@ -469,8 +566,14 @@ export default defineComponent({
 .energy-prices {
 	overflow-wrap: anywhere;
 }
-.price-metric {
+.price-metric,
+.price-details {
 	background: var(--bs-tertiary-bg);
+}
+.info-icon {
+	color: var(--evcc-gray);
+	cursor: help;
+	line-height: 1;
 }
 .price-comparison {
 	font-variant-numeric: tabular-nums;
