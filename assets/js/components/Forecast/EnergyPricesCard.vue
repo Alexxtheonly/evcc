@@ -138,7 +138,50 @@
 				</div>
 			</div>
 			<h4 class="fs-6 mt-4">{{ $t("forecast.energyPrices.comparison") }}</h4>
-			<template v-if="worlds.length">
+			<template v-if="levels">
+				<div class="row g-3 mb-3">
+					<div class="col-6">
+						<div class="price-metric rounded p-3 h-100">
+							<h5 class="fs-6 fw-normal mb-1">
+								{{ $t("forecast.energyPrices.controlEffect") }}
+							</h5>
+							<div
+								class="fs-4 fw-semibold"
+								:class="changeClass(levels.control)"
+								data-testid="control-effect"
+							>
+								{{ levels.control == null ? "–" : signedMoney(levels.control) }}
+							</div>
+							<p class="small text-muted mb-0">
+								{{ $t("forecast.energyPrices.controlEffectBasis") }}
+							</p>
+						</div>
+					</div>
+					<div class="col-6">
+						<div class="price-metric rounded p-3 h-100">
+							<h5 class="fs-6 fw-normal mb-1">
+								{{ $t("forecast.energyPrices.totalChange") }}
+							</h5>
+							<div
+								class="fs-4 fw-semibold"
+								:class="changeClass(levels.total)"
+								data-testid="total-change"
+							>
+								{{ signedMoney(levels.total) }}
+							</div>
+							<p class="small text-muted mb-0">
+								{{ $t("forecast.energyPrices.totalChangeBasis") }}
+							</p>
+						</div>
+					</div>
+				</div>
+				<p
+					v-if="comparisonCoverageHint"
+					class="small mb-2"
+					data-testid="comparison-coverage"
+				>
+					{{ comparisonCoverageHint }}
+				</p>
 				<div class="table-responsive">
 					<table
 						class="table table-sm align-middle price-comparison"
@@ -161,38 +204,28 @@
 							</tr>
 						</thead>
 						<tbody>
-							<tr v-for="(world, i) in worlds" :key="world.label">
+							<tr v-for="level in levels.rows" :key="level.world.label">
 								<th scope="row" class="fw-normal">
-									{{ $t(`forecast.energyPrices.worlds.${world.label}`) }}
+									{{ $t(`forecast.energyPrices.worlds.${level.world.label}`) }}
 									<span class="d-block small text-muted">{{
-										worldKind(world.label)
+										worldKind(level.world.label)
 									}}</span>
 								</th>
 								<td class="text-end">
-									{{ money(world.netCost) }}
+									{{ money(level.net) }}
 									<span class="d-block small text-muted">{{
-										price(world.effectivePrice)
+										price(level.world.effectivePrice)
 									}}</span>
 								</td>
-								<td class="text-end" data-testid="level-change">
-									{{
-										i === 0
-											? "–"
-											: signedMoney(world.netCost - worlds[i - 1]!.netCost)
-									}}
+								<td
+									class="text-end"
+									:class="changeClass(level.change)"
+									data-testid="level-change"
+								>
+									{{ level.change == null ? "–" : signedMoney(level.change) }}
 								</td>
 							</tr>
 						</tbody>
-						<tfoot>
-							<tr>
-								<th scope="row" colspan="2" class="fw-normal">
-									{{ $t("forecast.energyPrices.totalChange") }}
-								</th>
-								<td class="text-end fw-semibold" data-testid="total-change">
-									{{ signedMoney(worlds.at(-1)!.netCost - worlds[0]!.netCost) }}
-								</td>
-							</tr>
-						</tfoot>
 					</table>
 				</div>
 				<div class="table-responsive">
@@ -337,6 +370,36 @@ export default defineComponent({
 			// Without a common covered interval every level would read as a fabricated zero.
 			return worlds[0]?.coverage.validSlots ? worlds : [];
 		},
+		// Changes are taken between cent-rounded net costs, so the displayed changes add
+		// up to the displayed total exactly. This is presentation only: the API keeps
+		// exact sums so days reconcile with the month; prices use unrounded values.
+		levels() {
+			const worlds = this.worlds;
+			if (!worlds.length) return null;
+			const net = worlds.map((world) => this.roundMoney(world.netCost));
+			const diff = (a: number, b: number) => this.roundMoney(a - b);
+			const rows = worlds.map((world, i) => ({
+				world,
+				net: net[i]!,
+				change: i === 0 ? null : diff(net[i]!, net[i - 1]!),
+			}));
+			const control = rows.find((row) => row.world.label === "W3");
+			return {
+				rows,
+				total: diff(net.at(-1)!, net[0]!),
+				control: worlds.at(-2)?.label === "W2" ? (control?.change ?? null) : null,
+			};
+		},
+		comparisonCoverageHint(): string {
+			const compared = this.worlds[0]?.coverage;
+			const cost = this.bucket?.consumption.coverage;
+			return compared && cost && compared.validSlots !== cost.validSlots
+				? this.$t("forecast.energyPrices.comparisonCovers", {
+						valid: compared.validSlots,
+						cost: cost.validSlots,
+					})
+				: "";
+		},
 		detailLines(): string[] {
 			const t = (key: string, params?: Record<string, unknown>) =>
 				this.$t(`forecast.energyPrices.${key}`, params ?? {});
@@ -410,6 +473,10 @@ export default defineComponent({
 		through() {
 			return new Date(this.bucket!.to).toLocaleString(this.$i18n.locale, {
 				timeZone: this.zone,
+				day: "numeric",
+				month: "short",
+				hour: "2-digit",
+				minute: "2-digit",
 			});
 		},
 		partialPeriod() {
@@ -516,6 +583,20 @@ export default defineComponent({
 			} finally {
 				if (seq === this.fetchSeq) this.loading = false;
 			}
+		},
+		roundMoney(value: number) {
+			const digits =
+				new Intl.NumberFormat("en", {
+					style: "currency",
+					currency: this.currency,
+				}).resolvedOptions().maximumFractionDigits ?? 2;
+			const factor = 10 ** digits;
+			return Math.round(value * factor) / factor;
+		},
+		// House idiom: savings in primary, a cost in danger. A cost is never clamped.
+		changeClass(value: number | null) {
+			if (value == null || value === 0) return "";
+			return value > 0 ? "text-danger" : "text-primary";
 		},
 		worldKind(label: WorldPriceMetric["label"]) {
 			return this.$t(

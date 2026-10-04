@@ -320,10 +320,57 @@ describe("level comparison and small print", () => {
     const changes = wrapper.findAll('[data-testid="level-change"]').map((cell) => cell.text());
     expect(changes).toEqual(["–", "-€4.00", "-€1.00", "+€0.50"]);
     expect(wrapper.get('[data-testid="total-change"]').text()).toBe("-€4.50");
+    const control = wrapper.get('[data-testid="control-effect"]');
+    expect(control.text()).toBe("+€0.50");
+    expect(control.classes()).toContain("text-danger");
+    expect(wrapper.text()).toContain(en.forecast.energyPrices.controlEffect);
     const purchases = wrapper.get('[data-testid="level-purchases"]').text();
     expect(purchases).toContain("10 kWh");
     expect(purchases).toContain("7 kWh");
     expect(purchases).toContain("€0.12/kWh");
+    wrapper.unmount();
+  });
+
+  test("displayed changes add up to the displayed total despite cent rounding", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: withWorlds([1.004, 0.996, 0.988, 0.98]) });
+    const wrapper = mountCard();
+    await flushPromises();
+    await wrapper.vm.setPeriod("month");
+    const changes = wrapper.findAll('[data-testid="level-change"]').map((cell) => cell.text());
+    expect(changes).toEqual(["–", "€0.00", "-€0.01", "-€0.01"]);
+    expect(wrapper.get('[data-testid="total-change"]').text()).toBe("-€0.02");
+    const cents = (text: string) => Math.round(Number(text.replace(/[^\d.-]/g, "")) * 100);
+    const sum = changes.slice(1).reduce((total, text) => total + cents(text), 0);
+    expect(sum).toBe(cents(wrapper.get('[data-testid="total-change"]').text()));
+    wrapper.unmount();
+  });
+
+  test("a setup that cost more than grid only shows a positive cost, not a clamped zero", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: withWorlds([5, 6, 7, 8]) });
+    const wrapper = mountCard();
+    await flushPromises();
+    await wrapper.vm.setPeriod("month");
+    const total = wrapper.get('[data-testid="total-change"]');
+    expect(total.text()).toBe("+€3.00");
+    expect(total.classes()).toContain("text-danger");
+    expect(wrapper.get('[data-testid="control-effect"]').text()).toBe("+€1.00");
+    wrapper.unmount();
+  });
+
+  test("a comparison covering fewer intervals than the costs says so visibly", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: withWorlds([10, 6, 5, 4]) });
+    const wrapper = mountCard();
+    await flushPromises();
+    await wrapper.vm.setPeriod("month");
+    expect(wrapper.get('[data-testid="comparison-coverage"]').text()).toBe(
+      "Comparison covers 1 intervals; the costs above cover 2."
+    );
+    const data = withWorlds([10, 6, 5, 4], 2);
+    vi.mocked(api.get).mockResolvedValue({ data });
+    await wrapper.vm.fetchReport();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="comparison-coverage"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="control-effect"]').classes()).toContain("text-primary");
     wrapper.unmount();
   });
 

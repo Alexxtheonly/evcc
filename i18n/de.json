@@ -1159,7 +1159,7 @@
       "day": "Tag",
       "month": "Monat",
       "loading": "Energiepreise werden geladen…",
-      "through": "Abgeschlossene Intervalle bis {time} · {timezone}",
+      "through": "Bis {time} ({timezone})",
       "gridPrice": "Preis für Netzbezug",
       "effectivePrice": "Effektive Energiekosten",
       "gridFormula": "Bezugskosten geteilt durch die aus dem Netz bezogene Energie.",
@@ -1195,7 +1195,7 @@
       "evCoverage": "{included} berücksichtigte Ladevorgänge · {excluded} ausgeschlossene Ladevorgänge",
       "unavailable": "Nicht verfügbar",
       "noCompletedSlots": "Für diesen Tag gibt es noch keine abgeschlossenen Intervalle.",
-      "intervalBasis": "Intervallabrechnung. Bis dein Lieferant Smart-Meter-Daten erhält, kann die Rechnung noch auf einem Standardlastprofil beruhen.",
+      "intervalBasis": "Intervallabrechnung; dein Lieferant rechnet evtl. noch nach Standardlastprofil ab.",
       "simulationBasis": "Mit Intervalltarifen simuliert; deine Rechnung kann abweichen.",
       "legacyDetails": "Einsparungen und vergangene Steuerungsentscheidungen",
       "legacyNote": "Diese Detailvergleiche berechnen den gewählten Zeitraum separat. Ihre Batterieschätzungen können vom monatsbasierten Preisvergleich oben abweichen.",
@@ -1211,7 +1211,11 @@
       "gridPurchases": "Netzbezug",
       "bought": "Bezogen",
       "avgPrice": "Ø Preis",
-      "feedInFallback": "Einspeisung ohne aufgezeichneten Einspeisepreis wird mit dem eingestellten festen Einspeisepreis von {price} bewertet."
+      "feedInFallback": "Einspeisung ohne aufgezeichneten Einspeisepreis wird mit dem eingestellten festen Einspeisepreis von {price} bewertet.",
+      "controlEffect": "Effekt der evcc-Steuerung",
+      "controlEffectBasis": "Tatsächlicher Betrieb gegenüber Solar + einfacher Batterie",
+      "totalChangeBasis": "Solar, Batterie und evcc zusammen",
+      "comparisonCovers": "Der Vergleich umfasst {valid} Intervalle, die Kosten oben {cost}."
     },
     "energy": {
       "clear": "Leeren",

@@ -1159,7 +1159,7 @@
       "day": "Day",
       "month": "Month",
       "loading": "Loading energy prices…",
-      "through": "Completed intervals through {time} · {timezone}",
+      "through": "Through {time} ({timezone})",
       "gridPrice": "Grid purchase price",
       "effectivePrice": "Effective energy cost",
       "gridFormula": "Import cost divided by electricity bought from the grid.",
@@ -1195,7 +1195,7 @@
       "evCoverage": "{included} included sessions · {excluded} excluded sessions",
       "unavailable": "Unavailable",
       "noCompletedSlots": "No completed intervals for this day yet.",
-      "intervalBasis": "Interval billing. Until your supplier receives smart meter data, your bill may still use a standard load profile.",
+      "intervalBasis": "Interval billing; your supplier may still bill a standard load profile for now.",
       "simulationBasis": "Simulated with interval tariffs; your bill may differ.",
       "legacyDetails": "Savings and past control details",
       "legacyNote": "These detailed comparisons replay the selected period separately. Their battery estimates can differ from the month-based price comparison above.",
@@ -1211,7 +1211,11 @@
       "gridPurchases": "Grid purchases",
       "bought": "Bought",
       "avgPrice": "Avg. price",
-      "feedInFallback": "Exports without a recorded feed-in price are valued at the configured fixed feed-in price of {price}."
+      "feedInFallback": "Exports without a recorded feed-in price are valued at the configured fixed feed-in price of {price}.",
+      "controlEffect": "evcc control effect",
+      "controlEffectBasis": "Actual operation vs. solar + simple battery",
+      "totalChangeBasis": "Solar, battery and evcc together",
+      "comparisonCovers": "Comparison covers {valid} intervals; the costs above cover {cost}."
     },
     "energy": {
       "clear": "Clear",
