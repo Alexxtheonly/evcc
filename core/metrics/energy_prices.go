@@ -117,15 +117,16 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 	}
 	type groupData struct {
 		rows    map[int64]groupSlotRow
+		members groupMembership
 		present bool
 	}
 	groups := make(map[string]groupData)
 	for _, name := range []string{Grid, Home, Loadpoint, PV, Battery} {
-		rows, present, err := queryGroupSlotsCoverage(ctx, name, from, end, true)
+		rows, members, present, err := queryGroupSlotsCoverage(ctx, name, from, end, true)
 		if err != nil {
 			return nil, err
 		}
-		groups[name] = groupData{rows, present}
+		groups[name] = groupData{rows, members, present}
 	}
 	prices, err := queryTariffSlots(ctx, from, end)
 	if err != nil {
@@ -140,6 +141,12 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 		g := groups[name]
 		if !g.present {
 			return groupSlotRow{}, !required
+		}
+		if g.members.at(ts) == 0 {
+			// Before any loadpoint reported, its energy was still inside the residual
+			// home meter, so zero keeps the load balance. Absent PV or battery evidence
+			// cannot be read as absent hardware.
+			return groupSlotRow{}, name == Loadpoint
 		}
 		r, ok := g.rows[ts]
 		return r, ok && !r.Excluded && !r.InvalidEnergy && r.EnergyCount == r.Count && finite(r.Energy) && r.Energy >= 0

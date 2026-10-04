@@ -100,10 +100,16 @@ func TestEnergyPricesZeroUnknownAndMultipleMeters(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.Grid.Coverage.ValidSlots)
 	assert.Nil(t, report.Totals.Grid.WeightedPrice)
 	second := mustCreateEntity(t, Grid, "second-grid")
-	report, err = ComputeEnergyPrices(context.Background(), "", start.Add(15*time.Minute), nil)
+	require.NoError(t, PersistTariffs(start.Add(15*time.Minute), &price, nil, nil, nil))
+	require.NoError(t, persist(grid, start.Add(15*time.Minute), 0, 0, nil, false, false))
+	require.NoError(t, persist(second, start.Add(30*time.Minute), 0, 0, nil, false, false))
+	report, err = ComputeEnergyPrices(context.Background(), "", start.Add(30*time.Minute), nil)
 	require.NoError(t, err)
-	assert.Zero(t, report.Totals.Grid.Coverage.ValidSlots, "partial multi-meter sum must not masquerade as complete")
+	assert.Equal(t, 2, report.Totals.Grid.Coverage.ValidSlots, "a member that first reported later cannot invalidate earlier slots")
 	require.NoError(t, persist(second, start, 1, 0, nil, false, false))
+	report, err = ComputeEnergyPrices(context.Background(), "", start.Add(30*time.Minute), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Totals.Grid.Coverage.ValidSlots, "partial multi-meter sum after the first reading must not masquerade as complete")
 	report, err = ComputeEnergyPrices(context.Background(), "", start.Add(15*time.Minute), nil)
 	require.NoError(t, err)
 	require.NotNil(t, report.Totals.Grid.WeightedPrice)
@@ -332,4 +338,68 @@ func TestEnergyPricesNegativeMemberCannotCancelIntoValidSum(t *testing.T) {
 	legacy, _, err := queryGroupSlots(context.Background(), Grid, start, start.Add(15*time.Minute))
 	require.NoError(t, err)
 	assert.False(t, legacy[start.Unix()].Excluded, "legacy query semantics remain unchanged")
+}
+
+// Mirrors the site's history: the heat pump loadpoint first reported on Aug 21 and
+// the battery on Aug 22, a second grid entity (db:1) appeared later still. Entities
+// count only from their first reading, and a gap after it still invalidates.
+func TestEnergyPricesGroupMembershipStartsAtFirstReading(t *testing.T) {
+	grid, home := setupEnergyPrices(t)
+	pv := mustCreateEntity(t, PV, "db:3")
+	car := mustCreateEntity(t, Loadpoint, "lp1")
+	heatPump := mustCreateEntity(t, Loadpoint, "Wärmepumpe")
+	bat := mustCreateEntity(t, Battery, "db:2")
+	seedBatteryCalibration(t, bat, time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC))
+	newGrid := mustCreateEntity(t, Grid, "db:1")
+	p, f, soc := .3, .08, 50.0
+	slot := func(day int, withHeatPump, withBattery bool) {
+		ts := time.Date(2026, 8, day, 12, 0, 0, 0, time.UTC)
+		require.NoError(t, PersistTariffs(ts, &p, &f, nil, nil))
+		require.NoError(t, persist(grid, ts, 1, 0, nil, false, false))
+		require.NoError(t, persist(home, ts, 1, 0, nil, false, false))
+		require.NoError(t, persist(pv, ts, 0, 0, nil, false, false))
+		if day > 20 { // no loadpoint had reported yet on Aug 20
+			require.NoError(t, persist(car, ts, 0, 0, nil, false, false))
+		}
+		if withHeatPump {
+			require.NoError(t, persist(heatPump, ts, .5, 0, nil, false, false))
+		}
+		if withBattery {
+			require.NoError(t, persist(bat, ts, 0, 0, &soc, false, false))
+		}
+	}
+	slot(20, false, false)
+	slot(21, true, false)
+	slot(22, true, true)
+	slot(23, false, true) // heat pump gap after its first reading
+	// The new grid entity reports for the first time on Aug 24 and is missing on Aug 25.
+	for day, both := range map[int]bool{24: true, 25: false} {
+		slot(day, true, true)
+		if both {
+			require.NoError(t, persist(newGrid, time.Date(2026, 8, day, 12, 0, 0, 0, time.UTC), .2, 0, nil, false, false))
+		}
+	}
+	report, err := ComputeEnergyPrices(context.Background(), "2026-08", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), nil)
+	require.NoError(t, err)
+	valid := func(day int) (int, int, int) {
+		d := report.Days[day-1]
+		worlds := 0
+		if len(d.Worlds) > 0 {
+			worlds = d.Worlds[0].Coverage.ValidSlots
+		}
+		return d.Grid.Coverage.ValidSlots, d.Consumption.Coverage.ValidSlots, worlds
+	}
+	for _, tc := range []struct{ day, grid, consumption, worlds int }{
+		{20, 1, 1, 0}, // no loadpoint yet (residual home holds it); no battery start state
+		{21, 1, 1, 0},
+		{22, 1, 1, 1},
+		{23, 1, 0, 0}, // heat pump missing after commissioning
+		{24, 1, 1, 1},
+		{25, 0, 0, 0}, // second grid missing after commissioning
+	} {
+		g, c, w := valid(tc.day)
+		assert.Equal(t, []int{tc.grid, tc.consumption, tc.worlds}, []int{g, c, w}, "Aug %d", tc.day)
+	}
+	assert.InDelta(t, 1.2, report.Days[23].Grid.ImportKWh, 1e-9, "both grid entities summed once both report")
+	assert.InDelta(t, 1.5, report.Days[21].Consumption.ConsumptionKWh, 1e-9)
 }

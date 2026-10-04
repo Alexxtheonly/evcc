@@ -34,11 +34,15 @@ the configured static tariff); it is not a current dynamic price substituted for
 history. Amounts remain variable energy charges, not an invoice including fixed
 charges, taxes absent from the tariff or demand charges.
 
-The new endpoint requires every stored entity in a group to contribute a clean
-reading. Entity history has no commissioning/retirement timestamps: an old or
-renamed meter may conservatively reduce coverage. We do not infer retirement from
-a missing reading. The older savings-ledger endpoint keeps its existing partial-
-group semantics. Recovered/incomplete readings are excluded throughout.
+A group slot needs a clean reading from every entity that had reported by then.
+Entity history has no commissioning/retirement timestamps, so an entity's first
+recorded reading is its commissioning evidence: a newly added meter does not
+invalidate earlier history, but a gap after its first reading does. Retirement is
+not inferred from missing readings; a removed-but-still-stored meter keeps later
+slots invalid. Before any loadpoint has reported, loadpoint energy counts as zero
+because evcc's residual home meter contained it; slots before the first PV or
+battery reading lack that evidence and drop out of the world comparison. The older
+savings-ledger endpoint keeps its existing partial-group semantics. Recovered/incomplete readings are excluded throughout.
 
 ## One month, one battery trajectory
 

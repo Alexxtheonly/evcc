@@ -332,17 +332,52 @@ type groupSlotRow struct {
 // valid" rather than "every slot excluded", which is why this is a distinct return
 // value instead of an empty map.
 func queryGroupSlots(ctx context.Context, group string, from, to time.Time) (rows map[int64]groupSlotRow, hasEntities bool, err error) {
-	return queryGroupSlotsCoverage(ctx, group, from, to, false)
+	rows, _, hasEntities, err = queryGroupSlotsCoverage(ctx, group, from, to, false)
+	return rows, hasEntities, err
 }
 
-// requireAll refuses ambiguous partial groups; entity history has no retirement timestamps.
-func queryGroupSlotsCoverage(ctx context.Context, group string, from, to time.Time, requireAll bool) (rows map[int64]groupSlotRow, hasEntities bool, err error) {
+// groupMembership records each group entity's first recorded reading. The entities
+// table keeps no commissioning or retirement timestamps, so the first meters row is
+// the only evidence of when an entity joined the group: an entity added later must
+// not invalidate slots recorded before it existed. Retirement is not guessed - once
+// an entity has reported, every later slot still expects it.
+type groupMembership []int64
+
+// at returns how many entities had reported at least once by slot ts.
+func (m groupMembership) at(ts int64) int {
+	n := 0
+	for _, first := range m {
+		if first <= ts {
+			n++
+		}
+	}
+	return n
+}
+
+func queryGroupMembership(ctx context.Context, ids []int) (groupMembership, error) {
+	var res groupMembership
+	// Whole history, not the requested window: commissioning is a fact about the
+	// entity, and a window starting after it must still expect the entity.
+	err := db.Instance.WithContext(ctx).Table("meters").
+		Where("meter IN ?", ids).Group("meter").Pluck("MIN(ts)", &res).Error
+	return res, err
+}
+
+// queryGroupSlotsCoverage is queryGroupSlots with requireAll refusing ambiguous
+// partial groups: a slot is excluded unless every entity that had reported by then
+// contributed to it. members is nil when requireAll is false.
+func queryGroupSlotsCoverage(ctx context.Context, group string, from, to time.Time, requireAll bool) (rows map[int64]groupSlotRow, members groupMembership, hasEntities bool, err error) {
 	ids, err := groupEntityIDs(ctx, group)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if len(ids) == 0 {
-		return nil, false, nil
+		return nil, nil, false, nil
+	}
+	if requireAll {
+		if members, err = queryGroupMembership(ctx, ids); err != nil {
+			return nil, nil, true, err
+		}
 	}
 
 	var res []groupSlotRow
@@ -360,15 +395,15 @@ func queryGroupSlotsCoverage(ctx context.Context, group string, from, to time.Ti
 		Where("meter IN ? AND ts >= ? AND ts < ?", ids, from.Unix(), to.Unix()).
 		Group("ts").
 		Scan(&res).Error; err != nil {
-		return nil, true, err
+		return nil, nil, true, err
 	}
 
 	rows = make(map[int64]groupSlotRow, len(res))
 	for _, r := range res {
-		r.Excluded = r.Excluded || requireAll && r.Count != len(ids)
+		r.Excluded = r.Excluded || requireAll && r.Count != members.at(r.Ts)
 		rows[r.Ts] = r
 	}
-	return rows, true, nil
+	return rows, members, true, nil
 }
 
 // tariffSlot is one 15min slot's realised grid/feed-in price. FeedIn is nil when no
