@@ -183,10 +183,9 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 }
 
 // energyDecisionBoundaryGrace bounds how long a robust decision outlives its
-// slot while the new slot's first run is pending. Runs start every ~30 s and a
-// robust solve is cut off after 45 s, so 90 s covers one run that straddles
-// the boundary plus a typical replacement run. Without it, every boundary
-// released hold/charge to normal for ~20 s.
+// slot while the new slot's first run is pending. Runs start once per
+// loadpoint cycle (~30 s) and a robust solve is cut off after 45 s, so 90 s
+// covers one run that straddles the boundary plus a typical replacement run.
 const energyDecisionBoundaryGrace = 90 * time.Second
 
 // errOptimizerSlotElapsed is a run that finished after its first slot ended.

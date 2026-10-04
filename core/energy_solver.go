@@ -224,8 +224,9 @@ func wireValue(v float32) (float64, error) {
 }
 
 // fixedStepMargin (Wh) keeps a fixed first step strictly inside the zero-grid
-// boundary. Without grid charging or discharge, the companion enforces that
-// boundary exactly: a 3e-6 Wh overshoot came back infeasible. The residual
+// boundary. Unless the battery may charge from or discharge to the grid, the
+// companion enforces that boundary exactly: a 3e-6 Wh overshoot came back
+// infeasible. The residual
 // grid flow is half of gridDirectionTolerance, so currentSlotSuggestion still
 // reads an idle normal battery as normal rather than hold or holdcharge.
 func fixedStepMargin(hours float64) float64 {
