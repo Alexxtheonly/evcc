@@ -242,7 +242,7 @@ func TestEnergyDecisionSurvivesSlotBoundaryUntilReplaced(t *testing.T) {
 	assert.Equal(t, "hold", site.energyPreferredAction(), "the new slot's first run keeps its hysteresis incumbent")
 
 	// A run that straddled the boundary supersedes nothing.
-	site.finishOptimizerAttempt(validateEnergyPlanInputs(firstEnd, now, EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{}))
+	site.finishOptimizerAttempt((&Site{}).validateEnergyPlan(requestDetails{}, firstEnd, now, EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{}))
 	site.updateBatteryMode(false, rate)
 	assert.Equal(t, api.BatteryHold, site.GetBatteryMode())
 
@@ -279,7 +279,7 @@ func TestEnergyDecisionReleasesWhenNoResultArrivesWithinGrace(t *testing.T) {
 	batCon.EXPECT().SetBatteryMode(api.BatteryHold)
 	boundaryDecision(site, api.BatteryHold, 0, firstEnd.Add(15*time.Minute))
 	site.updateBatteryMode(false, rate)
-	site.finishOptimizerAttempt(validateEnergyPlanInputs(firstEnd.Add(15*time.Minute), now, EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{Robust: true}))
+	site.finishOptimizerAttempt((&Site{}).validateEnergyPlan(requestDetails{}, firstEnd.Add(15*time.Minute), now, EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{Robust: true}))
 	batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
 	site.updateBatteryMode(false, rate)
 	assert.Equal(t, api.BatteryNormal, site.GetBatteryMode())
@@ -303,4 +303,39 @@ func TestEnergyChargeDecisionVetoedAtBoundaryReleases(t *testing.T) {
 	batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
 	site.updateBatteryMode(false, api.Rate{Value: .5})
 	assert.Equal(t, api.BatteryNormal, site.GetBatteryMode())
+}
+
+func TestEnergyInputChangeAtElapsedSlotReleases(t *testing.T) {
+	firstEnd := time.Date(2026, 10, 3, 21, 0, 0, 0, time.UTC)
+	id := 0
+	vehicle := requestDetails{BatteryDetails: []batteryDetail{{Type: batteryTypeVehicle, loadpoint: &id}}}
+	for name, change := range map[string]func(*Site) error{
+		"settings": func(site *Site) error {
+			return site.validateEnergyPlan(requestDetails{}, firstEnd, firstEnd.Add(5*time.Second), EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{Robust: true})
+		},
+		"device": func(site *Site) error {
+			// the vehicle disconnected; the stub loadpoint cannot take suggestions
+			site.loadpoints = []*Loadpoint{{status: api.StatusA}}
+			defer func() { site.loadpoints = nil }()
+			return site.validateEnergyPlan(vehicle, firstEnd, firstEnd.Add(5*time.Second), EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := firstEnd.Add(-33 * time.Second)
+			site, batCon := boundaryControlSite(t, &now)
+			rate := api.Rate{Value: .2}
+			batCon.EXPECT().SetBatteryMode(api.BatteryHold)
+			boundaryDecision(site, api.BatteryHold, 0, firstEnd)
+			site.updateBatteryMode(false, rate)
+
+			now = firstEnd.Add(5 * time.Second)
+			err := change(site)
+			require.ErrorIs(t, err, errOptimizerReplan)
+			assert.NotErrorIs(t, err, errOptimizerSlotElapsed, "a changed input outranks the elapsed slot")
+			site.finishOptimizerAttempt(err)
+			batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
+			site.updateBatteryMode(false, rate)
+			assert.Equal(t, api.BatteryNormal, site.GetBatteryMode())
+		})
+	}
 }

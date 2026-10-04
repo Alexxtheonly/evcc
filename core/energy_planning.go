@@ -161,10 +161,7 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 		control = site.energyInsights.Scenarios.Control
 	}
 	firstEnd := details.Timestamps[0].Add(time.Duration(req.TimeSeries.Dt[0]) * time.Second)
-	if err := validateEnergyPlanInputs(firstEnd, time.Now(), cfg, site.GetEnergyIntelligenceSettings()); err != nil {
-		return err
-	}
-	if err := site.validateEnergyDevices(details); err != nil {
+	if err := site.validateEnergyPlan(details, firstEnd, time.Now(), cfg, site.GetEnergyIntelligenceSettings()); err != nil {
 		return err
 	}
 	if control != nil {
@@ -199,12 +196,18 @@ func energyDecisionExpiry(firstEnd time.Time) time.Time {
 	return firstEnd.Add(energyDecisionBoundaryGrace)
 }
 
-func validateEnergyPlanInputs(firstEnd, now time.Time, planned, current EnergyIntelligenceSettings) error {
-	if !firstEnd.After(now) {
-		return fmt.Errorf("optimizer schedule expired before completion: %w", errOptimizerSlotElapsed)
-	}
+// validateEnergyPlan rejects a finished run whose inputs no longer hold. A
+// slot that merely elapsed is reported last: changed settings or devices must
+// release the previous decision instead of keeping its grace.
+func (site *Site) validateEnergyPlan(details requestDetails, firstEnd, now time.Time, planned, current EnergyIntelligenceSettings) error {
 	if !reflect.DeepEqual(planned, current) {
 		return fmt.Errorf("energy settings changed while optimizing; waiting for a fresh plan: %w", errOptimizerReplan)
+	}
+	if err := site.validateEnergyDevices(details); err != nil {
+		return err
+	}
+	if !firstEnd.After(now) {
+		return fmt.Errorf("optimizer schedule expired before completion: %w", errOptimizerSlotElapsed)
 	}
 	return nil
 }
