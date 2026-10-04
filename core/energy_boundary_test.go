@@ -339,3 +339,28 @@ func TestEnergyInputChangeAtElapsedSlotReleases(t *testing.T) {
 		})
 	}
 }
+
+func TestEnergyRepeatedStraddlesKeepOriginalExpiry(t *testing.T) {
+	firstEnd := time.Date(2026, 10, 3, 21, 0, 0, 0, time.UTC)
+	now := firstEnd.Add(-33 * time.Second)
+	site, batCon := boundaryControlSite(t, &now)
+	rate := api.Rate{Value: .2}
+	batCon.EXPECT().SetBatteryMode(api.BatteryHold)
+	boundaryDecision(site, api.BatteryHold, 0, firstEnd)
+	site.updateBatteryMode(false, rate)
+
+	for _, at := range []time.Duration{10 * time.Second, 50 * time.Second} {
+		now = firstEnd.Add(at)
+		site.finishOptimizerAttempt((&Site{}).validateEnergyPlan(requestDetails{}, firstEnd, now, EnergyIntelligenceSettings{}, EnergyIntelligenceSettings{}))
+		site.updateBatteryMode(false, rate)
+		assert.Equal(t, api.BatteryHold, site.GetBatteryMode())
+	}
+
+	now = firstEnd.Add(energyDecisionBoundaryGrace - time.Nanosecond)
+	site.updateBatteryMode(false, rate)
+	assert.Equal(t, api.BatteryHold, site.GetBatteryMode())
+	now = firstEnd.Add(energyDecisionBoundaryGrace)
+	batCon.EXPECT().SetBatteryMode(api.BatteryNormal)
+	site.updateBatteryMode(false, rate)
+	assert.Equal(t, api.BatteryNormal, site.GetBatteryMode(), "straddles must not extend the grace past the original slot end")
+}
