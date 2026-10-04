@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -447,6 +448,17 @@ func TestReportTimezoneNeverLocal(t *testing.T) {
 	january, err := ComputeEnergyPrices(context.Background(), "2026-01", time.Date(2026, 8, 2, 0, 0, 0, 0, berlin), nil)
 	require.NoError(t, err)
 	assert.Equal(t, "Europe/Berlin", january.Timezone, "a resolvable name is kept")
+
+	// A DST zone that Go names "Local" (TZ unset): the report uses the month's offset.
+	data, err := os.ReadFile("/usr/share/zoneinfo/Europe/Berlin")
+	if err != nil {
+		t.Skip("system tzdata unavailable")
+	}
+	local, err := time.LoadLocationFromTZData("Local", data)
+	require.NoError(t, err)
+	january, err = ComputeEnergyPrices(context.Background(), "2026-01", time.Date(2026, 8, 2, 0, 0, 0, 0, local), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Etc/GMT-1", january.Timezone, "winter month viewed in summer")
 }
 
 func TestEnergyPricesDiscloseOnlyPricedExportFallbacks(t *testing.T) {
