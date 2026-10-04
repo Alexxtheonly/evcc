@@ -6,7 +6,7 @@ import api from "@/api";
 import en from "../../../../i18n/en.json";
 import de from "../../../../i18n/de.json";
 import type { EnergyPriceBucket, EnergyPriceReport } from "./energyPrices";
-import { siteCalendarDate } from "./energyPrices";
+import { browserTimezone, siteCalendarDate, usableTimezone } from "./energyPrices";
 
 vi.mock("@/api", () => ({ default: { get: vi.fn() } }));
 
@@ -125,6 +125,32 @@ describe("energy prices", () => {
     await flushPromises();
     expect(wrapper.vm.date).toBe("2026-03-01");
     expect(wrapper.getComponent(DateNavigator).props("today")!.getDate()).toBe(1);
+    wrapper.unmount();
+  });
+
+  test.each([en, de])(
+    "an unresolvable server zone falls back to the browser zone with a note",
+    async (messages) => {
+      const data = { ...report(), timezone: "Local", today: undefined };
+      vi.mocked(api.get).mockResolvedValue({ data });
+      const wrapper = shallowMount(EnergyPricesCard, { global: translations(messages) });
+      await flushPromises();
+      expect(wrapper.vm.error).toBe("");
+      expect(wrapper.vm.zone).toBe(browserTimezone());
+      expect(wrapper.vm.earliestDate.getFullYear()).toBe(2025);
+      expect(wrapper.get('[data-testid="timezone-fallback"]').text()).toContain("Local");
+      expect(wrapper.text()).toContain(wrapper.vm.price(0.3));
+      wrapper.unmount();
+    }
+  );
+
+  test("a resolvable server zone shows no fallback note", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: { ...report(), timezone: "Etc/GMT-2" } });
+    const wrapper = mountCard();
+    await flushPromises();
+    expect(wrapper.vm.zone).toBe("Etc/GMT-2");
+    expect(wrapper.find('[data-testid="timezone-fallback"]').exists()).toBe(false);
+    expect(usableTimezone("Local")).toBeUndefined();
     wrapper.unmount();
   });
 

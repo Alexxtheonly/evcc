@@ -8,7 +8,10 @@ background tasks or dependencies are required.
 
 `from` and `to` are calendar-month bounds; `evaluatedTo` is the lesser of month
 end and the start of the current quarter. `timezone` and `today` drive calendar
-navigation. `days` contain elapsed local calendar days, including missing-history
+navigation. `timezone` is never Go's `Local` placeholder: without `TZ` the IANA name
+is read from `/etc/localtime`/`/etc/timezone`, else the current offset is sent as
+`Etc/GMT±h` or `±hh:mm`. The UI falls back to the browser zone, with a note, for
+any zone it cannot resolve. `days` contain elapsed local calendar days, including missing-history
 days; their `to` is clipped at `evaluatedTo`. A DST transition day therefore has
 92 or 100 quarter-hour slots. `earliest` is the first recorded grid tariff, not a
 promise that every meter was available then.

@@ -64,6 +64,20 @@ export interface EVTimingPrice {
   savings?: number;
 }
 
+export const browserTimezone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// The server may send a zone this browser cannot resolve (older servers send Go's
+// "Local"); Intl then throws a RangeError, so callers fall back to the browser zone.
+export const usableTimezone = (zone: string | undefined): string | undefined => {
+  if (!zone) return undefined;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: zone });
+    return zone;
+  } catch {
+    return undefined;
+  }
+};
+
 export const siteCalendarDate = (now: Date, timezone: string): string => {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,

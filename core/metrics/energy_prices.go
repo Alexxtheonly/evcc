@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/evcc-io/evcc/tariff"
@@ -96,7 +98,7 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 	if to.Before(end) {
 		end = to
 	}
-	report := &EnergyPriceReport{Month: month, Timezone: loc.String(), Today: now.Format("2006-01-02"), From: from, To: to, EvaluatedTo: end, Days: []EnergyPriceBucket{}, Comparison: EnergyPriceComparison{Status: "unavailable", Reason: "no_priced_slots", Notes: []string{noteInvoiceComparability, noteEVTimingUnattributed, noteMeterResidual}}, EVTiming: EVTimingPrice{Status: "unavailable", Reason: "historical_evidence_unavailable"}}
+	report := &EnergyPriceReport{Month: month, Timezone: reportTimezone(loc, now), Today: now.Format("2006-01-02"), From: from, To: to, EvaluatedTo: end, Days: []EnergyPriceBucket{}, Comparison: EnergyPriceComparison{Status: "unavailable", Reason: "no_priced_slots", Notes: []string{noteInvoiceComparability, noteEVTimingUnattributed, noteMeterResidual}}, EVTiming: EVTimingPrice{Status: "unavailable", Reason: "historical_evidence_unavailable"}}
 	report.Totals = newEnergyPriceBucket(month, from, end)
 	for day := from; day.Before(end); day = day.AddDate(0, 0, 1) {
 		dayEnd := day.AddDate(0, 0, 1)
@@ -364,4 +366,48 @@ func applyInventoryBenefit(bucket *EnergyPriceBucket, replay *inventoryReplay, n
 	v := adj.Control.Full - *previous
 	bucket.InventoryBenefit = &v
 	*previous = adj.Control.Full
+}
+
+// localZoneName resolves the IANA name behind Go's "Local" placeholder, which Go
+// uses when TZ is unset and /etc/localtime is read. Empty when unknown.
+var localZoneName = func() string {
+	if target, err := os.Readlink("/etc/localtime"); err == nil {
+		if _, name, ok := strings.Cut(target, "zoneinfo/"); ok {
+			return name
+		}
+	}
+	if b, err := os.ReadFile("/etc/timezone"); err == nil {
+		return strings.TrimSpace(string(b))
+	}
+	return ""
+}
+
+// reportTimezone names the site calendar zone in a form browsers accept: browsers
+// reject "Local" (Intl RangeError). An IANA name is used when it resolves to the
+// same offset as loc at now; otherwise the offset at now, as Etc/GMT for whole
+// hours (note the POSIX-inverted sign) or "+hh:mm".
+func reportTimezone(loc *time.Location, now time.Time) string {
+	name := loc.String()
+	if name == "Local" {
+		name = localZoneName()
+	}
+	_, offset := now.In(loc).Zone()
+	if name != "" && name != "Local" {
+		if named, err := time.LoadLocation(name); err == nil {
+			if _, o := now.In(named).Zone(); o == offset {
+				return name
+			}
+		}
+	}
+	switch {
+	case offset == 0:
+		return "UTC"
+	case offset%3600 == 0:
+		return fmt.Sprintf("Etc/GMT%+d", -offset/3600)
+	}
+	sign := '+'
+	if offset < 0 {
+		sign, offset = '-', -offset
+	}
+	return fmt.Sprintf("%c%02d:%02d", sign, offset/3600, offset%3600/60)
 }

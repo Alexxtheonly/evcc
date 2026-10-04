@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -402,4 +403,40 @@ func TestEnergyPricesGroupMembershipStartsAtFirstReading(t *testing.T) {
 	}
 	assert.InDelta(t, 1.2, report.Days[23].Grid.ImportKWh, 1e-9, "both grid entities summed once both report")
 	assert.InDelta(t, 1.5, report.Days[21].Consumption.ConsumptionKWh, 1e-9)
+}
+
+func TestReportTimezoneNeverLocal(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	require.NoError(t, err)
+	summer := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	previous := localZoneName
+	t.Cleanup(func() { localZoneName = previous })
+	for _, tc := range []struct {
+		name, resolved string
+		loc            *time.Location
+		want           string
+	}{
+		{"named zone", "", berlin, "Europe/Berlin"},
+		{"local resolved", "Europe/Berlin", time.FixedZone("Local", 7200), "Europe/Berlin"},
+		{"local unresolved", "", time.FixedZone("Local", 7200), "Etc/GMT-2"},
+		{"local west", "", time.FixedZone("Local", -5*3600), "Etc/GMT+5"},
+		{"resolved name disagrees", "Europe/Berlin", time.FixedZone("Local", 19800), "+05:30"},
+		{"bogus name", "Not/AZone", time.FixedZone("Local", -9000), "-02:30"},
+		{"utc", "", time.FixedZone("Local", 0), "UTC"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			localZoneName = func() string { return tc.resolved }
+			got := reportTimezone(tc.loc, summer)
+			assert.Equal(t, tc.want, got)
+			_, err := time.LoadLocation(got)
+			if !strings.Contains(got, ":") {
+				assert.NoError(t, err, "whole-hour names must be loadable IANA zones")
+			}
+		})
+	}
+	setupEnergyPrices(t)
+	localZoneName = func() string { return "" }
+	report, err := ComputeEnergyPrices(context.Background(), "", time.Date(2026, 10, 2, 0, 0, 0, 0, time.FixedZone("Local", 7200)), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Etc/GMT-2", report.Timezone)
 }

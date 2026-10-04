@@ -44,7 +44,15 @@
 				{{
 					$t("forecast.energyPrices.through", {
 						time: through,
-						timezone: report.timezone,
+						timezone: zone,
+					})
+				}}
+			</p>
+			<p v-if="zoneFallback" class="small mb-1" data-testid="timezone-fallback">
+				{{
+					$t("forecast.energyPrices.timezoneFallback", {
+						zone: report.timezone,
+						browser: zone,
 					})
 				}}
 			</p>
@@ -250,9 +258,11 @@ import { CURRENCY } from "@/types/evcc";
 import type { LedgerCoverage } from "./savingsLedger.types";
 import type { EnergySettings } from "./energyIntelligence";
 import {
+	browserTimezone,
 	calendarDate,
 	calendarKey,
 	siteCalendarDate,
+	usableTimezone,
 	type EnergyPriceReport,
 	type EnergyPriceBucket,
 } from "./energyPrices";
@@ -298,28 +308,34 @@ export default defineComponent({
 				? this.report?.totals
 				: (this.report?.days || []).find((day) => day.date === this.date);
 		},
+		zone(): string {
+			return usableTimezone(this.report?.timezone) ?? browserTimezone();
+		},
+		zoneFallback(): boolean {
+			return !!this.report && !usableTimezone(this.report.timezone);
+		},
 		selectedDate() {
 			return calendarDate(this.date || this.report?.month || "1970-01-01");
 		},
 		siteToday() {
 			return calendarDate(
-				this.report?.today || siteCalendarDate(new Date(), this.report?.timezone || "UTC")
+				this.report?.today || siteCalendarDate(new Date(), this.zone)
 			);
 		},
 		earliestDate() {
 			const value = this.report?.earliest;
 			return value
-				? calendarDate(siteCalendarDate(new Date(value), this.report!.timezone))
+				? calendarDate(siteCalendarDate(new Date(value), this.zone))
 				: calendarDate(this.report?.month || "1970-01");
 		},
 		through() {
 			return new Date(this.bucket!.to).toLocaleString(this.$i18n.locale, {
-				timeZone: this.report!.timezone,
+				timeZone: this.zone,
 			});
 		},
 		partialPeriod() {
 			if (!this.report || !this.bucket) return false;
-			const today = this.report.today || siteCalendarDate(new Date(), this.report.timezone);
+			const today = this.report.today || siteCalendarDate(new Date(), this.zone);
 			return this.period === "month"
 				? this.report.month === today.slice(0, 7)
 				: this.date === today;
@@ -387,7 +403,7 @@ export default defineComponent({
 			const month = value.month ?? this.selectedDate.getMonth() + 1;
 			const key = calendarKey(value.year, month);
 			const today =
-				this.report?.today || siteCalendarDate(new Date(), this.report?.timezone || "UTC");
+				this.report?.today || siteCalendarDate(new Date(), this.zone);
 			if (calendarKey(value.year, month, value.day ?? 1) > today) return;
 			this.date = calendarKey(value.year, month, value.day ?? 1);
 			if (key !== this.report?.month) this.fetchReport(key);
@@ -406,7 +422,9 @@ export default defineComponent({
 				const report = response.data;
 				this.requestedMonth = report.month;
 				if (!this.date.startsWith(report.month)) {
-					const today = report.today || siteCalendarDate(new Date(), report.timezone);
+					const today =
+						report.today ||
+						siteCalendarDate(new Date(), usableTimezone(report.timezone) ?? browserTimezone());
 					this.date = today.startsWith(report.month) ? today : `${report.month}-01`;
 				}
 				this.report = report;

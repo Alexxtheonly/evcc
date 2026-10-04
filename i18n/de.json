@@ -1201,7 +1201,8 @@
       "intervalBasis": "Berechnet aus aufgezeichneten Intervalltarifen gemäß deinen Angaben zur Intervallabrechnung.",
       "simulationBasis": "Berechnet aus aufgezeichneten Intervalltarifen. Als simulierte Tarifkosten zu verstehen, sofern für diesen Zeitraum keine Intervallabrechnung gilt.",
       "legacyDetails": "Einsparungen und vergangene Steuerungsentscheidungen",
-      "legacyNote": "Diese Detailvergleiche berechnen den gewählten Zeitraum separat. Ihre Batterieschätzungen können vom monatsbasierten Preisvergleich oben abweichen."
+      "legacyNote": "Diese Detailvergleiche berechnen den gewählten Zeitraum separat. Ihre Batterieschätzungen können vom monatsbasierten Preisvergleich oben abweichen.",
+      "timezoneFallback": "Die Zeitzone des Standorts {zone} ist diesem Browser unbekannt; Zeiten werden in {browser} angezeigt."
     },
     "energy": {
       "clear": "Leeren",

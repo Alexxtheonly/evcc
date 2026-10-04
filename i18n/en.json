@@ -1201,7 +1201,8 @@
       "intervalBasis": "Calculated from recorded interval tariffs under your declared interval billing settings.",
       "simulationBasis": "Calculated from recorded interval tariffs. Treat these as simulated tariff costs unless interval billing applies to this period.",
       "legacyDetails": "Savings and past control details",
-      "legacyNote": "These detailed comparisons replay the selected period separately. Their battery estimates can differ from the month-based price comparison above."
+      "legacyNote": "These detailed comparisons replay the selected period separately. Their battery estimates can differ from the month-based price comparison above.",
+      "timezoneFallback": "The site time zone {zone} is not known to this browser; times are shown in {browser}."
     },
     "energy": {
       "clear": "Clear",
