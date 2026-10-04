@@ -215,10 +215,7 @@ export default defineComponent({
 			}));
 		},
 		monthOptions() {
-			// Same bounds as monthYearOptions: no months before startDate or after today.
-			const first =
-				this.year === this.startDate.getFullYear() ? this.startDate.getMonth() + 1 : 1;
-			const last = this.year === this.today.getFullYear() ? this.today.getMonth() + 1 : 12;
+			const [first, last] = this.monthRange(this.year);
 			return Array.from({ length: 12 }, (_, i) => i + 1)
 				.filter((month) => month >= first && month <= last)
 				.map((month) => ({
@@ -345,20 +342,10 @@ export default defineComponent({
 			});
 		},
 		emitPrevYear() {
-			const year = this.year - 1;
-			this.$emit("update-date", {
-				year,
-				month: undefined,
-				...(this.showDay ? { day: this.clampDay(year, this.month) } : {}),
-			});
+			this.emitYear(this.year - 1);
 		},
 		emitNextYear() {
-			const year = this.year + 1;
-			this.$emit("update-date", {
-				year,
-				month: undefined,
-				...(this.showDay ? { day: this.clampDay(year, this.month) } : {}),
-			});
+			this.emitYear(this.year + 1);
 		},
 		emitMonth(month: number) {
 			this.$emit("update-date", {
@@ -377,13 +364,22 @@ export default defineComponent({
 				...(this.showDay ? { day: this.clampDay(year, month) } : {}),
 			});
 		},
+		// With a month picker, keep the month inside the new year's bounded options.
 		emitYear(year: number) {
 			const y = Number(year);
+			const [first, last] = this.monthRange(y);
+			const month = this.showMonth ? Math.min(Math.max(this.month, first), last) : undefined;
 			this.$emit("update-date", {
 				year: y,
-				month: undefined,
-				...(this.showDay ? { day: this.clampDay(y, this.month) } : {}),
+				month,
+				...(this.showDay ? { day: this.clampDay(y, month ?? this.month) } : {}),
 			});
+		},
+		// Months of year that lie between startDate and today (same bounds as monthYearOptions).
+		monthRange(year: number): [number, number] {
+			const first = year === this.startDate.getFullYear() ? this.startDate.getMonth() + 1 : 1;
+			const last = year === this.today.getFullYear() ? this.today.getMonth() + 1 : 12;
+			return [first, last];
 		},
 		flashHighlight(dir: "prev" | "next") {
 			if (this.highlightTimer) clearTimeout(this.highlightTimer);
