@@ -181,8 +181,20 @@ describe("series data", () => {
       slot("2026-10-05T03:00:00Z", "2026-10-05T03:15:00Z"),
     ];
     expect(gridChargeBlocks(grid)).toEqual([
-      { start: t("2026-10-05T02:00:00Z"), end: t("2026-10-05T02:30:00Z"), definite: true },
-      { start: t("2026-10-05T02:30:00Z"), end: t("2026-10-05T02:45:00Z"), definite: false },
+      {
+        start: t("2026-10-05T02:00:00Z"),
+        end: t("2026-10-05T02:30:00Z"),
+        definite: true,
+        minWh: 900,
+        maxWh: 1000,
+      },
+      {
+        start: t("2026-10-05T02:30:00Z"),
+        end: t("2026-10-05T02:45:00Z"),
+        definite: false,
+        minWh: 0,
+        maxWh: 300,
+      },
     ]);
     expect(grid.map((s) => gridChargeState(s).kind)).toEqual([
       "definite",
@@ -276,7 +288,6 @@ describe("visibility and option", () => {
       border: "#dddddd",
       price: "#ff912f",
       solar: "#0fde41",
-      grid: "#28293e",
       devices: { "battery:a": "#0ba631", "loadpoint:car": "#60a5fa" },
     },
     formatHour: (date) => `${date.getHours()}`,

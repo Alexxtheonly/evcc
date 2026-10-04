@@ -288,7 +288,6 @@ export default defineComponent({
 					border: colors.border || "rgba(0,0,0,0.1)",
 					price: colors.price || "#ff912f",
 					solar: colors.self || "#0fde41",
-					grid: colors.grid || "#28293e",
 					devices: this.deviceColors,
 				},
 				formatHour: (date) => this.hourShort(date),

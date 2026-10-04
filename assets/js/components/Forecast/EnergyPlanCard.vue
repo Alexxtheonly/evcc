@@ -312,6 +312,7 @@ import {
 	type EnergyDevice,
 	type EnergyInsights,
 } from "./energyIntelligence";
+import { gridChargeBlocks } from "./planChartModel";
 import {
 	daySummaries,
 	planHeadline,
@@ -398,32 +399,11 @@ export default defineComponent({
 			);
 		},
 		gridSchedule() {
-			const blocks: {
-				start: string;
-				end: string;
-				definite: boolean;
-				minWh: number;
-				maxWh: number;
-			}[] = [];
-			for (const slot of this.slots) {
-				if (slot.gridChargeMinWh == null || slot.gridChargeMaxWh == null) continue;
-				if (slot.gridChargeMaxWh <= 1) continue;
-				const definite = slot.gridChargeMinWh > 1;
-				const previous = blocks.at(-1);
-				if (previous && previous.end === slot.start && previous.definite === definite) {
-					previous.end = slot.end;
-					previous.minWh += slot.gridChargeMinWh;
-					previous.maxWh += slot.gridChargeMaxWh;
-				} else
-					blocks.push({
-						start: slot.start,
-						end: slot.end,
-						definite,
-						minWh: slot.gridChargeMinWh,
-						maxWh: slot.gridChargeMaxWh,
-					});
-			}
-			return blocks;
+			return gridChargeBlocks(this.slots).map((block) => ({
+				...block,
+				start: new Date(block.start).toISOString(),
+				end: new Date(block.end).toISOString(),
+			}));
 		},
 		schedule() {
 			return this.devices.map((device) => {

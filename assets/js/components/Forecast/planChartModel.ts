@@ -190,6 +190,8 @@ export interface GridBlock {
   start: number;
   end: number;
   definite: boolean;
+  minWh: number;
+  maxWh: number;
 }
 
 // Site-level grid charging: definite where the lower allocation bound is positive,
@@ -201,9 +203,18 @@ export function gridChargeBlocks(slots: EnergyForecastSlot[]): GridBlock[] {
       continue;
     const definite = slot.gridChargeMinWh > 1;
     const previous = blocks.at(-1);
-    if (previous && previous.end === ms(slot.start) && previous.definite === definite)
+    if (previous && previous.end === ms(slot.start) && previous.definite === definite) {
       previous.end = ms(slot.end);
-    else blocks.push({ start: ms(slot.start), end: ms(slot.end), definite });
+      previous.minWh += slot.gridChargeMinWh;
+      previous.maxWh += slot.gridChargeMaxWh;
+    } else
+      blocks.push({
+        start: ms(slot.start),
+        end: ms(slot.end),
+        definite,
+        minWh: slot.gridChargeMinWh,
+        maxWh: slot.gridChargeMaxWh,
+      });
   }
   return blocks;
 }
@@ -304,7 +315,6 @@ export interface ChartColors {
   border: string;
   price: string;
   solar: string;
-  grid: string;
   devices: Record<string, string>;
 }
 
