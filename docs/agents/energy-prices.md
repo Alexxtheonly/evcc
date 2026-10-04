@@ -9,8 +9,9 @@ background tasks or dependencies are required.
 `from` and `to` are calendar-month bounds; `evaluatedTo` is the lesser of month
 end and the start of the current quarter. `timezone` and `today` drive calendar
 navigation. `timezone` is never Go's `Local` placeholder: without `TZ` the IANA name
-is read from `/etc/localtime`/`/etc/timezone`, else the current offset is sent as
-`Etc/GMT±h` or `±hh:mm`. The UI falls back to the browser zone, with a note, for
+is read from `/etc/localtime`/`/etc/timezone`, else the offset at the end of the
+requested period is sent as `Etc/GMT±h` or `±hh:mm` (exact except before a DST
+switch inside that month). The UI falls back to the browser zone, with a note, for
 any zone it cannot resolve. `days` contain elapsed local calendar days, including missing-history
 days; their `to` is clipped at `evaluatedTo`. A DST transition day therefore has
 92 or 100 quarter-hour slots. `earliest` is the first recorded grid tariff, not a
@@ -47,7 +48,9 @@ not inferred from missing readings; a removed-but-still-stored meter keeps later
 slots invalid. Before any loadpoint has reported, loadpoint energy counts as zero
 because evcc's residual home meter contained it; slots before the first PV or
 battery reading lack that evidence and drop out of the world comparison. The older
-savings-ledger endpoint keeps its existing partial-group semantics. Recovered/incomplete readings are excluded throughout.
+savings-ledger endpoint keeps its existing partial-group semantics. Design limit:
+an entity is never retired, so a replaced meter keeps invalidating slots after its
+last reading, and an entity that never writes a row is never counted. Recovered/incomplete readings are excluded throughout.
 
 ## One month, one battery trajectory
 

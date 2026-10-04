@@ -108,7 +108,7 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 	if to.Before(end) {
 		end = to
 	}
-	report := &EnergyPriceReport{Month: month, Timezone: reportTimezone(loc, now), Today: now.Format("2006-01-02"), From: from, To: to, EvaluatedTo: end, Days: []EnergyPriceBucket{}, Comparison: EnergyPriceComparison{Status: "unavailable", Reason: "no_priced_slots", Notes: []string{noteInvoiceComparability, notePriceWorldsEVTiming}}, EVTiming: EVTimingPrice{Status: "unavailable", Reason: "historical_evidence_unavailable"}}
+	report := &EnergyPriceReport{Month: month, Timezone: reportTimezone(loc.String(), loc, zoneInstant(from, end)), Today: now.Format("2006-01-02"), From: from, To: to, EvaluatedTo: end, Days: []EnergyPriceBucket{}, Comparison: EnergyPriceComparison{Status: "unavailable", Reason: "no_priced_slots", Notes: []string{noteInvoiceComparability, notePriceWorldsEVTiming}}, EVTiming: EVTimingPrice{Status: "unavailable", Reason: "historical_evidence_unavailable"}}
 	report.Totals = newEnergyPriceBucket(month, from, end)
 	for day := from; day.Before(end); day = day.AddDate(0, 0, 1) {
 		dayEnd := day.AddDate(0, 0, 1)
@@ -403,19 +403,29 @@ var localZoneName = func() string {
 	return ""
 }
 
+// zoneInstant is the last evaluated instant of the period, or its start when
+// nothing is evaluated yet: a fixed-offset fallback zone then matches the month
+// shown, not the request time (a winter month viewed in summer stays at +01:00).
+func zoneInstant(from, end time.Time) time.Time {
+	if end.After(from) {
+		return end.Add(-time.Second)
+	}
+	return from
+}
+
 // reportTimezone names the site calendar zone in a form browsers accept: browsers
 // reject "Local" (Intl RangeError). An IANA name is used when it resolves to the
-// same offset as loc at now; otherwise the offset at now, as Etc/GMT for whole
-// hours (note the POSIX-inverted sign) or "+hh:mm".
-func reportTimezone(loc *time.Location, now time.Time) string {
-	name := loc.String()
+// same offset as loc at at; otherwise the offset at at, as Etc/GMT for whole
+// hours (note the POSIX-inverted sign) or "+hh:mm". In a month containing a DST
+// switch the fallback offset is the one at the period's end.
+func reportTimezone(name string, loc *time.Location, at time.Time) string {
 	if name == "Local" {
 		name = localZoneName()
 	}
-	_, offset := now.In(loc).Zone()
+	_, offset := at.In(loc).Zone()
 	if name != "" && name != "Local" {
 		if named, err := time.LoadLocation(name); err == nil {
-			if _, o := now.In(named).Zone(); o == offset {
+			if _, o := at.In(named).Zone(); o == offset {
 				return name
 			}
 		}

@@ -426,7 +426,7 @@ func TestReportTimezoneNeverLocal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			localZoneName = func() string { return tc.resolved }
-			got := reportTimezone(tc.loc, summer)
+			got := reportTimezone(tc.loc.String(), tc.loc, summer)
 			assert.Equal(t, tc.want, got)
 			_, err := time.LoadLocation(got)
 			if !strings.Contains(got, ":") {
@@ -439,6 +439,14 @@ func TestReportTimezoneNeverLocal(t *testing.T) {
 	report, err := ComputeEnergyPrices(context.Background(), "", time.Date(2026, 10, 2, 0, 0, 0, 0, time.FixedZone("Local", 7200)), nil)
 	require.NoError(t, err)
 	assert.Equal(t, "Etc/GMT-2", report.Timezone)
+
+	// Unresolvable "Local" with DST: the offset follows the month shown, not now.
+	assert.Equal(t, "Etc/GMT-1", reportTimezone("Local", berlin, zoneInstant(time.Date(2026, 1, 1, 0, 0, 0, 0, berlin), time.Date(2026, 2, 1, 0, 0, 0, 0, berlin))))
+	assert.Equal(t, "Etc/GMT-2", reportTimezone("Local", berlin, zoneInstant(time.Date(2026, 8, 1, 0, 0, 0, 0, berlin), time.Date(2026, 8, 4, 12, 0, 0, 0, berlin))))
+	assert.Equal(t, "Etc/GMT-1", reportTimezone("Local", berlin, zoneInstant(time.Date(2026, 10, 1, 0, 0, 0, 0, berlin), time.Date(2026, 11, 1, 0, 0, 0, 0, berlin))), "DST month: offset at the period end")
+	january, err := ComputeEnergyPrices(context.Background(), "2026-01", time.Date(2026, 8, 2, 0, 0, 0, 0, berlin), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Europe/Berlin", january.Timezone, "a resolvable name is kept")
 }
 
 func TestEnergyPricesDiscloseOnlyPricedExportFallbacks(t *testing.T) {
