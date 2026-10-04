@@ -1,182 +1,215 @@
 <template>
 	<div class="energy-chart">
-		<div class="d-flex flex-wrap gap-2 mb-2" :aria-label="$t('forecast.energy.chartLayers')">
-			<label v-for="layer in layers" :key="layer" class="legend-toggle">
-				<input v-model="visible[layer]" type="checkbox" class="form-check-input mt-0" />
-				<span :class="['legend-mark', layer]" aria-hidden="true" />
-				{{ $t(`forecast.energy.chart.${layer}`) }}
-			</label>
-		</div>
-		<div v-if="devices.length" class="d-flex flex-wrap gap-2 mb-2">
-			<button
-				v-for="device in devices"
-				:key="device.key"
-				type="button"
-				class="btn btn-sm btn-outline-secondary device-toggle"
-				:aria-pressed="!hiddenDevices.includes(device.key)"
-				@click="toggleDevice(device.key)"
+		<div class="legend mb-2">
+			<div
+				class="legend-group"
+				role="group"
+				:aria-label="$t('forecast.energy.plan.layersForecast')"
 			>
-				<span class="device-mark" :style="{ background: deviceColors[device.key] }" />
-				{{ device.title }}
-			</button>
+				<span class="legend-label" aria-hidden="true">{{
+					$t("forecast.energy.plan.layersForecast")
+				}}</span>
+				<button
+					v-for="layer in forecastLayers"
+					:key="layer"
+					type="button"
+					class="legend-toggle"
+					:aria-pressed="visibility.layers[layer]"
+					:data-testid="`layer-${layer}`"
+					@click="visibility.layers[layer] = !visibility.layers[layer]"
+				>
+					<span :class="['legend-mark', `mark-${layer}`]" aria-hidden="true" />
+					{{ $t(`forecast.energy.plan.layer.${layer}`) }}
+				</button>
+			</div>
+			<div
+				v-if="socDevices.length"
+				class="legend-group"
+				role="group"
+				:aria-label="$t('forecast.energy.chargeLevel')"
+			>
+				<span class="legend-label" aria-hidden="true">{{
+					$t("forecast.energy.chargeLevel")
+				}}</span>
+				<button
+					v-for="device in socDevices"
+					:key="device.key"
+					type="button"
+					class="legend-toggle"
+					:aria-pressed="!!visibility.soc[device.key]"
+					:aria-label="`${$t('forecast.energy.chargeLevel')}: ${device.title}`"
+					:data-testid="`soc-${device.key}`"
+					@click="visibility.soc[device.key] = !visibility.soc[device.key]"
+				>
+					<span
+						:class="[
+							'legend-mark',
+							'mark-line',
+							{ dashed: device.kind === 'expectedVehicle' },
+						]"
+						:style="{ color: deviceColors[device.key] }"
+						aria-hidden="true"
+					/>
+					{{ device.title }}
+				</button>
+			</div>
+			<div
+				v-if="devices.length"
+				class="legend-group"
+				role="group"
+				:aria-label="$t('forecast.energy.plan.layersPower')"
+			>
+				<span class="legend-label" aria-hidden="true">{{
+					$t("forecast.energy.plan.layersPower")
+				}}</span>
+				<button
+					v-for="device in devices"
+					:key="device.key"
+					type="button"
+					class="legend-toggle"
+					:aria-pressed="!!visibility.power[device.key]"
+					:aria-label="`${$t('forecast.energy.plan.layersPower')}: ${device.title}`"
+					:data-testid="`power-${device.key}`"
+					@click="visibility.power[device.key] = !visibility.power[device.key]"
+				>
+					<span
+						class="legend-mark mark-area"
+						:style="{ color: deviceColors[device.key] }"
+						aria-hidden="true"
+					/>
+					{{ device.title }}
+				</button>
+			</div>
 		</div>
-		<p class="small mb-3">{{ $t("forecast.energy.chartHint") }}</p>
 		<div
-			v-if="slots.length"
-			class="timeline"
+			ref="wrap"
+			class="chart-wrap"
 			tabindex="0"
 			role="group"
-			:aria-label="inspectionLabel"
-			@pointermove="inspectPointer"
-			@pointerdown="inspectPointer"
-			@pointerleave="leavePointer"
-			@pointercancel="dismissTooltip"
-			@keydown="inspectKey"
+			:aria-label="$t('forecast.energy.plan.chartLabel')"
+			:aria-describedby="`${uid}-live`"
+			@pointerdown="onPointerDown"
+			@pointermove="onPointerMove"
+			@pointerup="onPointerUp"
+			@pointerleave="onPointerLeave"
+			@pointercancel="hideTooltip"
+			@keydown="onKey"
 		>
-			<template v-if="visible.price">
-				<div class="small fw-semibold mb-1">{{ $t("forecast.energy.chart.price") }}</div>
-				<div v-if="hasPrices" class="plot-row price-row">
-					<div class="y-axis small" aria-hidden="true">
-						<span>{{ priceLabel(priceMax) }}</span
-						><span>{{ priceLabel(priceMin) }}</span>
-					</div>
-					<svg viewBox="0 0 665 80" preserveAspectRatio="none" aria-hidden="true">
-						<line x1="0" x2="665" :y1="priceY(0)" :y2="priceY(0)" class="grid-line" />
-						<polyline
-							v-for="(points, index) in pricePoints"
-							:key="index"
-							:points="points"
-							class="price-line"
-						/>
-						<rect v-bind="selection" y="0" height="80" class="selection" />
-					</svg>
-				</div>
-				<p v-else class="small">{{ $t("forecast.energy.priceUnavailable") }}</p>
-			</template>
-			<template v-if="visible.soc && socDevices.length">
-				<div class="small fw-semibold mt-3 mb-1">
-					{{ $t("forecast.energy.chargeLevel") }}
-				</div>
-				<div class="plot-row soc-row">
-					<div class="y-axis small" aria-hidden="true">
-						<span>100 %</span><span>50 %</span><span>0 %</span>
-					</div>
-					<svg viewBox="0 0 665 120" preserveAspectRatio="none" aria-hidden="true">
-						<line
-							v-for="soc in [0, 50, 100]"
-							:key="soc"
-							x1="0"
-							x2="665"
-							:y1="socY(soc)"
-							:y2="socY(soc)"
-							class="grid-line"
-						/>
-						<polygon
-							v-if="envelope"
-							:points="envelope"
-							:fill="envelopeColor"
-							class="soc-envelope"
-						/>
-						<template v-for="device in socDevices" :key="device.key">
-							<polyline
-								v-if="socTimeline(device, slots).length"
-								:points="socPoints(socTimeline(device, slots))"
-								:stroke="deviceColors[device.key]"
-								class="soc-line"
-							/>
-						</template>
-						<rect v-bind="selection" y="0" height="120" class="selection" />
-						<line :x1="selectedEnd" :x2="selectedEnd" y1="0" y2="120" class="cursor" />
-					</svg>
-				</div>
-				<p v-if="envelope" class="small mb-0 mt-1">{{ $t("forecast.energy.envelope") }}</p>
-			</template>
-			<div v-if="visible.grid" class="mt-3">
-				<div class="small mb-1">{{ $t("forecast.energy.gridChargingTotal") }}</div>
-				<div v-if="gridSlots.length" class="plot-row activity-row grid-charge-row">
-					<div class="small" aria-hidden="true">↑</div>
-					<svg viewBox="0 0 665 24" preserveAspectRatio="none" aria-hidden="true">
-						<rect width="665" height="24" class="activity-track" />
-						<rect
-							v-for="slot in gridSlots"
-							:key="slot.start"
-							:x="x(slot.start)"
-							:width="x(slot.end) - x(slot.start)"
-							y="2"
-							height="20"
-							:class="slot.gridChargeMinWh! > 1 ? 'grid' : 'grid-possible'"
-						/>
-						<rect v-bind="selection" y="0" height="24" class="selection" />
-					</svg>
-				</div>
-				<p v-else class="small mb-0">
-					{{
-						$t(
-							hasGridData
-								? "forecast.energy.noGridCharging"
-								: "forecast.energy.gridChargingUnavailable"
-						)
-					}}
-				</p>
-				<p v-if="gridSlots.length" class="small mt-1 mb-0">
-					{{ $t("forecast.energy.gridChargingHint") }}
-				</p>
-			</div>
-			<template v-if="visible.charge || visible.discharge">
-				<div v-for="device in shownDevices" :key="device.key" class="mt-3">
-					<div class="small mb-1">{{ device.title }}</div>
-					<div class="plot-row activity-row">
-						<div class="small" aria-hidden="true">↑ / ↓</div>
-						<svg viewBox="0 0 665 24" preserveAspectRatio="none" aria-hidden="true">
-							<rect width="665" height="24" class="activity-track" />
-							<template v-for="point in activities(device)" :key="point.start">
-								<rect
-									v-if="visible.charge && point.chargeWh > 1"
-									:x="point.x"
-									:width="point.width"
-									y="1"
-									height="10"
-									class="charge"
-								/>
-								<rect
-									v-if="visible.discharge && point.dischargeWh > 1"
-									:x="point.x"
-									:width="point.width"
-									y="13"
-									height="10"
-									class="discharge"
-								/>
-							</template>
-							<rect v-bind="selection" y="0" height="24" class="selection" />
-						</svg>
-					</div>
-				</div>
-			</template>
-			<div class="x-axis small" aria-hidden="true">
-				<span v-for="time in ticks" :key="time">{{ dateTime(time) }}</span>
-			</div>
+			<div ref="chartEl" class="chart-canvas" :style="{ height: `${layout.height}px` }" />
+			<div
+				v-if="crosshair"
+				class="crosshair"
+				aria-hidden="true"
+				:style="{
+					transform: `translateX(${crosshair.left}px)`,
+					width: `${crosshair.width}px`,
+					top: `${layout.powerTop}px`,
+					height: `${crosshairHeight}px`,
+				}"
+			/>
 		</div>
+		<p class="small text-muted mt-1 mb-0">{{ hint }}</p>
+		<span :id="`${uid}-live`" class="visually-hidden" aria-live="polite">{{
+			tooltip.mode === "keyboard" ? liveText : ""
+		}}</span>
 		<div
-			v-if="tooltipPosition"
+			v-if="details"
 			ref="tooltip"
-			class="chart-tooltip border rounded shadow p-2"
-			:style="tooltipPosition"
+			class="plan-tooltip shadow"
+			:class="{ interactive: tooltip.mode === 'touch' }"
+			:style="tooltipStyle"
 			aria-hidden="true"
-			@pointerleave="leavePointer"
+			data-testid="plan-tooltip"
 		>
-			<slot name="inspection" :devices="shownDevices" />
+			<div class="fw-semibold mb-1">{{ interval(details.start, details.end) }}</div>
+			<table class="tooltip-table">
+				<tbody>
+					<tr v-if="details.price != null">
+						<th>
+							<span class="legend-mark mark-price" />{{
+								$t("forecast.energy.plan.layer.price")
+							}}
+						</th>
+						<td>{{ fmtPricePerKWh(details.price, currency) }}</td>
+					</tr>
+					<tr v-if="details.home">
+						<th>
+							<span class="legend-mark mark-home" />{{
+								$t("forecast.energy.plan.layer.home")
+							}}
+						</th>
+						<td>
+							{{ power(details.home.value) }}
+							<small class="d-block">{{ range(details.home) }}</small>
+						</td>
+					</tr>
+					<tr v-if="details.solar">
+						<th>
+							<span class="legend-mark mark-solar" />{{
+								$t("forecast.energy.plan.layer.solar")
+							}}
+						</th>
+						<td>
+							{{ power(details.solar.value) }}
+							<small class="d-block">{{ range(details.solar) }}</small>
+						</td>
+					</tr>
+					<tr v-if="details.grid">
+						<th>
+							<span class="legend-mark mark-grid" />{{
+								$t("forecast.energy.plan.layer.grid")
+							}}
+						</th>
+						<td>{{ gridText(details.grid) }}</td>
+					</tr>
+					<tr v-for="device in details.devices" :key="device.key">
+						<th>
+							<span
+								class="legend-mark mark-line"
+								:style="{ color: deviceColors[device.key] }"
+							/>{{ device.title }}
+						</th>
+						<td>
+							<span v-if="device.soc != null">{{ percent(device.soc) }} · </span
+							>{{ deviceState(device) }}
+						</td>
+					</tr>
+				</tbody>
+			</table>
 		</div>
 	</div>
 </template>
 <script lang="ts">
-import { defineComponent, type PropType } from "vue";
-import { resolveColors } from "@/colors";
+import { defineComponent, markRaw, type PropType } from "vue";
+import colors, { batteryColor, resolveColors } from "@/colors";
 import formatter from "@/mixins/formatter";
-import { CURRENCY } from "@/types/evcc";
+import { CURRENCY, type DeviceColors } from "@/types/evcc";
 import { is12hFormat } from "@/units";
-import { socTimeline, type EnergyDevice, type EnergyForecastSlot } from "./energyIntelligence";
+import { echarts } from "./echarts";
+import { CustomChart } from "echarts/charts";
+import type { EnergyDevice, EnergyForecastSlot } from "./energyIntelligence";
+import {
+	FORECAST_LAYERS,
+	buildPlanChartOption,
+	chartLayout,
+	defaultVisibility,
+	gridChargeBlocks,
+	hasSoc,
+	placeTooltip,
+	slotDetails,
+	slotIndexAt,
+	socRibbon,
+	timeAtX,
+	xAtTime,
+	type ChartVisibility,
+	type DeviceSlotDetail,
+	type GridChargeState,
+	type PointerMode,
+} from "./planChartModel";
 
-const layers = ["price", "soc", "charge", "discharge", "grid"] as const;
+echarts.use([CustomChart]);
+
+let uidCounter = 0;
 
 export default defineComponent({
 	mixins: [formatter],
@@ -185,389 +218,529 @@ export default defineComponent({
 		slots: { type: Array as PropType<EnergyForecastSlot[]>, required: true },
 		low: { type: Array as PropType<number[]>, default: undefined },
 		high: { type: Array as PropType<number[]>, default: undefined },
-		selectedIndex: { type: Number, default: 0 },
 		currency: { type: String as PropType<CURRENCY>, default: CURRENCY.EUR },
+		deviceColorOverrides: { type: Object as PropType<DeviceColors>, default: () => ({}) },
 	},
-	emits: ["inspect"],
-	data: () => ({
-		layers,
-		visible: { price: true, soc: true, charge: true, discharge: true, grid: true },
-		hiddenDevices: [] as string[],
-		tooltipPosition: undefined as { left: string; top: string; width: string } | undefined,
-	}),
-	mounted() {
-		document.addEventListener("pointerdown", this.dismissOutside, true);
-		document.addEventListener("scroll", this.dismissOnScroll, true);
-	},
-	beforeUnmount() {
-		document.removeEventListener("pointerdown", this.dismissOutside, true);
-		document.removeEventListener("scroll", this.dismissOnScroll, true);
+	data() {
+		return {
+			uid: `energy-plan-${++uidCounter}`,
+			forecastLayers: FORECAST_LAYERS,
+			visibility: defaultVisibility(this.devices) as ChartVisibility,
+			width: 0,
+			chart: null as echarts.ECharts | null,
+			observer: null as ResizeObserver | null,
+			frame: 0,
+			pending: undefined as { x: number; y: number; mode: PointerMode } | undefined,
+			touchActive: false,
+			tooltip: {
+				index: -1,
+				anchor: { x: 0, y: 0 },
+				mode: "mouse" as PointerMode,
+			},
+			position: undefined as { left: number; top: number; maxHeight: number } | undefined,
+		};
 	},
 	computed: {
-		shownDevices() {
-			return this.devices.filter((device) => !this.hiddenDevices.includes(device.key));
-		},
 		socDevices() {
-			return this.shownDevices.filter((device) => device.capacityKWh > 0);
+			return this.devices.filter(hasSoc);
+		},
+		deviceColors(): Record<string, string> {
+			let batteryIndex = 0;
+			const others = this.devices.filter((device) => device.kind !== "battery");
+			const overrides = Object.fromEntries(
+				others.flatMap((device) =>
+					this.deviceColorOverrides[device.title]
+						? [[device.key, this.deviceColorOverrides[device.title]!]]
+						: []
+				)
+			);
+			const palette = resolveColors(
+				others.map((device) => device.key),
+				overrides
+			);
+			return Object.fromEntries(
+				this.devices.map((device) => [
+					device.key,
+					device.kind === "battery"
+						? batteryColor(batteryIndex++)
+						: palette[device.key] || colors.muted || "",
+				])
+			);
+		},
+		start() {
+			return Date.parse(this.slots[0]?.start ?? "");
+		},
+		end() {
+			return Date.parse(this.slots.at(-1)?.end ?? "");
+		},
+		built() {
+			if (!this.slots.length) return undefined;
+			return buildPlanChartOption({
+				slots: this.slots,
+				devices: this.devices,
+				visibility: this.visibility,
+				low: this.low,
+				high: this.high,
+				width: this.width || 600,
+				colors: {
+					text: colors.text || "#28293e",
+					muted: colors.muted || "#93949e",
+					border: colors.border || "rgba(0,0,0,0.1)",
+					price: colors.price || "#ff912f",
+					solar: colors.self || "#0fde41",
+					grid: colors.grid || "#28293e",
+					devices: this.deviceColors,
+				},
+				formatHour: (date) => this.hourShort(date),
+				formatWeekday: (date) => this.weekdayShort(date),
+				formatPrice: (value) => this.axisPrice(value),
+				labels: {
+					power: "kW",
+					price: this.pricePerKWhUnit(this.currency),
+					soc: "%",
+				},
+			});
+		},
+		layout() {
+			return this.built?.layout ?? chartLayout(false);
+		},
+		crosshairHeight() {
+			const layout = this.layout;
+			return (
+				(layout.socHeight
+					? layout.socTop + layout.socHeight
+					: layout.powerTop + layout.powerHeight) - layout.powerTop
+			);
 		},
 		hasGridData() {
 			return this.slots.every(
 				(slot) => slot.gridChargeMinWh != null && slot.gridChargeMaxWh != null
 			);
 		},
-		gridSlots() {
-			return this.slots.filter(
-				(slot) =>
-					slot.gridChargeMinWh != null &&
-					slot.gridChargeMaxWh != null &&
-					slot.gridChargeMaxWh > 1
+		hasGridBlocks() {
+			return gridChargeBlocks(this.slots).length > 0;
+		},
+		ribbonShown() {
+			const battery = this.devices.find((device) => device.kind === "battery");
+			return (
+				!!battery &&
+				!!this.visibility.soc[battery.key] &&
+				!!socRibbon(this.devices, this.slots, this.low, this.high)
 			);
 		},
-		deviceColors() {
-			return resolveColors(this.devices.map((device) => device.key));
+		hint() {
+			const parts = [this.$t("forecast.energy.plan.chartHint")];
+			if (this.visibility.layers.grid && this.hasGridBlocks)
+				parts.push(this.$t("forecast.energy.plan.gridHint"));
+			else if (this.visibility.layers.grid && !this.hasGridData)
+				parts.push(this.$t("forecast.energy.gridChargingUnavailable"));
+			if (this.ribbonShown) parts.push(this.$t("forecast.energy.plan.ribbonHint"));
+			return parts.join(" ");
 		},
-		envelopeColor() {
-			const device = this.devices.find((device) => device.kind === "battery");
-			return device ? this.deviceColors[device.key] : undefined;
+		details() {
+			return this.tooltip.index >= 0
+				? slotDetails(this.tooltip.index, this.slots, this.devices, this.visibility)
+				: undefined;
 		},
-		start() {
-			return new Date(this.slots[0]?.start ?? 0).getTime();
+		crosshair() {
+			const slot = this.slots[this.tooltip.index];
+			if (!slot || !this.width) return undefined;
+			const left = xAtTime(
+				Date.parse(slot.start),
+				this.width,
+				this.layout,
+				this.start,
+				this.end
+			);
+			const right = xAtTime(
+				Date.parse(slot.end),
+				this.width,
+				this.layout,
+				this.start,
+				this.end
+			);
+			return { left, width: Math.max(2, right - left) };
 		},
-		end() {
-			return new Date(this.slots.at(-1)?.end ?? 0).getTime();
+		tooltipStyle() {
+			if (!this.position) return { left: "0px", top: "0px", visibility: "hidden" as const };
+			return {
+				left: `${this.position.left}px`,
+				top: `${this.position.top}px`,
+				maxHeight: `${this.position.maxHeight}px`,
+			};
 		},
-		ticks() {
-			return [this.start, (this.start + this.end) / 2, this.end];
-		},
-		selectedSlot() {
-			return this.slots[this.selectedIndex];
-		},
-		selectedEnd() {
-			return this.x(this.selectedSlot?.end ?? this.slots[0]!.start);
-		},
-		selection() {
-			const slot = this.selectedSlot;
-			return slot
-				? { x: this.x(slot.start), width: this.x(slot.end) - this.x(slot.start) }
-				: { x: 0, width: 0 };
-		},
-		inspectionLabel() {
-			const slot = this.selectedSlot;
-			return `${this.$t("forecast.energy.chartHint")} ${slot ? `${this.dateTime(new Date(slot.start).getTime())} – ${this.dateTime(new Date(slot.end).getTime())}` : ""}`;
-		},
-		priceMin() {
-			return Math.min(0, ...this.slots.map((slot) => slot.gridPrice).filter(Number.isFinite));
-		},
-		hasPrices() {
-			return this.slots.some((slot) => Number.isFinite(slot.gridPrice));
-		},
-		priceMax() {
-			return Math.max(0, ...this.slots.map((slot) => slot.gridPrice).filter(Number.isFinite));
-		},
-		pricePoints() {
-			const lines: string[] = [];
-			let previousEnd: string | undefined;
-			for (const slot of this.slots) {
-				if (!Number.isFinite(slot.gridPrice)) {
-					previousEnd = undefined;
-					continue;
-				}
-				const points = `${this.x(slot.start)},${this.priceY(slot.gridPrice)} ${this.x(slot.end)},${this.priceY(slot.gridPrice)}`;
-				if (previousEnd === slot.start) lines[lines.length - 1] += ` ${points}`;
-				else lines.push(points);
-				previousEnd = slot.end;
-			}
-			return lines;
-		},
-		envelope() {
-			const batteries = this.devices.filter((device) => device.kind === "battery");
-			const device = batteries.length === 1 ? batteries[0] : undefined;
-			if (
-				!device ||
-				!this.socDevices.includes(device) ||
-				this.low?.length !== this.slots.length ||
-				this.high?.length !== this.slots.length ||
-				![...this.low, ...this.high].every(Number.isFinite)
-			)
-				return undefined;
-			const atEnds = (values: number[]) => [
-				...(device.initialSoc != null && Number.isFinite(device.initialSoc)
-					? [{ time: this.slots[0]!.start, soc: device.initialSoc }]
-					: []),
-				...values.map((soc, index) => ({ time: this.slots[index]!.end, soc })),
-			];
-			return `${this.socPoints(atEnds(this.low))} ${this.socPoints(atEnds(this.high).reverse())}`;
+		liveText() {
+			const d = this.details;
+			if (!d) return "";
+			return [
+				this.interval(d.start, d.end),
+				d.price != null ? this.fmtPricePerKWh(d.price, this.currency) : "",
+				...d.devices.map(
+					(device) =>
+						`${device.title}: ${device.soc != null ? `${this.percent(device.soc)}, ` : ""}${this.deviceState(device)}`
+				),
+			]
+				.filter(Boolean)
+				.join(". ");
 		},
 	},
+	watch: {
+		built: {
+			handler() {
+				this.$nextTick(() => this.render());
+			},
+			deep: false,
+		},
+		devices(devices: EnergyDevice[]) {
+			const defaults = defaultVisibility(devices);
+			this.visibility.soc = { ...defaults.soc, ...this.visibility.soc };
+			this.visibility.power = { ...defaults.power, ...this.visibility.power };
+		},
+		slots() {
+			if (this.tooltip.index >= this.slots.length) this.hideTooltip();
+		},
+		details() {
+			if (this.details) this.$nextTick(() => this.place());
+		},
+	},
+	mounted() {
+		if (typeof ResizeObserver !== "undefined") {
+			this.observer = new ResizeObserver(() => this.measure());
+			this.observer.observe(this.$refs["wrap"] as HTMLElement);
+		}
+		this.measure();
+		this.$nextTick(() => this.render());
+		document.addEventListener("pointerdown", this.onDocumentPointerDown, true);
+		document.addEventListener("scroll", this.onDocumentScroll, true);
+	},
+	beforeUnmount() {
+		this.observer?.disconnect();
+		cancelAnimationFrame(this.frame);
+		document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
+		document.removeEventListener("scroll", this.onDocumentScroll, true);
+		this.chart?.dispose();
+		this.chart = null;
+	},
 	methods: {
-		socTimeline,
-		dismissTooltip() {
-			this.tooltipPosition = undefined;
-		},
-		dismissOutside(event: PointerEvent) {
-			if (this.tooltipContains(event.target)) return;
-			if (
-				!(event.target instanceof Element) ||
-				!this.$el.contains(event.target) ||
-				!event.target.closest("svg")
-			)
-				this.dismissTooltip();
-		},
-		leavePointer(event: PointerEvent) {
-			if (event.pointerType !== "touch" && !this.tooltipContains(event.relatedTarget))
-				this.dismissTooltip();
-		},
-		tooltipContains(target: EventTarget | null) {
-			return (
-				target instanceof Node &&
-				(this.$refs["tooltip"] as HTMLElement | undefined)?.contains(target)
-			);
-		},
-		dismissOnScroll(event: Event) {
-			if (!this.tooltipContains(event.target)) this.dismissTooltip();
-		},
-		toggleDevice(key: string) {
-			this.hiddenDevices = this.hiddenDevices.includes(key)
-				? this.hiddenDevices.filter((item) => item !== key)
-				: [...this.hiddenDevices, key];
-		},
-		x(time: string) {
-			return (
-				((new Date(time).getTime() - this.start) / Math.max(1, this.end - this.start)) * 665
-			);
-		},
-		socY(soc: number) {
-			return 120 - soc * 1.2;
-		},
-		socPoints(values: { time: string; soc: number }[]) {
-			return values.map((point) => `${this.x(point.time)},${this.socY(point.soc)}`).join(" ");
-		},
-		priceY(price: number) {
-			return 75 - ((price - this.priceMin) / (this.priceMax - this.priceMin || 1)) * 70;
-		},
-		priceLabel(price: number) {
-			return this.fmtPricePerKWh(price, this.currency);
-		},
-		activities(device: EnergyDevice) {
-			return device.plan.flatMap((point) => {
-				const slot = this.slots.find((slot) => slot.start === point.start);
-				return slot
-					? [
-							{
-								...point,
-								x: this.x(slot.start),
-								width: this.x(slot.end) - this.x(slot.start),
-							},
-						]
-					: [];
-			});
-		},
-		async inspectPointer(event: PointerEvent) {
-			const svg = event.target instanceof Element ? event.target.closest("svg") : null;
-			if (!svg) return;
-			const bounds = svg.getBoundingClientRect();
-			if (!bounds.width) return;
-			const time =
-				this.start +
-				Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)) *
-					(this.end - this.start);
-			const index = this.slots.findIndex(
-				(slot) =>
-					time >= new Date(slot.start).getTime() && time < new Date(slot.end).getTime()
-			);
-			if (index >= 0) this.$emit("inspect", index);
-			else if (time === this.end) this.$emit("inspect", this.slots.length - 1);
-			else {
-				this.tooltipPosition = undefined;
-				return;
+		measure() {
+			const wrap = this.$refs["wrap"] as HTMLElement | undefined;
+			const width = wrap?.clientWidth ?? 0;
+			if (width !== this.width) {
+				this.width = width;
+				this.hideTooltip();
 			}
-			const width = Math.min(340, window.innerWidth - 16);
-			const height =
-				(this.$refs["tooltip"] as HTMLElement | undefined)?.getBoundingClientRect()
-					.height ?? 220;
-			this.tooltipPosition = {
-				left: `${Math.max(8, Math.min(window.innerWidth - width - 8, event.clientX + 16))}px`,
-				top: `${Math.max(8, Math.min(window.innerHeight - height - 8, event.clientY - height - 16))}px`,
-				width: `${width}px`,
-			};
-			await this.$nextTick();
-			const tooltip = (
-				this.$refs["tooltip"] as HTMLElement | undefined
-			)?.getBoundingClientRect();
-			if (this.tooltipPosition && tooltip && tooltip.bottom > window.innerHeight - 8) {
-				this.tooltipPosition.top = `${Math.max(8, window.innerHeight - tooltip.height - 8)}px`;
+			this.chart?.resize();
+		},
+		render() {
+			const el = this.$refs["chartEl"] as HTMLElement | undefined;
+			if (!el || !this.built) return;
+			if (!this.chart || this.chart.getDom() !== el) {
+				this.chart?.dispose();
+				this.chart = markRaw(echarts.init(el, undefined, { renderer: "svg" }));
 			}
+			this.chart.resize();
+			this.chart.setOption(this.built.option, { notMerge: true });
 		},
-		inspectKey(event: KeyboardEvent) {
-			if (event.key === "Escape") this.tooltipPosition = undefined;
-			const next = {
-				ArrowLeft: this.selectedIndex - 1,
-				ArrowRight: this.selectedIndex + 1,
-				Home: 0,
-				End: this.slots.length - 1,
-			}[event.key];
-			if (next == null) return;
-			this.tooltipPosition = undefined;
-			event.preventDefault();
-			this.$emit("inspect", Math.max(0, Math.min(this.slots.length - 1, next)));
-		},
-		dateTime(time: number) {
-			return new Date(time).toLocaleString(this.$i18n.locale, {
-				weekday: "short",
+		timeFormat(value: string, weekday: boolean) {
+			return new Date(value).toLocaleString(this.$i18n.locale, {
+				weekday: weekday ? "short" : undefined,
 				hour: "2-digit",
 				minute: "2-digit",
 				hour12: is12hFormat(),
 			});
 		},
+		interval(start: string, end: string) {
+			return `${this.timeFormat(start, true)} – ${this.timeFormat(end, false)}`;
+		},
+		// Axis ticks are round numbers in the display unit (ct for subunit currencies).
+		axisPrice(value: number) {
+			const factor = this.pricePerKWhDisplayFactor(this.currency);
+			return (value * factor).toLocaleString(this.$i18n.locale, {
+				maximumFractionDigits: factor > 1 ? 0 : 2,
+			});
+		},
+		number(value: number, digits = 1) {
+			return value.toLocaleString(this.$i18n.locale, {
+				minimumFractionDigits: digits,
+				maximumFractionDigits: digits,
+			});
+		},
+		power(value: number | undefined) {
+			return value == null
+				? this.$t("forecast.energy.plan.unavailable")
+				: `${this.number(value)} kW`;
+		},
+		range(value: { low?: number; high?: number }) {
+			if (value.low == null || value.high == null)
+				return this.$t("forecast.energy.plan.rangeUnavailable");
+			return this.$t("forecast.energy.plan.range", {
+				low: this.number(value.low),
+				high: this.number(value.high),
+			});
+		},
+		percent(value: number) {
+			return `${this.number(value, 0)} %`;
+		},
+		kwh(wh: number) {
+			return `${this.number(wh / 1000, 2)} kWh`;
+		},
+		gridText(state: GridChargeState) {
+			if (state.kind === "unavailable") return this.$t("forecast.energy.plan.unavailable");
+			if (state.kind === "none") return this.$t("forecast.energy.plan.gridNone");
+			if (state.kind === "definite")
+				return this.$t("forecast.energy.plan.gridDefinite", {
+					low: this.kwh(state.minWh),
+					high: this.kwh(state.maxWh),
+				});
+			return this.$t("forecast.energy.plan.gridPossible", { high: this.kwh(state.maxWh) });
+		},
+		deviceState(device: DeviceSlotDetail) {
+			if (device.state === "charging" || device.state === "discharging")
+				return this.$t(`forecast.energy.plan.state.${device.state}`, {
+					power: this.power(device.powerKW),
+				});
+			return this.$t(`forecast.energy.${device.state}`);
+		},
+		show(x: number, y: number, mode: PointerMode) {
+			const wrap = this.$refs["wrap"] as HTMLElement | undefined;
+			if (!wrap || !this.slots.length) return;
+			const bounds = wrap.getBoundingClientRect();
+			const index = slotIndexAt(
+				this.slots,
+				timeAtX(x - bounds.left, bounds.width, this.layout, this.start, this.end)
+			);
+			if (index < 0) return this.hideTooltip();
+			if (this.tooltip.index < 0) this.position = undefined;
+			this.tooltip = { index, anchor: { x, y }, mode };
+			this.$nextTick(() => this.place());
+		},
+		// Coalesce pointer events to one update per frame so the popup follows smoothly.
+		schedule(x: number, y: number, mode: PointerMode) {
+			this.pending = { x, y, mode };
+			if (this.frame) return;
+			this.frame = requestAnimationFrame(() => {
+				this.frame = 0;
+				const pending = this.pending;
+				this.pending = undefined;
+				if (pending) this.show(pending.x, pending.y, pending.mode);
+			});
+		},
+		place() {
+			const el = this.$refs["tooltip"] as HTMLElement | undefined;
+			if (!el) return;
+			const rect = el.getBoundingClientRect();
+			this.position = placeTooltip(
+				this.tooltip.anchor,
+				{ width: rect.width, height: el.scrollHeight || rect.height },
+				{ width: window.innerWidth, height: window.innerHeight },
+				this.tooltip.mode
+			);
+		},
+		hideTooltip() {
+			this.tooltip = { ...this.tooltip, index: -1 };
+			this.position = undefined;
+			this.touchActive = false;
+		},
+		onPointerDown(event: PointerEvent) {
+			if (event.pointerType === "mouse") return;
+			this.touchActive = true;
+			this.show(event.clientX, event.clientY, "touch");
+		},
+		onPointerMove(event: PointerEvent) {
+			if (event.pointerType === "mouse") this.schedule(event.clientX, event.clientY, "mouse");
+			else if (this.touchActive) this.schedule(event.clientX, event.clientY, "touch");
+		},
+		// A lifted finger keeps the details open; outside taps, scrolling or Escape close them.
+		onPointerUp(event: PointerEvent) {
+			if (event.pointerType !== "mouse") this.touchActive = false;
+		},
+		onPointerLeave(event: PointerEvent) {
+			if (event.pointerType === "mouse") this.hideTooltip();
+		},
+		onDocumentPointerDown(event: PointerEvent) {
+			const target = event.target as Node | null;
+			const wrap = this.$refs["wrap"] as HTMLElement | undefined;
+			const tooltip = this.$refs["tooltip"] as HTMLElement | undefined;
+			if (target && (wrap?.contains(target) || tooltip?.contains(target))) return;
+			if (this.tooltip.index >= 0) this.hideTooltip();
+		},
+		onDocumentScroll(event: Event) {
+			const tooltip = this.$refs["tooltip"] as HTMLElement | undefined;
+			if (tooltip && event.target instanceof Node && tooltip.contains(event.target)) return;
+			if (this.tooltip.index >= 0) this.hideTooltip();
+		},
+		onKey(event: KeyboardEvent) {
+			if (event.key === "Escape") return this.hideTooltip();
+			const current = this.tooltip.index;
+			const next = {
+				ArrowLeft: current < 0 ? 0 : current - 1,
+				ArrowRight: current + 1,
+				Home: 0,
+				End: this.slots.length - 1,
+			}[event.key];
+			if (next == null) return;
+			event.preventDefault();
+			const index = Math.max(0, Math.min(this.slots.length - 1, next));
+			const wrap = this.$refs["wrap"] as HTMLElement;
+			const bounds = wrap.getBoundingClientRect();
+			const slot = this.slots[index]!;
+			const mid = (Date.parse(slot.start) + Date.parse(slot.end)) / 2;
+			const x = bounds.left + xAtTime(mid, bounds.width, this.layout, this.start, this.end);
+			if (this.tooltip.index < 0) this.position = undefined;
+			this.tooltip = {
+				index,
+				anchor: { x, y: bounds.top + this.layout.powerTop },
+				mode: "keyboard",
+			};
+		},
 	},
 });
 </script>
 <style scoped>
-.legend-toggle,
-.chart-tooltip {
-	font-size: 0.875rem;
-	color: var(--evcc-default-text);
+.legend {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+}
+.legend-group {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.35rem;
+}
+.legend-label {
+	font-size: 0.8rem;
+	color: var(--bs-secondary-color);
+	margin-right: 0.15rem;
 }
 .legend-toggle {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.4rem;
-	cursor: pointer;
-	padding: 0.35rem 0.5rem;
-	border: 1px solid var(--bs-border-color);
-	border-radius: 0.4rem;
-}
-.legend-mark,
-.device-mark {
-	display: inline-block;
-	width: 0.8rem;
-	height: 0.6rem;
-	flex-shrink: 0;
-}
-.device-toggle {
-	text-align: left;
+	padding: 0.2rem 0.55rem;
+	font-size: 0.8125rem;
+	line-height: 1.3;
 	color: var(--evcc-default-text);
+	background: transparent;
+	border: 1px solid var(--bs-border-color);
+	border-radius: 1rem;
+	cursor: pointer;
 }
-.device-toggle[aria-pressed="false"] {
-	opacity: 0.55;
-	text-decoration: line-through;
+.legend-toggle[aria-pressed="true"] {
+	background: var(--bs-tertiary-bg);
+	border-color: var(--bs-secondary-color);
 }
-.timeline {
+.legend-toggle[aria-pressed="false"] {
+	color: var(--bs-secondary-color);
+}
+.legend-toggle[aria-pressed="false"] .legend-mark {
+	opacity: 0.35;
+}
+.legend-toggle:focus-visible,
+.chart-wrap:focus-visible {
+	outline: 2px solid var(--bs-primary);
+	outline-offset: 2px;
+}
+.legend-mark {
+	display: inline-block;
+	flex-shrink: 0;
+	width: 0.9rem;
+	height: 0.6rem;
+	border-radius: 2px;
+	vertical-align: middle;
+}
+.mark-price {
+	height: 0;
+	border-top: 2px solid var(--evcc-price);
+	border-radius: 0;
+}
+.mark-home {
+	height: 0.6rem;
+	background: color-mix(in srgb, var(--evcc-default-text) 14%, transparent);
+	border-top: 2px solid var(--evcc-default-text);
+	border-radius: 0;
+}
+.mark-solar {
+	background: color-mix(in srgb, var(--evcc-self) 35%, transparent);
+	border-top: 2px solid var(--evcc-self);
+	border-radius: 0;
+}
+.mark-grid {
+	background: color-mix(in srgb, var(--evcc-price) 25%, transparent);
+	border: 1px dashed var(--evcc-price);
+}
+.mark-line {
+	height: 0;
+	border-top: 3px solid currentColor;
+	border-radius: 0;
+}
+.mark-line.dashed {
+	border-top-style: dashed;
+}
+.mark-area {
+	background: currentColor;
+	opacity: 0.7;
+}
+.chart-wrap {
+	position: relative;
+	touch-action: pan-y;
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-touch-callout: none;
+	cursor: crosshair;
 	border-radius: 0.25rem;
 }
-.timeline:focus-visible {
-	outline: 2px solid var(--bs-primary);
-	outline-offset: 4px;
-}
-.plot-row {
-	display: grid;
-	grid-template-columns: 4.5rem minmax(0, 1fr);
-}
-svg {
-	display: block;
+.chart-canvas {
 	width: 100%;
-	min-width: 0;
-	cursor: crosshair;
-	touch-action: pan-y;
 }
-.price-row svg,
-.price-row .y-axis {
-	height: 80px;
+.crosshair {
+	position: absolute;
+	left: 0;
+	pointer-events: none;
+	background: color-mix(in srgb, var(--evcc-default-text) 10%, transparent);
+	border-left: 1px solid color-mix(in srgb, var(--evcc-default-text) 55%, transparent);
+	border-right: 1px solid color-mix(in srgb, var(--evcc-default-text) 55%, transparent);
+	will-change: transform;
 }
-.soc-row svg,
-.soc-row .y-axis {
-	height: 120px;
-}
-.activity-row svg {
-	height: 24px;
-}
-.y-axis {
-	display: flex;
-	flex-direction: column;
-	justify-content: space-between;
-	line-height: 1.1;
-	padding-right: 0.4rem;
-}
-.x-axis {
-	margin: 0.7rem 0 0 4.5rem;
-	display: flex;
-	justify-content: space-between;
-	gap: 0.5rem;
-}
-.x-axis span {
-	max-width: 33%;
-}
-.x-axis span:nth-child(2) {
-	text-align: center;
-}
-.x-axis span:last-child {
-	text-align: right;
-}
-.grid-line {
-	stroke: var(--bs-border-color);
-}
-.soc-line,
-.price-line {
-	fill: none;
-	stroke-width: 2.5;
-	vector-effect: non-scaling-stroke;
-}
-.price-line {
-	stroke: var(--evcc-price);
-}
-.soc-envelope {
-	opacity: 0.12;
-}
-.selection {
-	fill: var(--evcc-default-text);
-	fill-opacity: 0.09;
-	stroke: var(--evcc-default-text);
-	stroke-opacity: 0.25;
-	vector-effect: non-scaling-stroke;
-}
-.cursor {
-	stroke: var(--evcc-default-text);
-	stroke-dasharray: 4;
-	vector-effect: non-scaling-stroke;
-}
-.activity-track {
-	fill: var(--bs-tertiary-bg);
-}
-.charge {
-	fill: var(--evcc-battery);
-	background: var(--evcc-battery);
-}
-.discharge {
-	fill: var(--evcc-grid);
-	background: var(--evcc-grid);
-}
-.price {
-	background: var(--evcc-price);
-}
-.soc {
-	background: var(--bs-secondary-color);
-}
-.grid {
-	fill: var(--evcc-orange);
-	background: var(--evcc-orange);
-}
-.grid-possible {
-	fill: var(--evcc-orange);
-	fill-opacity: 0.15;
-	stroke: var(--evcc-orange);
-	stroke-dasharray: 3 2;
-	vector-effect: non-scaling-stroke;
-}
-.charge,
-.discharge {
-	shape-rendering: crispEdges;
-}
-.chart-tooltip {
+.plan-tooltip {
 	position: fixed;
 	z-index: 1050;
-	background: var(--evcc-box);
-	color: var(--evcc-default-text);
-	max-height: calc(100vh - 16px);
+	min-width: 12rem;
+	max-width: min(20rem, calc(100vw - 16px));
 	overflow: auto;
+	padding: 0.5rem 0.65rem;
+	font-size: 0.8125rem;
+	line-height: 1.3;
+	color: var(--evcc-default-text);
+	background: var(--evcc-box);
+	border: 1px solid var(--bs-border-color);
+	border-radius: 0.5rem;
+	pointer-events: none;
+}
+.plan-tooltip.interactive {
+	pointer-events: auto;
+	overscroll-behavior: contain;
+}
+.tooltip-table {
+	width: 100%;
+	border-collapse: collapse;
+}
+.tooltip-table th {
+	font-weight: normal;
+	padding: 0.15rem 0.75rem 0.15rem 0;
+	vertical-align: top;
+}
+.tooltip-table th .legend-mark {
+	margin-right: 0.35rem;
+}
+.tooltip-table td {
+	text-align: right;
+	padding: 0.15rem 0;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+	vertical-align: top;
+}
+.tooltip-table small {
+	color: var(--bs-secondary-color);
 }
 </style>

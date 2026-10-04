@@ -31,6 +31,7 @@
 				:automatic="optimizerAutomatic"
 				:currency="currency"
 				:configured-batteries="configuredBatteries"
+				:device-colors="deviceColors"
 			/>
 		</section>
 		<section

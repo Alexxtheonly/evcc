@@ -1,5 +1,14 @@
 <template>
-	<section class="border rounded p-3 my-3" :aria-label="$t('forecast.energy.control.title')">
+	<span v-if="compact" class="control-chip" data-testid="battery-control-chip">
+		<span :class="['chip-dot', chipTone]" aria-hidden="true" />
+		{{ $t("forecast.energy.control.chip", { mode: modeLabel(currentMode) }) }}
+		<span class="chip-note">· {{ chipNote }}</span>
+	</span>
+	<section
+		v-else
+		class="border rounded p-3 my-3"
+		:aria-label="$t('forecast.energy.control.title')"
+	>
 		<h4 class="fs-6 mb-2">{{ $t("forecast.energy.control.title") }}</h4>
 		<p class="mb-1">
 			{{ $t(commandLabel, { mode: modeLabel(currentMode) }) }}
@@ -78,6 +87,7 @@ export default defineComponent({
 		},
 		automatic: Boolean,
 		offline: Boolean,
+		compact: Boolean,
 		currency: { type: String as PropType<CURRENCY>, default: CURRENCY.EUR },
 	},
 	data: () => ({
@@ -153,6 +163,20 @@ export default defineComponent({
 		economics() {
 			return this.fresh ? this.decision?.economics : undefined;
 		},
+		chipTone() {
+			if (this.offline || (this.automatic && !this.fresh)) return "warning";
+			return this.fresh ? "active" : "idle";
+		},
+		chipNote(): string {
+			if (this.offline) return this.$t("forecast.energy.control.chipOffline");
+			if (!this.automatic) return this.$t("forecast.energy.control.chipPreview");
+			if (!this.decision || !this.fresh) return this.$t("forecast.energy.control.chipStale");
+			if (this.pending)
+				return this.$t("forecast.energy.control.chipPending", {
+					mode: this.modeLabel(this.decision.pendingMode),
+				});
+			return this.$t("forecast.energy.control.chipAutomatic");
+		},
 	},
 	mounted() {
 		this.timer = setInterval(() => {
@@ -180,3 +204,31 @@ export default defineComponent({
 	},
 });
 </script>
+<style scoped>
+.control-chip {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.35rem;
+	padding: 0.2rem 0.65rem;
+	font-size: 0.8125rem;
+	border: 1px solid var(--bs-border-color);
+	border-radius: 1rem;
+	color: var(--evcc-default-text);
+}
+.chip-note {
+	color: var(--bs-secondary-color);
+}
+.chip-dot {
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 50%;
+	background: var(--bs-secondary-color);
+}
+.chip-dot.active {
+	background: var(--evcc-darker-green);
+}
+.chip-dot.warning {
+	background: var(--evcc-orange);
+}
+</style>

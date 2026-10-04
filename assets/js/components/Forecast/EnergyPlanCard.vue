@@ -1,219 +1,206 @@
 <template>
 	<Card class="box-pull-out mb-4 energy-plan" data-testid="energy-plan-card">
-		<div class="d-flex flex-wrap justify-content-between gap-2 align-items-center">
-			<div>
-				<h3 class="evcc-card-title fw-normal mb-1">{{ $t("forecast.energy.title") }}</h3>
-				<span class="small">{{
-					$t(automatic ? "forecast.energy.automatic" : "forecast.energy.advisory")
-				}}</span>
-			</div>
-			<button type="button" class="btn btn-outline-secondary" @click="openSettings">
+		<div class="d-flex flex-wrap justify-content-between gap-2 align-items-start">
+			<h3 class="evcc-card-title fw-normal mb-0">{{ $t("forecast.energy.title") }}</h3>
+			<button type="button" class="btn btn-sm btn-outline-secondary" @click="openSettings">
 				{{ $t("forecast.energy.configure") }}
 			</button>
 		</div>
-		<p v-if="!automatic" class="small mt-2 mb-0">{{ $t("forecast.energy.previewNote") }}</p>
-		<p v-if="insights?.updated" class="small text-muted mt-1 mb-3">
-			{{ $t("forecast.energy.updated", { time: dateTime(insights.updated) }) }}
-		</p>
-		<p v-if="status === 'unavailable'" role="status" class="alert alert-warning mt-3">
+		<div class="d-flex flex-wrap align-items-center gap-2 mt-2 mb-3 small meta">
+			<BatteryControlStatus
+				v-if="hasBattery"
+				compact
+				:decision="decision"
+				:applied-mode="appliedMode"
+				:automatic="automatic"
+				:offline="offline"
+				:currency="currency"
+			/>
+			<span v-else>{{
+				$t(automatic ? "forecast.energy.automatic" : "forecast.energy.advisory")
+			}}</span>
+			<span v-if="insights?.updated" class="text-muted">{{
+				$t("forecast.energy.updated", { time: clock(insights.updated) })
+			}}</span>
+		</div>
+		<p v-if="status === 'unavailable'" role="status" class="alert alert-warning">
 			{{ $t("forecast.energy.status.unavailable") }}<span v-if="reason">: {{ reason }}</span>
 		</p>
-		<BatteryControlStatus
-			v-if="batteries.length || configuredBatteries.length || decision"
-			:decision="decision"
-			:applied-mode="appliedMode"
-			:automatic="automatic"
-			:offline="offline"
-			:currency="currency"
-		/>
+		<div class="headline mb-3" data-testid="energy-plan-headline">
+			<p
+				v-for="(sentence, index) in headlineSentences"
+				:key="index"
+				:class="index === 0 ? 'headline-lead' : 'headline-more'"
+			>
+				{{ sentence }}
+			</p>
+			<p v-if="!automatic" class="small text-muted mb-0">
+				{{ $t("forecast.energy.previewNote") }}
+			</p>
+		</div>
 		<template v-if="slots.length">
-			<p class="fw-semibold mb-2">{{ horizon }}</p>
-			<div class="row g-2 mb-3">
-				<div v-for="total in totalCards" :key="total.label" class="col-6">
-					<div class="forecast-total rounded p-3 h-100">
-						<div class="small">{{ $t(total.label) }}</div>
-						<div class="fs-4 fw-semibold">{{ kwh(total.value) }}</div>
-						<div class="small">
-							{{
-								$t("forecast.energy.estimatedRange", {
-									low: kwh(total.low),
-									high: kwh(total.high),
-								})
-							}}
-						</div>
-					</div>
-				</div>
-			</div>
-			<h4 class="fs-6 mb-2">{{ $t("forecast.energy.nextActions") }}</h4>
-			<p class="small text-muted">{{ $t("forecast.energy.control.planNote") }}</p>
-			<div class="row g-2 mb-3">
-				<div v-for="item in deviceSummaries" :key="item.device.key" class="col-md-6">
-					<div class="device-summary border rounded p-3 h-100">
-						<div class="fw-semibold">{{ item.device.title }}</div>
-						<div v-if="item.device.capacityKWh > 0" class="small mb-2">
-							{{
-								$t("forecast.energy.levelJourney", {
-									start: percent(item.device.initialSoc),
-									end: percent(item.endSoc),
-								})
-							}}
-						</div>
-						<div v-else class="small mb-2">{{ $t("forecast.energy.energyOnly") }}</div>
-						<button
-							v-if="item.next"
-							type="button"
-							class="btn btn-link p-0 text-start"
-							@click="slotIndex = item.next.index"
-						>
-							{{ transferAction(item.next) }}
-							<span class="d-block small">{{
-								interval(item.next.start, item.next.end)
-							}}</span>
-						</button>
-						<span v-else>{{
-							$t(
-								item.device.plan.length
-									? "forecast.energy.idle"
-									: "forecast.energy.noPlan"
-							)
-						}}</span>
-						<div v-if="item.device.kind === 'expectedVehicle'" class="small mt-2">
-							{{ $t("forecast.energy.expected") }}
-						</div>
-						<div v-if="item.device.arrival" class="small">
-							{{
-								$t("forecast.energy.arrival", {
-									time: dateTime(item.device.arrival),
-								})
-							}}
-						</div>
-						<div v-if="item.device.departure" class="small">
-							{{
-								$t("forecast.energy.departure", {
-									time: dateTime(item.device.departure),
-								})
-							}}
-						</div>
-					</div>
-				</div>
-			</div>
 			<EnergyPlanChart
 				:devices="devices"
 				:slots="slots"
-				:selected-index="slotIndex"
 				:low="insights?.scenarios?.batterySocLow"
 				:high="insights?.scenarios?.batterySocHigh"
 				:currency="currency"
-				@inspect="slotIndex = $event"
-			>
-				<template #inspection="{ devices: chartDevices }">
-					<template v-if="selectedSlot">
-						<div class="fw-semibold mb-1">
-							{{ interval(selectedSlot.start, selectedSlot.end) }}
-						</div>
-						<div>
-							{{ $t("forecast.energy.chart.price") }}:
-							{{ price(selectedSlot.gridPrice) }}
-						</div>
-						<div>{{ gridCharging }}</div>
-						<div v-for="device in chartDevices" :key="device.key" class="mt-1">
-							<strong>{{ device.title }}</strong
-							>: {{ action(device) }}
-							<span v-if="device.capacityKWh > 0 && deviceSlot(device)">
-								·
-								{{
-									$t("forecast.energy.levelAtEnd", {
-										soc: percent(deviceSlot(device)!.soc),
-									})
-								}}</span
-							>
-						</div>
-					</template>
-				</template>
-			</EnergyPlanChart>
-			<div v-if="selectedSlot" class="inspection border rounded p-3 mt-3">
-				<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-					<div class="fw-semibold">
-						{{ $t("forecast.energy.inspect") }}:
-						{{ interval(selectedSlot.start, selectedSlot.end) }}
-					</div>
-					<div class="d-flex gap-2">
-						<button
-							type="button"
-							class="btn btn-outline-secondary btn-sm"
-							:aria-label="$t('forecast.energy.previous')"
-							:disabled="slotIndex <= 0"
-							@click="slotIndex--"
-						>
-							‹
-						</button>
-						<button
-							type="button"
-							class="btn btn-outline-secondary btn-sm"
-							:aria-label="$t('forecast.energy.next')"
-							:disabled="slotIndex >= slots.length - 1"
-							@click="slotIndex++"
-						>
-							›
-						</button>
-					</div>
-				</div>
-				<p class="small mb-2">
-					{{
-						$t("forecast.energy.slotContext", {
-							price: price(selectedSlot.gridPrice),
-							home: kwh(selectedSlot.homeWh / 1000),
-							solar: kwh(selectedSlot.solarWh / 1000),
-						})
-					}}
-				</p>
-				<p class="small mb-2">{{ gridCharging }}</p>
-				<div
-					v-for="device in devices"
-					:key="device.key"
-					class="d-flex flex-wrap justify-content-between gap-1 py-2 border-top"
+				:device-color-overrides="deviceColors"
+			/>
+			<h4 class="fs-6 mt-4 mb-2">{{ $t("forecast.energy.plan.daysTitle") }}</h4>
+			<div class="days mb-3" data-testid="energy-plan-days">
+				<section
+					v-for="day in days"
+					:key="day.key"
+					class="day-tile rounded p-3"
+					:aria-label="dayLabel(day)"
 				>
-					<span>{{ device.title }}</span>
-					<span
-						>{{ action(device)
-						}}<small
-							v-if="deviceSlot(device) && device.capacityKWh > 0"
-							class="d-block text-end"
-							>{{
-								$t("forecast.energy.levelAtEnd", {
-									soc: percent(deviceSlot(device)!.soc),
-								})
-							}}</small
-						></span
-					>
-				</div>
+					<div class="d-flex flex-wrap justify-content-between gap-1 mb-2">
+						<strong>{{ dayLabel(day) }}</strong>
+						<span v-if="day.partial" class="small text-muted">{{
+							interval(day.start, day.end, false)
+						}}</span>
+					</div>
+					<dl class="day-values mb-0">
+						<dt>{{ $t("forecast.energy.home") }}</dt>
+						<dd>
+							{{ energy(day.home.value) }}
+							<small class="d-block">{{ range(day.home) }}</small>
+						</dd>
+						<dt>{{ $t("forecast.energy.solar") }}</dt>
+						<dd>
+							{{ energy(day.solar.value) }}
+							<small class="d-block">{{ range(day.solar) }}</small>
+						</dd>
+						<dt>{{ $t("forecast.energy.plan.gridImport") }}</dt>
+						<dd>
+							{{
+								day.gridImportKWh != null
+									? kwh(day.gridImportKWh)
+									: $t("forecast.energy.plan.unavailable")
+							}}
+						</dd>
+						<template v-if="day.vehicleChargeKWh > 0.05">
+							<dt>{{ $t("forecast.energy.plan.vehicleCharging") }}</dt>
+							<dd>{{ kwh(day.vehicleChargeKWh) }}</dd>
+						</template>
+						<template v-for="battery in day.batteries" :key="battery.key">
+							<dt>{{ battery.title }}</dt>
+							<dd>
+								{{
+									$t("forecast.energy.plan.throughput", {
+										charge: kwh(battery.chargeKWh),
+										discharge: kwh(battery.dischargeKWh),
+									})
+								}}
+								<small class="d-block">{{
+									battery.minSoc != null && battery.maxSoc != null
+										? $t("forecast.energy.plan.socRange", {
+												min: percent(battery.minSoc),
+												max: percent(battery.maxSoc),
+											})
+										: $t("forecast.energy.unknownLevel")
+								}}</small>
+							</dd>
+						</template>
+					</dl>
+				</section>
 			</div>
-			<details v-if="devices.length" class="mt-3">
-				<summary>{{ $t("forecast.energy.fullSchedule") }}</summary>
-				<div v-for="item in deviceSummaries" :key="item.device.key" class="mt-3">
-					<strong>{{ item.device.title }}</strong>
-					<div v-for="window in item.windows" :key="window.start" class="my-1">
-						<button
-							type="button"
-							class="btn btn-link btn-sm p-0 text-start"
-							@click="slotIndex = window.index"
-						>
-							{{ interval(window.start, window.end) }} · {{ transferAction(window) }}
-						</button>
-					</div>
-					<div v-if="!item.windows.length">
-						{{
-							$t(
-								item.device.plan.length
-									? "forecast.energy.idle"
-									: "forecast.energy.noPlan"
-							)
-						}}
-					</div>
-				</div>
-			</details>
 		</template>
-		<details class="mt-3 quality-details">
+		<h4 class="fs-6 mt-4 mb-1">{{ $t("forecast.energy.plan.detailsTitle") }}</h4>
+		<details v-if="slots.length" class="plan-details" data-testid="energy-plan-schedule">
+			<summary>{{ $t("forecast.energy.fullSchedule") }}</summary>
+			<div class="table-responsive mt-2">
+				<table class="table table-sm schedule mb-0">
+					<thead>
+						<tr>
+							<th scope="col">{{ $t("forecast.energy.plan.when") }}</th>
+							<th scope="col">{{ $t("forecast.energy.action") }}</th>
+							<th scope="col" class="text-end">
+								{{ $t("forecast.energy.plan.levelAfter") }}
+							</th>
+						</tr>
+					</thead>
+					<tbody v-for="item in schedule" :key="item.device.key">
+						<tr class="device-row">
+							<th scope="rowgroup" colspan="3">
+								{{ item.device.title }}
+								<small
+									v-for="note in item.notes"
+									:key="note"
+									class="d-block fw-normal"
+									>{{ note }}</small
+								>
+							</th>
+						</tr>
+						<tr v-for="row in item.rows" :key="row.start">
+							<td>{{ interval(row.start, row.end, true) }}</td>
+							<td>{{ transferAction(row) }}</td>
+							<td class="text-end">
+								{{ row.soc != null ? percent(row.soc) : "–" }}
+							</td>
+						</tr>
+						<tr v-if="!item.rows.length">
+							<td colspan="3">
+								{{
+									$t(
+										item.device.plan.length
+											? "forecast.energy.idle"
+											: "forecast.energy.noPlan"
+									)
+								}}
+							</td>
+						</tr>
+					</tbody>
+					<tbody>
+						<tr class="device-row">
+							<th scope="rowgroup" colspan="3">
+								{{ $t("forecast.energy.gridChargingTotal") }}
+							</th>
+						</tr>
+						<tr v-for="block in gridSchedule" :key="block.start">
+							<td>{{ interval(block.start, block.end, true) }}</td>
+							<td colspan="2">
+								{{
+									$t(
+										block.definite
+											? "forecast.energy.plan.gridDefinite"
+											: "forecast.energy.plan.gridPossible",
+										{
+											low: kwh(block.minWh / 1000),
+											high: kwh(block.maxWh / 1000),
+										}
+									)
+								}}
+							</td>
+						</tr>
+						<tr v-if="!gridSchedule.length">
+							<td colspan="3">
+								{{
+									$t(
+										hasGridData
+											? "forecast.energy.noGridCharging"
+											: "forecast.energy.gridChargingUnavailable"
+									)
+								}}
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+		</details>
+		<details v-if="hasBattery" class="plan-details">
+			<summary>{{ $t("forecast.energy.control.title") }}</summary>
+			<BatteryControlStatus
+				:decision="decision"
+				:applied-mode="appliedMode"
+				:automatic="automatic"
+				:offline="offline"
+				:currency="currency"
+			/>
+			<p class="small text-muted">{{ $t("forecast.energy.control.planNote") }}</p>
+		</details>
+		<details class="plan-details quality-details">
 			<summary>
 				{{ $t("forecast.energy.quality")
 				}}<span v-if="status === 'degraded'" class="small">
@@ -232,6 +219,15 @@
 			</p>
 			<p class="small" data-testid="energy-settlement-label">
 				{{ $t("forecast.energy.simulation") }}
+			</p>
+			<p v-if="slots.length" class="small">
+				{{
+					$t("forecast.energy.plan.horizonTotals", {
+						range: interval(slots[0]!.start, slots.at(-1)!.end, true),
+						home: kwh(totals.home),
+						solar: kwh(totals.solar),
+					})
+				}}
 			</p>
 			<p v-if="insights?.scenarios" class="small">
 				{{ $t("forecast.energy.scenarios") }}: {{ insights.scenarios.status
@@ -287,6 +283,11 @@
 			<p v-for="note in insights?.arrivalNotes || []" :key="note.name" class="small mt-2">
 				{{ deviceTitle(note.name) }}: {{ note.reason }}
 			</p>
+			<p class="small mt-3 mb-0">
+				<router-link :to="{ path: '/optimize', query: { tab: 'diagnostics' } }">{{
+					$t("forecast.energy.plan.diagnosticsLink")
+				}}</router-link>
+			</p>
 		</details>
 		<EnergySettings
 			@closed="$emit('settingsClosed')"
@@ -312,8 +313,16 @@ import {
 	type EnergyInsights,
 } from "./energyIntelligence";
 import {
+	daySummaries,
+	planHeadline,
+	type DaySummary,
+	type EnergyRange,
+	type HeadlineItem,
+} from "./energyPlanSummary";
+import {
 	CURRENCY,
 	type BatteryMeter,
+	type DeviceColors,
 	type OptimizerHealth,
 	type OptimizerDecision,
 	type BATTERY_MODE,
@@ -338,8 +347,8 @@ export default defineComponent({
 			type: Array as PropType<Pick<BatteryMeter, "name" | "title">[]>,
 			default: () => [],
 		},
+		deviceColors: { type: Object as PropType<DeviceColors>, default: () => ({}) },
 	},
-	data: () => ({ slotIndex: 0 }),
 	computed: {
 		status() {
 			return this.insights?.status ?? (this.health?.ok ? "ready" : "unavailable");
@@ -356,6 +365,9 @@ export default defineComponent({
 		batteries() {
 			return this.devices.filter((device) => device.kind === "battery");
 		},
+		hasBattery() {
+			return !!(this.batteries.length || this.configuredBatteries.length || this.decision);
+		},
 		settingsDevices() {
 			return this.configuredBatteries.length
 				? this.configuredBatteries.flatMap((device) =>
@@ -365,79 +377,234 @@ export default defineComponent({
 					)
 				: this.batteries;
 		},
-		totalCards() {
-			const totals = forecastTotals(this.slots);
-			return [
-				{
-					label: "forecast.energy.home",
-					value: totals.home,
-					low: totals.homeLow,
-					high: totals.homeHigh,
-				},
-				{
-					label: "forecast.energy.solar",
-					value: totals.solar,
-					low: totals.solarLow,
-					high: totals.solarHigh,
-				},
-			];
+		totals() {
+			return forecastTotals(this.slots);
 		},
-		horizon() {
-			return this.slots.length
-				? this.interval(this.slots[0]!.start, this.slots[this.slots.length - 1]!.end)
-				: "";
+		headline(): HeadlineItem[] {
+			return planHeadline(this.insights);
 		},
-		selectedSlot() {
-			return this.slots[Math.min(this.slotIndex, this.slots.length - 1)];
+		headlineSentences(): string[] {
+			return this.headline.map((item) => this.sentence(item));
 		},
-		gridCharging() {
-			const slot = this.selectedSlot;
-			if (slot?.gridChargeMinWh == null || slot.gridChargeMaxWh == null)
-				return this.$t("forecast.energy.gridChargingUnavailable");
-			return this.$t("forecast.energy.gridChargingRange", {
-				low: this.kwh(slot.gridChargeMinWh / 1000),
-				high: this.kwh(slot.gridChargeMaxWh / 1000),
-			});
+		days(): DaySummary[] {
+			return daySummaries(this.slots, this.devices);
 		},
-		deviceSummaries() {
+		hasGridData() {
+			return (
+				this.slots.length > 0 &&
+				this.slots.every(
+					(slot) => slot.gridChargeMinWh != null && slot.gridChargeMaxWh != null
+				)
+			);
+		},
+		gridSchedule() {
+			const blocks: {
+				start: string;
+				end: string;
+				definite: boolean;
+				minWh: number;
+				maxWh: number;
+			}[] = [];
+			for (const slot of this.slots) {
+				if (slot.gridChargeMinWh == null || slot.gridChargeMaxWh == null) continue;
+				if (slot.gridChargeMaxWh <= 1) continue;
+				const definite = slot.gridChargeMinWh > 1;
+				const previous = blocks.at(-1);
+				if (previous && previous.end === slot.start && previous.definite === definite) {
+					previous.end = slot.end;
+					previous.minWh += slot.gridChargeMinWh;
+					previous.maxWh += slot.gridChargeMaxWh;
+				} else
+					blocks.push({
+						start: slot.start,
+						end: slot.end,
+						definite,
+						minWh: slot.gridChargeMinWh,
+						maxWh: slot.gridChargeMaxWh,
+					});
+			}
+			return blocks;
+		},
+		schedule() {
 			return this.devices.map((device) => {
-				const windows = planWindows(device, this.slots);
-				return { device, windows, next: windows[0], endSoc: device.plan.at(-1)?.soc };
+				const ends = new Map(this.slots.map((slot) => [slot.end, slot.start]));
+				const rows = planWindows(device, this.slots).map((window) => {
+					const point = device.plan.find((p) => p.start === ends.get(window.end));
+					return {
+						...window,
+						soc:
+							device.capacityKWh > 0 &&
+							point?.soc != null &&
+							Number.isFinite(point.soc)
+								? point.soc
+								: undefined,
+					};
+				});
+				return { device, rows, notes: this.deviceNotes(device) };
 			});
-		},
-	},
-	watch: {
-		slots() {
-			this.slotIndex = Math.min(this.slotIndex, Math.max(0, this.slots.length - 1));
 		},
 	},
 	methods: {
-		price(value: number) {
-			return Number.isFinite(value)
-				? this.fmtPricePerKWh(value, this.currency)
-				: this.$t("forecast.energy.priceUnavailable");
-		},
 		openSettings(event: Event) {
 			(this.$refs["settings"] as unknown as InstanceType<typeof EnergySettings>).open(event);
 		},
-		dateTime(value: string) {
+		clock(value: string, weekday = false) {
 			return new Date(value).toLocaleString(this.$i18n.locale, {
-				weekday: "short",
+				weekday: weekday ? "short" : undefined,
 				hour: "2-digit",
 				minute: "2-digit",
 				hour12: is12hFormat(),
 			});
 		},
-		interval(start: string, end: string) {
-			return `${this.dateTime(start)} – ${this.dateTime(end)}`;
+		sameDay(a: string, b: string) {
+			return new Date(a).toDateString() === new Date(b).toDateString();
+		},
+		// Times on the plan's first day read without a weekday; later days name it.
+		point(time: string) {
+			return this.clock(time, !this.sameDay(time, this.slots[0]?.start ?? time));
+		},
+		interval(start: string, end: string, weekday: boolean) {
+			const startText = weekday ? this.point(start) : this.clock(start);
+			const endText = this.clock(end, weekday && !this.sameDay(end, start));
+			return `${startText} – ${endText}`;
+		},
+		when(start: string, end: string) {
+			if (start === this.slots[0]?.start)
+				return this.$t("forecast.energy.plan.whenUntil", { end: this.point(end) });
+			return this.$t("forecast.energy.plan.whenRange", {
+				range: this.interval(start, end, true),
+			});
+		},
+		sentence(item: HeadlineItem): string {
+			const t = (key: string, args: Record<string, unknown> = {}) =>
+				this.$t(`forecast.energy.plan.headline.${key}`, args);
+			switch (item.kind) {
+				case "unavailable":
+					return t("unavailable");
+				case "idle":
+					return t("idle", { end: this.point(item.end) });
+				case "batteryCharge": {
+					const args = {
+						device: item.device,
+						energy: this.kwh(item.energyWh / 1000),
+						when: this.when(item.start, item.end),
+					};
+					const base = t(
+						item.source === "solar" ? "batteryChargeSolar" : "batteryCharge",
+						args
+					);
+					return item.next
+						? `${base} ${t("batteryThen", {
+								when: this.when(item.next.start, item.next.end),
+								energy: this.kwh(item.next.energyWh / 1000),
+							})}`
+						: base;
+				}
+				case "batteryDischarge": {
+					const args = {
+						device: item.device,
+						energy: this.kwh(item.energyWh / 1000),
+						when: this.when(item.start, item.end),
+					};
+					return item.price != null
+						? t("batteryDischargePrice", {
+								...args,
+								price: this.fmtPricePerKWh(item.price, this.currency),
+							})
+						: t("batteryDischarge", args);
+				}
+				case "vehicleCharge": {
+					const args = {
+						device: item.device,
+						energy: this.kwh(item.energyWh / 1000),
+						when: this.when(item.start, item.end),
+					};
+					const key = item.endSoc != null ? "vehicleChargeSoc" : "vehicleCharge";
+					const text = t(key, {
+						...args,
+						soc: item.endSoc != null ? this.percent(item.endSoc) : "",
+					});
+					return item.expected ? `${text} ${t("expected")}` : text;
+				}
+				case "gridCharge": {
+					const energy =
+						item.maxWh - item.minWh > 50
+							? this.$t("forecast.energy.plan.energyRange", {
+									low: this.kwh(item.minWh / 1000),
+									high: this.kwh(item.maxWh / 1000),
+								})
+							: this.kwh(item.minWh / 1000);
+					const args = { energy, when: this.when(item.start, item.end) };
+					return item.price != null
+						? t("gridChargePrice", {
+								...args,
+								price: this.fmtPricePerKWh(item.price, this.currency),
+							})
+						: t("gridCharge", args);
+				}
+			}
+		},
+		dayLabel(day: DaySummary) {
+			const date = new Date(day.start);
+			const relative = this.relativeDayName(date);
+			const dayDate = date.toLocaleDateString(this.$i18n.locale, {
+				weekday: relative ? undefined : "long",
+				day: "numeric",
+				month: "short",
+			});
+			if (!relative) return dayDate;
+			return `${relative.charAt(0).toLocaleUpperCase(this.$i18n.locale)}${relative.slice(1)}, ${dayDate}`;
+		},
+		deviceNotes(device: EnergyDevice) {
+			const notes: string[] = [];
+			if (device.capacityKWh > 0)
+				notes.push(
+					this.$t("forecast.energy.levelJourney", {
+						start: this.levelText(device.initialSoc),
+						end: this.levelText(device.plan.at(-1)?.soc),
+					})
+				);
+			else notes.push(this.$t("forecast.energy.energyOnly"));
+			if (device.kind === "expectedVehicle") notes.push(this.$t("forecast.energy.expected"));
+			if (device.arrival)
+				notes.push(
+					this.$t("forecast.energy.arrival", { time: this.clock(device.arrival, true) })
+				);
+			if (device.departure)
+				notes.push(
+					this.$t("forecast.energy.departure", {
+						time: this.clock(device.departure, true),
+					})
+				);
+			return notes;
+		},
+		number(value: number, digits: number) {
+			return value.toLocaleString(this.$i18n.locale, {
+				minimumFractionDigits: digits,
+				maximumFractionDigits: digits,
+			});
 		},
 		kwh(value: number) {
-			return `${value.toLocaleString(this.$i18n.locale, { maximumFractionDigits: 2 })} kWh`;
+			return `${this.number(value, 1)} kWh`;
 		},
-		percent(value: number | undefined) {
+		energy(value: number | undefined) {
+			return value != null ? this.kwh(value) : this.$t("forecast.energy.plan.unavailable");
+		},
+		range(value: EnergyRange) {
+			if (value.low == null || value.high == null)
+				return this.$t("forecast.energy.plan.rangeUnavailable");
+			return this.$t("forecast.energy.plan.range", {
+				low: this.number(value.low, 1),
+				high: this.number(value.high, 1),
+			});
+		},
+		percent(value: number) {
+			return `${value.toLocaleString(this.$i18n.locale, { maximumFractionDigits: 0 })} %`;
+		},
+		levelText(value: number | undefined) {
 			if (value == null || !Number.isFinite(value))
 				return this.$t("forecast.energy.unknownLevel");
-			return `${value.toLocaleString(this.$i18n.locale, { maximumFractionDigits: 1 })} %`;
+			return this.percent(value);
 		},
 		money(value: number) {
 			return new Intl.NumberFormat(this.$i18n.locale, {
@@ -452,29 +619,11 @@ export default defineComponent({
 				name
 			);
 		},
-		deviceSlot(device: EnergyDevice) {
-			return device.plan.find((slot) => slot.start === this.selectedSlot?.start);
-		},
 		transferAction(window: { charging: boolean; energyWh: number }) {
 			return this.$t(
 				window.charging ? "forecast.energy.charging" : "forecast.energy.discharging",
-				{ energy: this.kwh(window.energyWh / 1000) }
+				{ energy: `${this.number(window.energyWh / 1000, 2)} kWh` }
 			);
-		},
-		action(device: EnergyDevice) {
-			const slot = this.deviceSlot(device);
-			if (!slot) return this.$t("forecast.energy.noPlan");
-			const time = new Date(this.selectedSlot!.start).getTime();
-			if (
-				(device.arrival && time < new Date(device.arrival).getTime()) ||
-				(device.departure && time >= new Date(device.departure).getTime())
-			)
-				return this.$t("forecast.energy.away");
-			if (slot.chargeWh > 1)
-				return this.transferAction({ charging: true, energyWh: slot.chargeWh });
-			if (slot.dischargeWh > 1)
-				return this.transferAction({ charging: false, energyWh: slot.dischargeWh });
-			return this.$t("forecast.energy.idle");
 		},
 	},
 });
@@ -483,21 +632,71 @@ export default defineComponent({
 .energy-plan {
 	overflow-wrap: anywhere;
 }
-.energy-plan .small:not(.text-muted) {
+.meta {
 	color: var(--evcc-default-text);
 }
-.forecast-total {
-	background: var(--bs-tertiary-bg);
+.headline p {
+	margin-bottom: 0.35rem;
 }
-.device-summary,
-.inspection {
-	border-color: var(--bs-border-color) !important;
+.headline-lead {
+	font-size: 1.125rem;
+	font-weight: 600;
+	line-height: 1.4;
+}
+.headline-more {
+	line-height: 1.45;
+}
+.days {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+	gap: 0.75rem;
+}
+.day-tile {
+	background: var(--bs-tertiary-bg);
+	color: var(--evcc-default-text);
+	overflow-wrap: normal;
+}
+.day-values {
+	display: grid;
+	grid-template-columns: auto auto;
+	justify-content: space-between;
+	gap: 0.4rem 1rem;
+	font-size: 0.875rem;
+}
+.day-values dt {
+	font-weight: normal;
+}
+.day-values dd {
+	margin: 0;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+	white-space: nowrap;
+}
+.day-values small {
+	font-weight: normal;
+	color: var(--bs-secondary-color);
+}
+.plan-details {
+	border-top: 1px solid var(--bs-border-color);
+	padding: 0.6rem 0;
+}
+.plan-details:last-of-type {
+	border-bottom: 1px solid var(--bs-border-color);
+}
+.schedule {
+	font-size: 0.875rem;
+	--bs-table-bg: transparent;
+	color: var(--evcc-default-text);
+}
+.schedule .device-row th {
+	padding-top: 0.75rem;
+	border-bottom-color: var(--bs-border-color);
+}
+.schedule td {
+	font-variant-numeric: tabular-nums;
 }
 summary {
 	cursor: pointer;
-}
-.quality-details {
-	border-top: 1px solid var(--bs-border-color);
-	padding-top: 1rem;
 }
 </style>
