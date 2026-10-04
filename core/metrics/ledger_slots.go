@@ -175,6 +175,7 @@ func earliestGroupSlot(ctx context.Context, group string, requireSoc bool) (time
 // buildLedgerSlots) - PVKWh and BatterySocFrac are zero/nil rather than fabricated
 // when the site has no PV or no battery configured at all.
 type slotData struct {
+	FeedInFallback         bool // only meaningful when the priced flow exports
 	Start                  time.Time
 	GridImportKWh          float64
 	GridExportKWh          float64

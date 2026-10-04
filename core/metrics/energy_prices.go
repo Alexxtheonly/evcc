@@ -27,6 +27,9 @@ type ConsumptionPriceMetric struct {
 	NetCost        float64  `json:"netCost"`
 	EffectivePrice *float64 `json:"effectivePrice,omitempty"`
 	Coverage       Coverage `json:"coverage"`
+	// FeedInFallbackSlots counts exporting slots valued at the static feed-in
+	// fallback because no feed-in price was recorded.
+	FeedInFallbackSlots int `json:"feedInFallbackSlots,omitempty"`
 }
 
 type WorldPriceMetric struct {
@@ -76,6 +79,9 @@ type EnergyPriceReport struct {
 	Days        []EnergyPriceBucket   `json:"days"`
 	Comparison  EnergyPriceComparison `json:"comparison"`
 	EVTiming    EVTimingPrice         `json:"evTiming"`
+	// FeedInFallbackPrice is set when any exporting slot of the month, actual or
+	// modelled, was valued at the static feed-in fallback.
+	FeedInFallbackPrice *float64 `json:"feedInFallbackPrice,omitempty"`
 }
 
 // ErrEnergyPriceMonth rejects malformed and future calendar requests.
@@ -193,7 +199,7 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 		if g.ReturnEnergy > 0 && (feed == nil || !finite(*feed)) {
 			continue
 		}
-		s := slotData{Start: ts, GridImportKWh: g.Energy, GridExportKWh: g.ReturnEnergy, HomeKWh: h.Energy, LoadpointKWh: lp.Energy, PriceGrid: p.Grid}
+		s := slotData{FeedInFallback: p.FeedIn == nil && fallback != nil, Start: ts, GridImportKWh: g.Energy, GridExportKWh: g.ReturnEnergy, HomeKWh: h.Energy, LoadpointKWh: lp.Energy, PriceGrid: p.Grid}
 		if feed != nil && finite(*feed) {
 			s.PriceFeedIn = *feed
 		}
@@ -233,6 +239,14 @@ func ComputeEnergyPrices(ctx context.Context, month string, now time.Time, feedI
 		return nil, err
 	}
 	report.Totals.EVTiming = report.EVTiming
+	if report.Totals.Consumption.FeedInFallbackSlots > 0 {
+		report.FeedInFallbackPrice = fallback
+	}
+	for _, world := range report.Totals.Worlds {
+		if world.FeedInFallbackSlots > 0 {
+			report.FeedInFallbackPrice = fallback
+		}
+	}
 	return report, nil
 }
 
@@ -242,6 +256,9 @@ func newEnergyPriceBucket(date string, from, to time.Time) EnergyPriceBucket {
 }
 
 func addConsumption(m *ConsumptionPriceMetric, s slotData, flow worldFlow) {
+	if s.FeedInFallback && flow.ExportKWh > 0 {
+		m.FeedInFallbackSlots++
+	}
 	m.ConsumptionKWh += s.modelledLoadKWh()
 	m.ImportKWh += flow.ImportKWh
 	m.ExportKWh += flow.ExportKWh

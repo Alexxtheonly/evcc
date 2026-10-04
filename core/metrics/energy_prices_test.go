@@ -440,3 +440,37 @@ func TestReportTimezoneNeverLocal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Etc/GMT-2", report.Timezone)
 }
+
+func TestEnergyPricesDiscloseOnlyPricedExportFallbacks(t *testing.T) {
+	grid, home := setupEnergyPrices(t)
+	pv := mustCreateEntity(t, PV, "pv")
+	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	p, f := .2, .05
+	seedFeedInWitnesses(t, start.AddDate(0, 0, -2), f, minFeedInWitnessSlots)
+	for i := range 3 {
+		ts := start.Add(time.Duration(i) * 15 * time.Minute)
+		export := 0.0
+		if i == 0 {
+			export = 1
+		}
+		solar := 0.0
+		if i < 2 {
+			solar = 2
+		}
+		require.NoError(t, PersistTariffs(ts, &p, nil, nil, nil))
+		require.NoError(t, persist(grid, ts, 1, export, nil, false, false))
+		require.NoError(t, persist(home, ts, 1, 0, nil, false, false))
+		require.NoError(t, persist(pv, ts, solar, 0, nil, false, false))
+	}
+	report, err := ComputeEnergyPrices(context.Background(), "2026-10", start.Add(45*time.Minute), &f)
+	require.NoError(t, err)
+	require.NotNil(t, report.FeedInFallbackPrice)
+	assert.Equal(t, f, *report.FeedInFallbackPrice)
+	assert.Equal(t, 1, report.Totals.Consumption.FeedInFallbackSlots)
+	require.Len(t, report.Totals.Worlds, 4)
+	assert.Zero(t, report.Totals.Worlds[0].FeedInFallbackSlots)
+	assert.Equal(t, 2, report.Totals.Worlds[1].FeedInFallbackSlots)
+	assert.Equal(t, 1, report.Totals.Worlds[3].FeedInFallbackSlots)
+	assert.Equal(t, 1, report.Days[0].Consumption.FeedInFallbackSlots)
+	assert.Equal(t, 3, report.Totals.Grid.Coverage.ValidSlots)
+}

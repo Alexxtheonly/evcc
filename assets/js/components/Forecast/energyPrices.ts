@@ -16,6 +16,7 @@ export interface ConsumptionPriceMetric {
   netCost: number;
   effectivePrice?: number;
   coverage: LedgerCoverage;
+  feedInFallbackSlots?: number;
 }
 
 export interface WorldPriceMetric extends ConsumptionPriceMetric {
@@ -51,6 +52,7 @@ export interface EnergyPriceReport {
     inventoryAdjusted?: LedgerChain["inventoryAdjusted"];
   };
   evTiming: EVTimingPrice;
+  feedInFallbackPrice?: number;
 }
 
 export interface EVTimingPrice {

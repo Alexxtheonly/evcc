@@ -34,7 +34,9 @@ price when actual export is positive. Missing PV or battery history cannot erase
 these actual metrics. The existing static feed-in fallback is allowed only with
 its historical corroboration guard (at least 96 recorded witnesses, all matching
 the configured static tariff); it is not a current dynamic price substituted for
-history. Amounts remain variable energy charges, not an invoice including fixed
+history. Exporting slots valued this way are counted per metric/world in
+`feedInFallbackSlots`, and the top-level `feedInFallbackPrice` names the price
+whenever the month used it. Amounts remain variable energy charges, not an invoice including fixed
 charges, taxes absent from the tariff or demand charges.
 
 A group slot needs a clean reading from every entity that had reported by then.
