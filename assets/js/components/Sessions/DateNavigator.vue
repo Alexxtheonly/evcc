@@ -215,10 +215,16 @@ export default defineComponent({
 			}));
 		},
 		monthOptions() {
-			return Array.from({ length: 12 }, (_, i) => i + 1).map((month) => ({
-				name: this.fmtMonth(new Date(this.year, month - 1, 1), false),
-				value: month,
-			}));
+			// Same bounds as monthYearOptions: no months before startDate or after today.
+			const first =
+				this.year === this.startDate.getFullYear() ? this.startDate.getMonth() + 1 : 1;
+			const last = this.year === this.today.getFullYear() ? this.today.getMonth() + 1 : 12;
+			return Array.from({ length: 12 }, (_, i) => i + 1)
+				.filter((month) => month >= first && month <= last)
+				.map((month) => ({
+					name: this.fmtMonth(new Date(this.year, month - 1, 1), false),
+					value: month,
+				}));
 		},
 		monthYearOptions() {
 			const first = this.startDate;
