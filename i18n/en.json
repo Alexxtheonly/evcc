@@ -1404,7 +1404,7 @@
           "grid": "Grid charging"
         },
         "chartLabel": "Plan chart. Hover, tap or use the arrow keys to see the values at a time.",
-        "chartHint": "Hover or tap for values. Light bands: estimate range.",
+        "chartHint": "Tap or hover for values · bands show estimate ranges.",
         "unavailable": "Unavailable",
         "range": "{low} – {high}",
         "rangeUnavailable": "Range unavailable",
@@ -1420,7 +1420,7 @@
         "whenRange": "{range}",
         "headline": {
           "unavailable": "No current plan. Devices follow their current settings.",
-          "idle": "No charging or discharging planned until {end}.",
+          "idle": "No charging or discharging planned until the end of the plan.",
           "batteryCharge": "{device} charges {energy} {when}.",
           "batteryChargeSolar": "{device} charges {energy} from solar {when}.",
           "batteryThen": "Then it supplies the house {when} ({energy}).",
@@ -1442,8 +1442,11 @@
         "levelAfter": "Level after",
         "horizonTotals": "Whole plan {range}: household {home}, solar {solar} (estimates).",
         "diagnosticsLink": "Optimizer input and output (Diagnostics)",
-        "gridHint": "Orange shading: grid charging (solid: needed, dashed: possible; all devices).",
-        "ribbonHint": "Band around the battery line: scenario range, not guaranteed."
+        "gridHint": "Chart: orange shading marks grid charging for all devices (solid: grid energy is needed, dashed: grid may supply it; the range reflects mixed sources, not forecast uncertainty).",
+        "ribbonHint": "The band around the battery's charge level is the scenario range, not a guarantee.",
+        "moreLayers": "More layers",
+        "whenUntilPlanEnd": "until the end of the plan",
+        "whenFromToPlanEnd": "from {start} until the end of the plan"
       }
     },
     "co2": {

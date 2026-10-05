@@ -53,8 +53,23 @@
 					{{ device.title }}
 				</button>
 			</div>
+			<div v-if="devices.length" class="legend-group">
+				<button
+					type="button"
+					class="btn btn-link btn-sm p-0 more-layers"
+					:aria-expanded="moreLayers"
+					:aria-controls="`${uid}-power`"
+					data-testid="more-layers"
+					@click="moreLayers = !moreLayers"
+				>
+					{{ $t("forecast.energy.plan.moreLayers") }}
+					<span aria-hidden="true">{{ moreLayers ? "▴" : "▾" }}</span>
+				</button>
+			</div>
 			<div
 				v-if="devices.length"
+				v-show="moreLayers"
+				:id="`${uid}-power`"
 				class="legend-group"
 				role="group"
 				:aria-label="$t('forecast.energy.plan.layersPower')"
@@ -108,7 +123,7 @@
 				}"
 			/>
 		</div>
-		<p class="small text-muted mt-1 mb-0">{{ hint }}</p>
+		<p class="small text-muted mt-1 mb-0">{{ $t("forecast.energy.plan.chartHint") }}</p>
 		<span :id="`${uid}-live`" class="visually-hidden" aria-live="polite">{{
 			tooltip.mode === "keyboard" ? liveText : ""
 		}}</span>
@@ -167,7 +182,9 @@
 							<span
 								class="legend-mark mark-line"
 								:style="{ color: deviceColors[device.key] }"
-							/>{{ device.title }}
+							/><span class="device-name" :title="device.title">{{
+								device.title
+							}}</span>
 						</th>
 						<td>
 							<span v-if="device.soc != null">{{ percent(device.soc) }} · </span
@@ -181,7 +198,7 @@
 </template>
 <script lang="ts">
 import { defineComponent, markRaw, type PropType } from "vue";
-import colors, { batteryColor, resolveColors } from "@/colors";
+import colors from "@/colors";
 import formatter from "@/mixins/formatter";
 import { CURRENCY, type DeviceColors } from "@/types/evcc";
 import { is12hFormat } from "@/units";
@@ -192,12 +209,11 @@ import {
 	FORECAST_LAYERS,
 	chartLayout,
 	defaultVisibility,
-	gridChargeBlocks,
+	deviceColorAssignment,
 	hasSoc,
 	placeTooltip,
 	slotDetails,
 	slotIndexAt,
-	socRibbon,
 	timeAtX,
 	xAtTime,
 	type ChartVisibility,
@@ -232,6 +248,7 @@ export default defineComponent({
 			frame: 0,
 			pending: undefined as { x: number; y: number; mode: PointerMode } | undefined,
 			touchActive: false,
+			moreLayers: false,
 			tooltip: {
 				index: -1,
 				anchor: { x: 0, y: 0 },
@@ -245,27 +262,7 @@ export default defineComponent({
 			return this.devices.filter(hasSoc);
 		},
 		deviceColors(): Record<string, string> {
-			let batteryIndex = 0;
-			const others = this.devices.filter((device) => device.kind !== "battery");
-			const overrides = Object.fromEntries(
-				others.flatMap((device) =>
-					this.deviceColorOverrides[device.title]
-						? [[device.key, this.deviceColorOverrides[device.title]!]]
-						: []
-				)
-			);
-			const palette = resolveColors(
-				others.map((device) => device.key),
-				overrides
-			);
-			return Object.fromEntries(
-				this.devices.map((device) => [
-					device.key,
-					device.kind === "battery"
-						? batteryColor(batteryIndex++)
-						: palette[device.key] || colors.muted || "",
-				])
-			);
+			return deviceColorAssignment(this.devices, this.deviceColorOverrides, colors.palette);
 		},
 		start() {
 			return Date.parse(this.slots[0]?.start ?? "");
@@ -311,31 +308,6 @@ export default defineComponent({
 					? layout.socTop + layout.socHeight
 					: layout.powerTop + layout.powerHeight) - layout.powerTop
 			);
-		},
-		hasGridData() {
-			return this.slots.every(
-				(slot) => slot.gridChargeMinWh != null && slot.gridChargeMaxWh != null
-			);
-		},
-		hasGridBlocks() {
-			return gridChargeBlocks(this.slots).length > 0;
-		},
-		ribbonShown() {
-			const battery = this.devices.find((device) => device.kind === "battery");
-			return (
-				!!battery &&
-				!!this.visibility.soc[battery.key] &&
-				!!socRibbon(this.devices, this.slots, this.low, this.high)
-			);
-		},
-		hint() {
-			const parts = [this.$t("forecast.energy.plan.chartHint")];
-			if (this.visibility.layers.grid && this.hasGridBlocks)
-				parts.push(this.$t("forecast.energy.plan.gridHint"));
-			else if (this.visibility.layers.grid && !this.hasGridData)
-				parts.push(this.$t("forecast.energy.gridChargingUnavailable"));
-			if (this.ribbonShown) parts.push(this.$t("forecast.energy.plan.ribbonHint"));
-			return parts.join(" ");
 		},
 		details() {
 			return this.tooltip.index >= 0
@@ -739,6 +711,19 @@ export default defineComponent({
 	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
 	vertical-align: top;
+}
+.device-name {
+	display: inline-block;
+	max-width: min(10rem, calc(100vw - 13rem));
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	vertical-align: bottom;
+}
+.more-layers {
+	font-size: 0.8125rem;
+	color: var(--bs-secondary-color);
+	text-decoration: none;
 }
 .tooltip-table small {
 	color: var(--bs-secondary-color);

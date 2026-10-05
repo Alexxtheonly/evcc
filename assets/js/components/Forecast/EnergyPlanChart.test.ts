@@ -222,6 +222,30 @@ describe("energy plan chart", () => {
     expect(tooltip().exists()).toBe(false);
   });
 
+  test("per-device power toggles sit behind a closed More layers disclosure", async () => {
+    mount();
+    const more = wrapper.get('[data-testid="more-layers"]');
+    const group = wrapper.get(`#${more.attributes("aria-controls")}`);
+    expect(more.attributes("aria-expanded")).toBe("false");
+    expect(group.isVisible()).toBe(false);
+    await more.trigger("click");
+    expect(more.attributes("aria-expanded")).toBe("true");
+    expect(group.isVisible()).toBe(true);
+    expect(group.findAll("button")).toHaveLength(2);
+  });
+
+  test("popup device names carry the full title for truncated display", async () => {
+    mount();
+    await wrapper
+      .get(".chart-wrap")
+      .trigger("pointerdown", { pointerType: "touch", clientX: 340, clientY: 300 });
+    const names = tooltip().findAll(".device-name");
+    expect(names.map((name) => name.attributes("title"))).toEqual([
+      "Home battery",
+      "Carport (Family car)",
+    ]);
+  });
+
   test("energy-only devices get a power toggle but no charge-level toggle", () => {
     mount({
       devices: [

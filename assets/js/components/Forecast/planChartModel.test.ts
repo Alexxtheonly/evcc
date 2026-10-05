@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vite-plus/test";
 import {
+  BATTERY_COLORS,
   chartLayout,
+  deviceColorAssignment,
   defaultVisibility,
   gridChargeBlocks,
   gridChargeState,
@@ -263,5 +265,48 @@ describe("visibility and option", () => {
     expect(hidden.price).toBeUndefined();
     expect(hidden.devices.map((d) => d.key)).toEqual(["loadpoint:heater", "loadpoint:car"]);
     expect(slotDetails(5, slots, devices, visibility)).toBeUndefined();
+  });
+});
+
+describe("device colours", () => {
+  const palette = ["#60A5FA", "#FBBF24", "#22D3EE", "#F472B6", "#34D399", "#A78BFA", "#94A3B8"];
+  const make = (key: string, kind: EnergyDevice["kind"], title = key): EnergyDevice => ({
+    key,
+    name: key,
+    title,
+    kind,
+    capacityKWh: 10,
+    plan: [],
+  });
+
+  test("batteries are violet, cars skip amber, green and violet defaults", () => {
+    const devices = [
+      make("battery:a", "battery"),
+      make("car:1", "vehicle"),
+      make("car:2", "vehicle"),
+      make("car:3", "expectedVehicle"),
+      make("battery:b", "battery"),
+    ];
+    expect(deviceColorAssignment(devices, {}, palette)).toEqual({
+      "battery:a": BATTERY_COLORS[0],
+      "car:1": "#60A5FA",
+      "car:2": "#22D3EE",
+      "car:3": "#F472B6",
+      "battery:b": BATTERY_COLORS[1],
+    });
+  });
+
+  test("user colours for a car title win and are not handed to another car", () => {
+    const devices = [make("car:1", "vehicle", "Garage"), make("car:2", "vehicle", "Carport")];
+    expect(
+      deviceColorAssignment(devices, { Garage: "#FBBF24", Carport: undefined }, palette)
+    ).toEqual({
+      "car:1": "#FBBF24",
+      "car:2": "#60A5FA",
+    });
+    expect(deviceColorAssignment(devices, { Carport: "#60a5fa" }, palette)).toEqual({
+      "car:1": "#22D3EE",
+      "car:2": "#60a5fa",
+    });
   });
 });

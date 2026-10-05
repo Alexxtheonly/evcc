@@ -1404,7 +1404,7 @@
           "grid": "Netzladen"
         },
         "chartLabel": "Plandiagramm. Zeige mit der Maus, tippe oder nutze die Pfeiltasten, um die Werte zu einem Zeitpunkt zu sehen.",
-        "chartHint": "Zeigen oder tippen für Werte. Helle Flächen: Schätzbereich.",
+        "chartHint": "Tippen oder zeigen für Werte · Flächen zeigen Schätzbereiche.",
         "unavailable": "Nicht verfügbar",
         "range": "{low} – {high}",
         "rangeUnavailable": "Bereich nicht verfügbar",
@@ -1420,7 +1420,7 @@
         "whenRange": "{range}",
         "headline": {
           "unavailable": "Kein aktueller Plan. Geräte folgen ihren aktuellen Einstellungen.",
-          "idle": "Bis {end} ist kein Laden oder Entladen geplant.",
+          "idle": "Bis zum Ende des Plans ist kein Laden oder Entladen geplant.",
           "batteryCharge": "{device} lädt {energy} {when}.",
           "batteryChargeSolar": "{device} lädt {energy} aus Solarstrom {when}.",
           "batteryThen": "Danach versorgt der Speicher das Haus {when} ({energy}).",
@@ -1442,8 +1442,11 @@
         "levelAfter": "Stand danach",
         "horizonTotals": "Gesamter Plan {range}: Haus {home}, Solar {solar} (Schätzungen).",
         "diagnosticsLink": "Optimierer-Eingabe und -Ausgabe (Diagnose)",
-        "gridHint": "Orange Flächen: Netzladen (ausgefüllt: nötig, gestrichelt: möglich; alle Geräte).",
-        "ribbonHint": "Fläche um die Speicherlinie: Szenariobereich, keine Garantie."
+        "gridHint": "Diagramm: Orange Flächen markieren Netzladen aller Geräte (ausgefüllt: Netzenergie ist nötig, gestrichelt: das Netz kann liefern; der Bereich beschreibt gemischte Quellen, keine Prognoseunsicherheit).",
+        "ribbonHint": "Die Fläche um den Ladestand des Speichers ist der Szenariobereich, keine Garantie.",
+        "moreLayers": "Weitere Ebenen",
+        "whenUntilPlanEnd": "bis zum Ende des Plans",
+        "whenFromToPlanEnd": "ab {start} bis zum Ende des Plans"
       }
     },
     "co2": {

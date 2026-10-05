@@ -308,3 +308,40 @@ export function slotDetails(
       }),
   };
 }
+
+// Batteries take violet so they never read as solar (evcc green); default car colours skip
+// violet, green and amber/orange hues that would read as the battery, solar or the price
+// line. Explicit user colours for a device title always win.
+export const BATTERY_COLORS = ["#8B5CF6", "#6D28D9", "#A78BFA"];
+const AVOID_FOR_CARS = new Set(
+  [...BATTERY_COLORS, "#FBBF24", "#F59E0B", "#B45309", "#34D399", "#10B981", "#047857"].map(
+    (color) => color.toUpperCase()
+  )
+);
+
+export function deviceColorAssignment(
+  devices: EnergyDevice[],
+  overrides: Record<string, string | undefined>,
+  palette: string[]
+): Record<string, string> {
+  const taken = new Set(
+    devices.flatMap((device) =>
+      device.kind !== "battery" && overrides[device.title]
+        ? [overrides[device.title]!.toUpperCase()]
+        : []
+    )
+  );
+  const free = palette.filter(
+    (color) => !AVOID_FOR_CARS.has(color.toUpperCase()) && !taken.has(color.toUpperCase())
+  );
+  let batteryIndex = 0;
+  let carIndex = 0;
+  return Object.fromEntries(
+    devices.map((device) => {
+      if (device.kind === "battery")
+        return [device.key, BATTERY_COLORS[batteryIndex++ % BATTERY_COLORS.length]!];
+      const override = overrides[device.title];
+      return [device.key, override || free[carIndex++ % Math.max(1, free.length)] || palette[0]!];
+    })
+  );
+}
