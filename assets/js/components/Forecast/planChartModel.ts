@@ -319,6 +319,9 @@ const AVOID_FOR_CARS = new Set(
   )
 );
 
+// Neighbouring cars get far-apart hues first (blue, pink, cyan) instead of palette order.
+const CAR_PREFERENCE = ["#60A5FA", "#F472B6", "#22D3EE"];
+
 export function deviceColorAssignment(
   devices: EnergyDevice[],
   overrides: Record<string, string | undefined>,
@@ -331,9 +334,12 @@ export function deviceColorAssignment(
         : []
     )
   );
-  const free = palette.filter(
-    (color) => !AVOID_FOR_CARS.has(color.toUpperCase()) && !taken.has(color.toUpperCase())
-  );
+  const free = [...CAR_PREFERENCE, ...palette]
+    .filter(
+      (color, index, all) => all.findIndex((c) => c.toUpperCase() === color.toUpperCase()) === index
+    )
+    .filter((color) => palette.some((c) => c.toUpperCase() === color.toUpperCase()))
+    .filter((color) => !AVOID_FOR_CARS.has(color.toUpperCase()) && !taken.has(color.toUpperCase()));
   let batteryIndex = 0;
   let carIndex = 0;
   return Object.fromEntries(

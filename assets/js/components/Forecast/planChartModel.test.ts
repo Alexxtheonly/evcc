@@ -290,8 +290,8 @@ describe("device colours", () => {
     expect(deviceColorAssignment(devices, {}, palette)).toEqual({
       "battery:a": BATTERY_COLORS[0],
       "car:1": "#60A5FA",
-      "car:2": "#22D3EE",
-      "car:3": "#F472B6",
+      "car:2": "#F472B6",
+      "car:3": "#22D3EE",
       "battery:b": BATTERY_COLORS[1],
     });
   });
@@ -305,7 +305,7 @@ describe("device colours", () => {
       "car:2": "#60A5FA",
     });
     expect(deviceColorAssignment(devices, { Carport: "#60a5fa" }, palette)).toEqual({
-      "car:1": "#22D3EE",
+      "car:1": "#F472B6",
       "car:2": "#60a5fa",
     });
   });

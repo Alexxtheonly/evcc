@@ -187,8 +187,11 @@
 							}}</span>
 						</th>
 						<td>
-							<span v-if="device.soc != null">{{ percent(device.soc) }} · </span
-							>{{ deviceState(device) }}
+							<template v-if="device.soc != null">
+								{{ percent(device.soc) }}
+								<small class="d-block">{{ deviceState(device) }}</small>
+							</template>
+							<template v-else>{{ deviceState(device) }}</template>
 						</td>
 					</tr>
 				</tbody>
@@ -699,6 +702,7 @@ export default defineComponent({
 }
 .tooltip-table th {
 	font-weight: normal;
+	white-space: nowrap;
 	padding: 0.15rem 0.75rem 0.15rem 0;
 	vertical-align: top;
 }
@@ -714,7 +718,7 @@ export default defineComponent({
 }
 .device-name {
 	display: inline-block;
-	max-width: min(10rem, calc(100vw - 13rem));
+	max-width: min(10rem, calc(100vw - 15rem));
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
