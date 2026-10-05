@@ -59,6 +59,13 @@ describe("energy plan card", () => {
     expect(headline[0]!.text()).toContain('"device":"Home battery 19 kWh"');
     expect(headline[0]!.text()).toContain("forecast.energy.plan.headline.batteryThen");
     expect(headline[1]!.text()).toContain('"device":"Carport (Family car)"');
+    // the battery's evening phase runs to the horizon end, which is not a decision time
+    expect(headline[0]!.text()).toContain("forecast.energy.plan.whenFromToPlanEnd");
+    expect(headline[0]!.text()).not.toContain("00:00");
+    expect(headline[1]!.text()).toContain("forecast.energy.plan.whenRange");
+    expect(wrapper.get('[data-testid="energy-chart-notes"]').text()).toContain(
+      "forecast.energy.plan.gridHint"
+    );
     expect(wrapper.findAllComponents(EnergyPlanChart)).toHaveLength(1);
     expect(wrapper.findAll('[data-testid="energy-plan-days"] section')).toHaveLength(2);
     expect(wrapper.text()).not.toContain("forecast.energy.inspect");

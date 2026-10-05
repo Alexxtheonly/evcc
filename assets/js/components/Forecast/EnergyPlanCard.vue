@@ -217,6 +217,10 @@
 					})
 				}}<span v-if="insights.profile.reason"> · {{ insights.profile.reason }}</span>
 			</p>
+			<p class="small" data-testid="energy-chart-notes">
+				{{ $t("forecast.energy.plan.gridHint") }}
+				{{ $t("forecast.energy.plan.ribbonHint") }}
+			</p>
 			<p class="small" data-testid="energy-settlement-label">
 				{{ $t("forecast.energy.simulation") }}
 			</p>
@@ -448,9 +452,16 @@ export default defineComponent({
 			const endText = this.clock(end, weekday && !this.sameDay(end, start));
 			return `${startText} – ${endText}`;
 		},
+		// The horizon end is not a decision time; name it as the end of the plan.
 		when(start: string, end: string) {
-			if (start === this.slots[0]?.start)
-				return this.$t("forecast.energy.plan.whenUntil", { end: this.point(end) });
+			const fromNow = start === this.slots[0]?.start;
+			if (end === this.slots.at(-1)?.end)
+				return fromNow
+					? this.$t("forecast.energy.plan.whenUntilPlanEnd")
+					: this.$t("forecast.energy.plan.whenFromToPlanEnd", {
+							start: this.point(start),
+						});
+			if (fromNow) return this.$t("forecast.energy.plan.whenUntil", { end: this.point(end) });
 			return this.$t("forecast.energy.plan.whenRange", {
 				range: this.interval(start, end, true),
 			});
@@ -462,7 +473,7 @@ export default defineComponent({
 				case "unavailable":
 					return t("unavailable");
 				case "idle":
-					return t("idle", { end: this.point(item.end) });
+					return t("idle");
 				case "batteryCharge": {
 					const args = {
 						device: item.device,
