@@ -60,7 +60,7 @@ func TestRobustFirstActionUsesExecutableModes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, actions, 2) // normal=1000Wh, hold=0Wh; no unsupported 500Wh
 	assert.Equal(t, "normal", actions[0].name)
-	assert.Equal(t, 1000.0, *actions[0].request.Batteries[0].FirstStepDischarge)
+	assert.Equal(t, 1000.0-fixedStepMargin(.25), *actions[0].request.Batteries[0].FirstStepDischarge)
 	assert.Equal(t, 0.0, *actions[1].request.Batteries[0].FirstStepDischarge)
 	// Hardware hold blocks discharge only; holdcharge blocks PV charging.
 	req.TimeSeries.Gt[0], req.TimeSeries.Ft[0] = 0, 1000
@@ -69,7 +69,7 @@ func TestRobustFirstActionUsesExecutableModes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, actions, 2)
 	assert.Equal(t, "normal", actions[0].name)
-	assert.Equal(t, 1000.0, *actions[0].request.Batteries[0].FirstStepCharge)
+	assert.Equal(t, 1000.0-fixedStepMargin(.25), *actions[0].request.Batteries[0].FirstStepCharge)
 	assert.Equal(t, "holdcharge", actions[1].name)
 	assert.Equal(t, 0.0, *actions[1].request.Batteries[0].FirstStepCharge)
 }
@@ -92,7 +92,7 @@ func TestRobustFullEVActionReconstructedFromRequest(t *testing.T) {
 	for _, action := range actions {
 		assert.Equal(t, exact, *action.request.Batteries[1].FirstStepCharge)
 		if action.name == "normal" {
-			assert.Equal(t, exact, *action.request.Batteries[0].FirstStepDischarge)
+			assert.Equal(t, exact-fixedStepMargin(613.0/3600), *action.request.Batteries[0].FirstStepDischarge)
 		}
 	}
 	if url := os.Getenv("EVCC_ENERGY_SOLVER_TEST_URL"); url != "" {

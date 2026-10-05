@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -215,13 +216,39 @@ type energyFirstAction struct {
 	request energyRequest
 }
 
+// wireValue is the float64 the companion parses from v's JSON encoding:
+// encoding/json writes the shortest decimal that round-trips the float32,
+// which differs from float64(v) (141.4028 vs 141.40280151367188).
+func wireValue(v float32) (float64, error) {
+	return strconv.ParseFloat(strconv.FormatFloat(float64(v), 'g', -1, 32), 64)
+}
+
+// fixedStepMargin (Wh) keeps a fixed first step strictly inside the zero-grid
+// boundary. Unless the battery may charge from or discharge to the grid, the
+// companion enforces that boundary exactly: a 3e-6 Wh overshoot came back
+// infeasible. The residual
+// grid flow is half of gridDirectionTolerance, so currentSlotSuggestion still
+// reads an idle normal battery as normal rather than hold or holdcharge.
+func fixedStepMargin(hours float64) float64 {
+	return gridDirectionTolerance * hours / 2
+}
+
 func executableFirstActions(req energyRequest, details requestDetails, base optimizer.OptimizationResult) ([]energyFirstAction, error) {
 	if len(req.TimeSeries.Dt) == 0 || len(details.BatteryDetails) != len(req.Batteries) {
 		return nil, errors.New("executable actions require complete device details")
 	}
 	index := -1
-	net := float64(req.TimeSeries.Gt[0] - req.TimeSeries.Ft[0])
-	hours := float64(req.TimeSeries.Dt[0]) / 3600
+	// Bounds use the decimals the companion parses, in float64: a float32
+	// difference misses the companion's exact boundary by up to 7e-6 Wh.
+	var wireErr error
+	wire := func(v float32) float64 {
+		f, err := wireValue(v)
+		wireErr = errors.Join(wireErr, err)
+		return f
+	}
+	net := wire(req.TimeSeries.Gt[0]) - wire(req.TimeSeries.Ft[0])
+	seconds := float64(req.TimeSeries.Dt[0])
+	hours := seconds / 3600
 	first := fixedFirstAction(req, base)
 	for i, detail := range details.BatteryDetails {
 		if detail.Type == batteryTypeBattery {
@@ -232,7 +259,7 @@ func executableFirstActions(req energyRequest, details requestDetails, base opti
 			continue
 		}
 		charge := float64(base.Batteries[i].ChargingPower[0])
-		full := float64(req.Batteries[i].CMax) * float64(req.TimeSeries.Dt[0]) / 3600
+		full := wire(req.Batteries[i].CMax) * seconds / 3600
 		// Full power and stop have a stable EV command. A partial command can
 		// instead invoke PV tracking, phase switching or minimum-current gates.
 		if charge > .1 && base.Batteries[i].ChargingPower[0] != float32(full) {
@@ -256,25 +283,31 @@ func executableFirstActions(req energyRequest, details requestDetails, base opti
 		return nil, errors.New("robust battery-mode evaluation requires a home battery")
 	}
 	bat := req.Batteries[index]
-	etaC, etaD := float64(req.EtaC), float64(req.EtaD)
+	etaC, etaD := wire(req.EtaC), wire(req.EtaD)
 	if bat.EtaC != nil {
 		etaC = *bat.EtaC
 	}
 	if bat.EtaD != nil {
 		etaD = *bat.EtaD
 	}
-	chargeMax := max(0, min(float64(bat.CMax)*hours, float64(bat.SMax-bat.SInitial)/etaC))
-	capacity := max(bat.SCapacity, bat.SMax)
-	solarChargeMax := max(0, min(float64(bat.CMax)*hours, float64(capacity-bat.SInitial)/etaC))
-	dischargeMax := max(0, min(float64(bat.DMax)*hours, float64(bat.SInitial-bat.SMin)*etaD))
+	sInitial, sMax := wire(bat.SInitial), wire(bat.SMax)
+	powerCharge, powerDischarge := wire(bat.CMax)*seconds/3600, wire(bat.DMax)*seconds/3600
+	chargeMax := max(0, min(powerCharge, (sMax-sInitial)/etaC))
+	capacity := max(wire(bat.SCapacity), sMax)
+	solarChargeMax := max(0, min(powerCharge, (capacity-sInitial)/etaC))
+	dischargeMax := max(0, min(powerDischarge, (sInitial-wire(bat.SMin))*etaD))
+	if wireErr != nil {
+		return nil, wireErr
+	}
+	margin := fixedStepMargin(hours)
 	var actions []energyFirstAction
 	for _, mode := range []string{"normal", "hold", "holdcharge", "charge"} {
 		charge, discharge := 0.0, 0.0
 		if mode != "holdcharge" {
-			charge = min(max(0, -net), solarChargeMax)
+			charge = min(max(0, -net-margin), solarChargeMax)
 		}
 		if mode == "normal" || mode == "holdcharge" {
-			discharge = min(max(0, net), dischargeMax)
+			discharge = min(max(0, net-margin), dischargeMax)
 		}
 		if mode == "charge" {
 			if !bat.ChargeFromGrid || chargeMax == 0 {

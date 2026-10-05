@@ -161,6 +161,10 @@ type batteryResult struct {
 // suggestionThreshold ignores numerical noise in power comparisons (W)
 const suggestionThreshold = 50
 
+// gridDirectionTolerance (W) keeps float32 balance residuals from turning
+// passive self-consumption into a grid-direction override.
+const gridDirectionTolerance = 0.01
+
 // advisory actions for a loadpoint/vehicle slot; battery actions use api.BatteryMode
 const (
 	actionStop   = "stop"
@@ -295,8 +299,6 @@ func currentSlotSuggestion(detail batteryDetail, cfg optimizer.BatteryConfig, re
 
 	charge := float64(res.ChargingPower[0]) / slotHours
 	discharge := float64(res.DischargingPower[0]) / slotHours
-	// Float32 balance residuals must not turn passive self-consumption into an override.
-	const gridDirectionTolerance = 0.01 // W
 	gridImporting := float64(gridImport)/slotHours > gridDirectionTolerance
 	gridExporting := float64(gridExport)/slotHours > gridDirectionTolerance
 
@@ -1044,12 +1046,21 @@ func (site *Site) publishSuggestions() {
 // clearSuggestions removes all suggestions and the battery forecast when the
 // optimizer result is stale
 func (site *Site) clearSuggestions() {
+	site.clearAdvice(false)
+}
+
+// clearAdvice clears the last run's advice. After a run that only missed its
+// slot, a robust battery decision is kept: its own expiry bounds it.
+func (site *Site) clearAdvice(slotElapsed bool) {
 	site.Lock()
 	site.energySnapshotID = nil
+	retain := slotElapsed && site.optimizerEconomics != nil
 	site.Unlock()
 	site.setSuggestions(nil)
 	site.setBatteryForecast(nil)
-	site.setOptimizerBatteryMode(optimizerDecision{})
+	if !retain {
+		site.setOptimizerBatteryMode(optimizerDecision{})
+	}
 
 	// the diagnostics of the last successful run must not linger with no
 	// staleness marker once a run fails - newOptimizerDiagnosticsPublish is
@@ -1225,7 +1236,7 @@ func (site *Site) finishOptimizerAttempt(err error) {
 		}
 
 		// stale advice must not linger
-		site.clearSuggestions()
+		site.clearAdvice(errors.Is(err, errOptimizerSlotElapsed))
 
 		reason := optimizerHealthReasonError
 		if errors.Is(err, errOptimizerNoTariff) {

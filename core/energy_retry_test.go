@@ -19,8 +19,8 @@ func TestEnergyInputChangesRetryWithoutCachingOrStaleAdvice(t *testing.T) {
 	current.Robust = true
 	id := 0
 	for name, err := range map[string]error{
-		"settings":     validateEnergyPlanInputs(now.Add(time.Minute), now, planned, current),
-		"expired":      validateEnergyPlanInputs(now, now, planned, planned),
+		"settings":     (&Site{}).validateEnergyPlan(requestDetails{}, now.Add(time.Minute), now, planned, current),
+		"expired":      (&Site{}).validateEnergyPlan(requestDetails{}, now, now, planned, planned),
 		"device":       (&Site{}).validateEnergyDevices(requestDetails{BatteryDetails: []batteryDetail{{Type: batteryTypeVehicle, loadpoint: &id}}}),
 		"disconnected": (&Site{loadpoints: []*Loadpoint{{status: api.StatusA}}}).validateEnergyDevices(requestDetails{BatteryDetails: []batteryDetail{{Type: batteryTypeVehicle, loadpoint: &id}}}),
 	} {
@@ -45,7 +45,7 @@ func TestEnergyInputChangesRetryWithoutCachingOrStaleAdvice(t *testing.T) {
 			assert.True(t, found, "waiting reason should be visible")
 		})
 	}
-	assert.NoError(t, validateEnergyPlanInputs(now.Add(time.Minute), now, planned, planned))
+	assert.NoError(t, (&Site{}).validateEnergyPlan(requestDetails{}, now.Add(time.Minute), now, planned, planned))
 	site := &Site{log: util.NewLogger("retry-test")}
 	site.finishOptimizerAttempt(errors.New("persistent solver failure"))
 	assert.False(t, site.optimizerUpdated.IsZero(), "persistent errors retain bounded advisory cadence")
