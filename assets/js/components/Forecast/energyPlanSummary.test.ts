@@ -286,9 +286,12 @@ test("headline, schedule windows and day tiles ignore the same sub-threshold slo
     1: [TRANSFER_MIN_WH - 1, 0],
     2: [400, 0],
     3: [400, 0],
+    6: [TRANSFER_MIN_WH - 1, 500],
   });
   const [headline] = planHeadline(insights(slots, [battery]));
-  const [window] = planWindows(battery, slots);
+  const [window, discharge] = planWindows(battery, slots);
+  // sub-threshold charge noise does not turn a real discharge slot into "charging"
+  expect(discharge).toMatchObject({ start: slots[6]!.start, charging: false, energyWh: 500 });
   expect(headline).toMatchObject({ start: slots[2]!.start, energyWh: 800 });
   expect(window).toMatchObject({ start: slots[2]!.start, energyWh: 800 });
   expect(daySummaries(slots, [battery], "Europe/Berlin")[0]!.batteries[0]!.chargeKWh).toBe(0.8);
