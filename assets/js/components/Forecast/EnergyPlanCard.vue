@@ -500,7 +500,7 @@ export default defineComponent({
 					return item.price != null
 						? t("batteryDischargePrice", {
 								...args,
-								price: this.fmtPricePerKWh(item.price, this.currency),
+								price: this.unitPrice(item.price),
 							})
 						: t("batteryDischarge", args);
 				}
@@ -529,7 +529,7 @@ export default defineComponent({
 					return item.price != null
 						? t("gridChargePrice", {
 								...args,
-								price: this.fmtPricePerKWh(item.price, this.currency),
+								price: this.unitPrice(item.price),
 							})
 						: t("gridCharge", args);
 				}
@@ -576,7 +576,10 @@ export default defineComponent({
 			});
 		},
 		kwh(value: number) {
-			return `${this.number(value, 1)} kWh`;
+			return `${this.number(value, 1)}\u00a0kWh`;
+		},
+		unitPrice(value: number) {
+			return this.fmtPricePerKWh(value, this.currency).replace(" ", "\u00a0");
 		},
 		energy(value: number | undefined) {
 			return value != null ? this.kwh(value) : this.$t("forecast.energy.plan.unavailable");
@@ -590,7 +593,7 @@ export default defineComponent({
 			});
 		},
 		percent(value: number) {
-			return `${value.toLocaleString(this.$i18n.locale, { maximumFractionDigits: 0 })} %`;
+			return `${value.toLocaleString(this.$i18n.locale, { maximumFractionDigits: 0 })}\u00a0%`;
 		},
 		levelText(value: number | undefined) {
 			if (value == null || !Number.isFinite(value))
@@ -613,7 +616,7 @@ export default defineComponent({
 		transferAction(window: { charging: boolean; energyWh: number }) {
 			return this.$t(
 				window.charging ? "forecast.energy.charging" : "forecast.energy.discharging",
-				{ energy: `${this.number(window.energyWh / 1000, 2)} kWh` }
+				{ energy: `${this.number(window.energyWh / 1000, 2)}\u00a0kWh` }
 			);
 		},
 	},

@@ -1404,7 +1404,7 @@
           "grid": "Netzladen"
         },
         "chartLabel": "Plandiagramm. Zeige mit der Maus, tippe oder nutze die Pfeiltasten, um die Werte zu einem Zeitpunkt zu sehen.",
-        "chartHint": "Tippen oder zeigen für Werte · Flächen zeigen Schätzbereiche.",
+        "chartHint": "Für Werte tippen oder mit der Maus zeigen · Flächen: Schätzbereiche.",
         "unavailable": "Nicht verfügbar",
         "range": "{low} – {high}",
         "rangeUnavailable": "Bereich nicht verfügbar",

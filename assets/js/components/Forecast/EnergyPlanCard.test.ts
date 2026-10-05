@@ -186,6 +186,9 @@ describe("energy plan card", () => {
     const text = wrapper.get('[data-testid="energy-plan-headline"]').text();
     expect(text).toContain("forecast.energy.plan.headline.gridChargePrice");
     expect(text).toContain("¢/kWh");
+    // numbers and units never wrap apart
+    expect(text).toMatch(/\d\u00a0kWh/);
+    expect(text).toMatch(/\d\u00a0¢\/kWh/);
     expect(text).not.toContain("ct/kWh");
   });
 

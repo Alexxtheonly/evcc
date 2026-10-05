@@ -443,7 +443,7 @@ export default defineComponent({
 		power(value: number | undefined) {
 			return value == null
 				? this.$t("forecast.energy.plan.unavailable")
-				: `${this.number(value)} kW`;
+				: `${this.number(value)}\u00a0kW`;
 		},
 		range(value: { low?: number; high?: number }) {
 			if (value.low == null || value.high == null)
@@ -454,10 +454,10 @@ export default defineComponent({
 			});
 		},
 		percent(value: number) {
-			return `${this.number(value, 0)} %`;
+			return `${this.number(value, 0)}\u00a0%`;
 		},
 		kwh(wh: number) {
-			return `${this.number(wh / 1000, 2)} kWh`;
+			return `${this.number(wh / 1000, 2)}\u00a0kWh`;
 		},
 		gridText(state: GridChargeState) {
 			if (state.kind === "unavailable") return this.$t("forecast.energy.plan.unavailable");

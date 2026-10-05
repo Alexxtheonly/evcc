@@ -166,7 +166,7 @@ describe("energy plan chart", () => {
     await wrap.trigger("pointermove", { pointerType: "touch", clientX: 340, clientY: 300 });
     await wrapper.vm.$nextTick();
     expect(tooltip().text()).toContain("forecast.energy.plan.state.charging");
-    expect(tooltip().text()).toContain("11.0 kW");
+    expect(tooltip().text()).toContain("11.0\u00a0kW");
   });
 
   test("mouse hover shows the slot under the pointer and leaving hides it", async () => {
@@ -213,7 +213,7 @@ describe("energy plan chart", () => {
     await wrap.trigger("keydown", { key: "ArrowRight" });
     await wrap.trigger("keydown", { key: "ArrowRight" });
     expect(tooltip().text()).toContain("40.0");
-    expect(wrapper.get('[aria-live="polite"]').text()).toContain("Carport (Family car): 45 %");
+    expect(wrapper.get('[aria-live="polite"]').text()).toContain("Carport (Family car): 45\u00a0%");
     await wrap.trigger("keydown", { key: "Home" });
     expect(tooltip().text()).toContain("20.0");
     await wrap.trigger("keydown", { key: "Tab" });
