@@ -95,6 +95,10 @@ export const socTimeline = (device: EnergyDevice, slots: EnergyForecastSlot[]) =
   ];
 };
 
+// Below this a slot is solver noise, not a planned transfer; shared by the headline, the
+// schedule, the day tiles and the chart popup so they never disagree.
+export const TRANSFER_MIN_WH = 20;
+
 export function planWindows(device: EnergyDevice, slots: EnergyForecastSlot[]) {
   const windows: {
     start: string;
@@ -106,8 +110,9 @@ export function planWindows(device: EnergyDevice, slots: EnergyForecastSlot[]) {
   for (const point of device.plan) {
     const index = slots.findIndex((slot) => slot.start === point.start);
     const slot = slots[index];
-    if (!slot || (point.chargeWh <= 1 && point.dischargeWh <= 1)) continue;
-    const charging = point.chargeWh > 1;
+    if (!slot || (point.chargeWh < TRANSFER_MIN_WH && point.dischargeWh < TRANSFER_MIN_WH))
+      continue;
+    const charging = point.chargeWh >= TRANSFER_MIN_WH;
     const energyWh = charging ? point.chargeWh : point.dischargeWh;
     const previous = windows[windows.length - 1];
     if (previous && previous.end === point.start && previous.charging === charging) {

@@ -1,12 +1,12 @@
 import {
+  TRANSFER_MIN_WH,
   socTimeline,
   type EnergyDevice,
   type EnergyForecastSlot,
   type EnergyInsights,
 } from "./energyIntelligence";
 
-// Slots below this energy are solver noise, not a planned transfer.
-const MIN_SLOT_WH = 20;
+const MIN_SLOT_WH = TRANSFER_MIN_WH;
 // Windows below this total are not worth a headline sentence (they stay in the schedule).
 const MIN_WINDOW_WH = 300;
 // Short idle gaps (up to 30 min) inside a transfer do not split it into two sentences.
@@ -243,12 +243,13 @@ export function planHeadline(insights: EnergyInsights | undefined): HeadlineItem
     ...devices
       .filter((device) => device.kind !== "battery")
       .flatMap((device) => vehicleItem(device, slots)),
-    ...gridChargeItem(slots),
   ];
-  if (!items.length) return [{ kind: "idle", end: slots.at(-1)!.end }];
-  return items
-    .sort((a, b) => Date.parse(startOf(a)) - Date.parse(startOf(b)))
-    .slice(0, HEADLINE_LIMIT);
+  const grid = gridChargeItem(slots);
+  if (!items.length && !grid.length) return [{ kind: "idle", end: slots.at(-1)!.end }];
+  const byStart = (a: HeadlineItem, b: HeadlineItem) =>
+    Date.parse(startOf(a)) - Date.parse(startOf(b));
+  // buying from the grid always gets a sentence; device statements share the rest
+  return [...items.sort(byStart).slice(0, HEADLINE_LIMIT - grid.length), ...grid].sort(byStart);
 }
 
 export interface EnergyRange {
@@ -351,7 +352,10 @@ export function daySummaries(
     const endParts = localParts(format, last.end);
     const endsAtMidnight = endParts.midnight && endParts.key !== key;
     const sumPlan = (device: EnergyDevice, field: "chargeWh" | "dischargeWh") =>
-      indices.reduce((sum, index) => sum + (plans.get(device.key)![index]?.[field] ?? 0), 0) / 1000;
+      indices.reduce((sum, index) => {
+        const value = plans.get(device.key)![index]?.[field] ?? 0;
+        return value >= TRANSFER_MIN_WH ? sum + value : sum;
+      }, 0) / 1000;
     return {
       key,
       start: first.start,

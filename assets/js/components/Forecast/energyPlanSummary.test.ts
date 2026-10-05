@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vite-plus/test";
 import { daySummaries, planHeadline, significantWindows } from "./energyPlanSummary";
-import type { EnergyDevice, EnergyForecastSlot, EnergyInsights } from "./energyIntelligence";
+import {
+  TRANSFER_MIN_WH,
+  planWindows,
+  type EnergyDevice,
+  type EnergyForecastSlot,
+  type EnergyInsights,
+} from "./energyIntelligence";
 import { livePlanAfternoon, livePlanEvening } from "./__fixtures__/energyPlanLive";
 
 const QUARTER = 15 * 60 * 1000;
@@ -252,6 +258,40 @@ describe("plan headline", () => {
       start: "2026-10-04T13:08:54+02:00",
     });
   });
+});
+
+test("a definite grid charge is never crowded out by battery and car statements", () => {
+  // reviewer's probe: battery discharge, two cars, then 4 kWh definite grid charging at 03:00
+  const slots = makeSlots("2026-10-05T18:00:00Z", 40).map((slot, index) =>
+    index >= 36 ? { ...slot, gridChargeMinWh: 1000, gridChargeMaxWh: 1000, gridPrice: 0.24 } : slot
+  );
+  const devices = [
+    device("battery", "battery", slots, range(0, 7, [0, 300])),
+    device("carA", "vehicle", slots, range(8, 11, [1000, 0])),
+    device("carB", "vehicle", slots, range(12, 15, [1000, 0])),
+  ];
+  const items = planHeadline(insights(slots, devices));
+  expect(items).toHaveLength(3);
+  expect(items.map((item) => item.kind)).toEqual([
+    "batteryDischarge",
+    "vehicleCharge",
+    "gridCharge",
+  ]);
+  expect(items[2]).toMatchObject({ start: slots[36]!.start, minWh: 4000, price: 0.24 });
+});
+
+test("headline, schedule windows and day tiles ignore the same sub-threshold slots", () => {
+  const slots = makeSlots("2026-10-05T10:00:00Z", 8);
+  const battery = device("b", "battery", slots, {
+    1: [TRANSFER_MIN_WH - 1, 0],
+    2: [400, 0],
+    3: [400, 0],
+  });
+  const [headline] = planHeadline(insights(slots, [battery]));
+  const [window] = planWindows(battery, slots);
+  expect(headline).toMatchObject({ start: slots[2]!.start, energyWh: 800 });
+  expect(window).toMatchObject({ start: slots[2]!.start, energyWh: 800 });
+  expect(daySummaries(slots, [battery], "Europe/Berlin")[0]!.batteries[0]!.chargeKWh).toBe(0.8);
 });
 
 describe("day summaries", () => {
