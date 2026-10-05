@@ -258,8 +258,8 @@
 			</template>
 			<p v-else class="text-muted">
 				{{ $t("forecast.energyPrices.comparisonUnavailable")
-				}}<span v-if="report.comparison.reason">
-					{{ reason(report.comparison.reason) }}</span
+				}}<span v-if="report.comparison.reason"
+					>{{ " " }}{{ reason(report.comparison.reason) }}</span
 				>
 			</p>
 			<details class="mt-3" data-testid="inventory-estimate">

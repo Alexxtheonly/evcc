@@ -384,6 +384,19 @@ describe("level comparison and small print", () => {
     wrapper.unmount();
   });
 
+  test("the unavailable comparison and its reason are separate words in German", async () => {
+    const data = withWorlds([0, 0, 0, 0], 0);
+    data.comparison.reason = "missing_soc";
+    vi.mocked(api.get).mockResolvedValue({ data });
+    const wrapper = shallowMount(EnergyPricesCard, { global: translations(de) });
+    await flushPromises();
+    await wrapper.vm.setPeriod("month");
+    expect(wrapper.text()).toContain(
+      `${de.forecast.energyPrices.comparisonUnavailable} ${wrapper.vm.reason("missing_soc")}`
+    );
+    wrapper.unmount();
+  });
+
   test("caveats live behind the info toggle; status and basis stay visible", async () => {
     const data = report();
     data.feedInFallbackPrice = 0.081;
