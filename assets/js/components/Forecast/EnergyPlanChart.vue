@@ -681,7 +681,7 @@ export default defineComponent({
 	position: fixed;
 	z-index: 1050;
 	min-width: 12rem;
-	max-width: min(20rem, calc(100vw - 16px));
+	max-width: min(22rem, calc(100vw - 16px));
 	overflow: auto;
 	padding: 0.5rem 0.65rem;
 	font-size: 0.8125rem;
