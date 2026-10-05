@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
+import { batteryColor } from "@/colors";
 import {
-  BATTERY_COLORS,
   chartLayout,
   deviceColorAssignment,
   defaultVisibility,
@@ -279,7 +279,7 @@ describe("device colours", () => {
     plan: [],
   });
 
-  test("batteries are violet, cars skip amber, green and violet defaults", () => {
+  test("batteries use evcc's battery palette, cars skip amber and green defaults", () => {
     const devices = [
       make("battery:a", "battery"),
       make("car:1", "vehicle"),
@@ -288,11 +288,18 @@ describe("device colours", () => {
       make("battery:b", "battery"),
     ];
     expect(deviceColorAssignment(devices, {}, palette)).toEqual({
-      "battery:a": BATTERY_COLORS[0],
+      "battery:a": batteryColor(0),
       "car:1": "#60A5FA",
       "car:2": "#F472B6",
       "car:3": "#22D3EE",
-      "battery:b": BATTERY_COLORS[1],
+      "battery:b": batteryColor(1),
+    });
+  });
+
+  test("user colours are keyed by the loadpoint title without the vehicle, like evcc", () => {
+    const devices = [make("loadpoint:0", "vehicle", "Wallbox Rechts (Luna)")];
+    expect(deviceColorAssignment(devices, { "Wallbox Rechts": "#123456" }, palette)).toEqual({
+      "loadpoint:0": "#123456",
     });
   });
 

@@ -1,4 +1,6 @@
-import type { EnergyDevice, EnergyForecastSlot } from "./energyIntelligence";
+import { batteryColor } from "@/colors";
+import { stripVehicleTitle } from "../Optimize/chart";
+import { TRANSFER_MIN_WH, type EnergyDevice, type EnergyForecastSlot } from "./energyIntelligence";
 
 export const FORECAST_LAYERS = ["price", "home", "solar", "grid"] as const;
 export type ForecastLayer = (typeof FORECAST_LAYERS)[number];
@@ -295,9 +297,9 @@ export function slotDetails(
         )
           return { ...detail, state: "away" as const };
         const soc = hasSoc(device) && finite(point.soc) ? point.soc : undefined;
-        if (point.chargeWh > 1)
+        if (point.chargeWh >= TRANSFER_MIN_WH)
           return { ...detail, soc, state: "charging" as const, powerKW: kw(point.chargeWh, slot) };
-        if (point.dischargeWh > 1)
+        if (point.dischargeWh >= TRANSFER_MIN_WH)
           return {
             ...detail,
             soc,
@@ -309,13 +311,12 @@ export function slotDetails(
   };
 }
 
-// Batteries take violet so they never read as solar (evcc green); default car colours skip
-// violet, green and amber/orange hues that would read as the battery, solar or the price
-// line. Explicit user colours for a device title always win.
-export const BATTERY_COLORS = ["#8B5CF6", "#6D28D9", "#A78BFA"];
+// Batteries keep evcc's battery palette (as on the Results tab and battery pages); default car
+// colours skip greens and amber/orange hues that would read as battery, solar or the price
+// line. User colours win; evcc keys them by the loadpoint title without "(vehicle)".
 const AVOID_FOR_CARS = new Set(
-  [...BATTERY_COLORS, "#FBBF24", "#F59E0B", "#B45309", "#34D399", "#10B981", "#047857"].map(
-    (color) => color.toUpperCase()
+  ["#FBBF24", "#F59E0B", "#B45309", "#34D399", "#10B981", "#047857"].map((color) =>
+    color.toUpperCase()
   )
 );
 
@@ -327,11 +328,10 @@ export function deviceColorAssignment(
   overrides: Record<string, string | undefined>,
   palette: string[]
 ): Record<string, string> {
+  const override = (device: EnergyDevice) => overrides[stripVehicleTitle(device.title)];
   const taken = new Set(
     devices.flatMap((device) =>
-      device.kind !== "battery" && overrides[device.title]
-        ? [overrides[device.title]!.toUpperCase()]
-        : []
+      device.kind !== "battery" && override(device) ? [override(device)!.toUpperCase()] : []
     )
   );
   const free = [...CAR_PREFERENCE, ...palette]
@@ -344,10 +344,11 @@ export function deviceColorAssignment(
   let carIndex = 0;
   return Object.fromEntries(
     devices.map((device) => {
-      if (device.kind === "battery")
-        return [device.key, BATTERY_COLORS[batteryIndex++ % BATTERY_COLORS.length]!];
-      const override = overrides[device.title];
-      return [device.key, override || free[carIndex++ % Math.max(1, free.length)] || palette[0]!];
+      if (device.kind === "battery") return [device.key, batteryColor(batteryIndex++)];
+      return [
+        device.key,
+        override(device) || free[carIndex++ % Math.max(1, free.length)] || palette[0]!,
+      ];
     })
   );
 }

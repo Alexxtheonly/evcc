@@ -110,6 +110,20 @@ describe("chart option", () => {
     expect((reduced.option.yAxis as { show?: boolean }[])[1]!.show).toBe(false);
   });
 
+  test("a battery power layer is a dashed line, never an area that blends into solar", () => {
+    const visibility = defaultVisibility(devices);
+    visibility.power = { "battery:a": true, "loadpoint:car": true };
+    const series = buildPlanChartOption(input({ visibility })).option.series as unknown as {
+      id: string;
+      areaStyle?: unknown;
+      lineStyle: { type: string };
+    }[];
+    const battery = series.find((s) => s.id === "power-battery:a")!;
+    expect(battery.areaStyle).toBeUndefined();
+    expect(battery.lineStyle.type).toBe("dashed");
+    expect(series.find((s) => s.id === "power-loadpoint:car")!.areaStyle).toBeDefined();
+  });
+
   test("grid charging shading spans both grids and follows its toggle", () => {
     const grid = slots.map((s) => ({ ...s, gridChargeMinWh: 400, gridChargeMaxWh: 400 }));
     expect(ids(buildPlanChartOption(input({ slots: grid }))).slice(0, 2)).toEqual([

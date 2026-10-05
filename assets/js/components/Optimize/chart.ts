@@ -3,9 +3,13 @@ import colors from "@/colors";
 import type { BatteryDetail } from "@/types/evcc";
 
 // loadpoint part of a vehicle entry title: "Carport (blue e-Golf)" → "Carport"
-export function loadpointTitle(detail: BatteryDetail): string {
-  const title = detail.title || detail.name || "";
+// "Wallbox (Car)" → "Wallbox": device colours are keyed by the loadpoint title without vehicle
+export function stripVehicleTitle(title: string): string {
   return title.replace(/\s*\([^)]*\)$/, "");
+}
+
+export function loadpointTitle(detail: BatteryDetail): string {
+  return stripVehicleTitle(detail.title || detail.name || "");
 }
 
 // slot start times (ms) from the first timestamp plus cumulative dt seconds

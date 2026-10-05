@@ -201,7 +201,8 @@ function forecastSeries(input: ChartInput) {
   ];
 }
 
-// Opt-in per-device power: charging above zero, discharging below.
+// Opt-in per-device power: charging above zero, discharging below. Batteries draw a dashed
+// line only, so their green never merges with the solar area.
 function powerSeries(input: ChartInput) {
   const { slots, colors, visibility } = input;
   return input.devices
@@ -213,9 +214,11 @@ function powerSeries(input: ChartInput) {
         const point = points.get(slot.start);
         return point ? kw(point.chargeWh - point.dischargeWh, slot) : undefined;
       };
+      const battery = device.kind === "battery";
       return lineSeries(`power-${device.key}`, stepPoints(slots, value), color, POWER, {
-        width: 1.5,
-        area: alpha(color, 0.35),
+        width: battery ? 2 : 1.5,
+        dashed: battery,
+        area: battery ? undefined : alpha(color, 0.35),
       });
     });
 }
