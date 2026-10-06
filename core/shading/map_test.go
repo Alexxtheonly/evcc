@@ -48,8 +48,8 @@ func TestLearnRecencyWeighting(t *testing.T) {
 	cfg := DefaultConfig
 	cutoff := time.Date(2026, 6, 25, 0, 0, 0, 0, time.UTC)
 
-	recent := repeat(4, func(i int) Sample { return sample(noon(2026, 6, 24-i), 0.5, 0.25) })   // ratio 0.5
-	older := repeat(4, func(i int) Sample { return sample(noon(2026, 6, 14-i), 0.5, 0.5) })     // ratio 1.0
+	recent := repeat(4, func(i int) Sample { return sample(noon(2026, 6, 24-i), 0.5, 0.25) }) // ratio 0.5
+	older := repeat(4, func(i int) Sample { return sample(noon(2026, 6, 14-i), 0.5, 0.5) })   // ratio 1.0
 	all := append(append([]Sample{}, recent...), older...)
 	sameBin(t, cfg, all...)
 
