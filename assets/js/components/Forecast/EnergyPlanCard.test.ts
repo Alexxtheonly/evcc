@@ -3,6 +3,7 @@ import { describe, expect, test } from "vite-plus/test";
 import EnergyPlanCard from "./EnergyPlanCard.vue";
 import EnergyPlanChart from "./EnergyPlanChart.vue";
 import BatteryControlStatus from "./BatteryControlStatus.vue";
+import SolarShadingDetails from "./SolarShadingDetails.vue";
 import { CURRENCY } from "@/types/evcc";
 import { forecastTotals, socTimeline, type EnergyInsights } from "./energyIntelligence";
 import { livePlanEvening } from "./__fixtures__/energyPlanLive";
@@ -201,5 +202,19 @@ describe("energy plan card", () => {
       solarLow: 0.5,
       solarHigh: 2.2,
     });
+  });
+
+  test("solar shading details stay collapsed and unloaded until opened", async () => {
+    const wrapper = shallowMount(EnergyPlanCard, {
+      props: { insights: livePlanEvening.optimizerInsights },
+      global,
+    });
+    const details = wrapper.get('[data-testid="energy-solar-shading"]');
+    expect(details.attributes("open")).toBeUndefined();
+    expect(details.text()).toContain("forecast.energy.shading.title");
+    expect(wrapper.findComponent(SolarShadingDetails).exists()).toBe(false);
+    (details.element as HTMLDetailsElement).open = true;
+    await details.trigger("toggle");
+    expect(wrapper.findComponent(SolarShadingDetails).exists()).toBe(true);
   });
 });

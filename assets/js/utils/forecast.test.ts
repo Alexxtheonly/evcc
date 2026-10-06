@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vite-plus/test";
-import { expandForecast, findLowestSumSlotIndex, isStaticTariff } from "./forecast";
+import {
+  adjustedSolar,
+  expandForecast,
+  findLowestSumSlotIndex,
+  isStaticTariff,
+  solarScaleFactor,
+} from "./forecast";
 
 describe("expandForecast", () => {
   test("expands slots to milliseconds", () => {
@@ -106,5 +112,48 @@ describe("isStaticTariff", () => {
       { start: 1735691400000, end: 1735692300000, value: 0.25 },
     ];
     expect(isStaticTariff(slots)).toBe(false);
+  });
+});
+
+describe("solar shading correction", () => {
+  const raw = {
+    scale: 0.87,
+    today: { energy: 10000, complete: true },
+    tomorrow: { energy: 20000, complete: true },
+    timeseries: [
+      { ts: 1000, val: 2000 },
+      { ts: 2000, val: 4000 },
+    ],
+  };
+  const corrected = {
+    today: { energy: 6000, complete: true },
+    tomorrow: { energy: 14000, complete: true },
+    timeseries: [
+      { ts: 1000, val: 1800 },
+      { ts: 2000, val: 1200 },
+    ],
+  };
+
+  test("adjusted forecast uses the per-slot correction instead of the daily scale", () => {
+    const res = adjustedSolar({ ...raw, corrected });
+    expect(res?.today?.energy).toBe(6000);
+    expect(res?.tomorrow?.energy).toBe(14000);
+    expect(res?.timeseries).toEqual(corrected.timeseries);
+    expect(res?.scale).toBeCloseTo(10000 / 6000);
+    expect(res).not.toHaveProperty("corrected");
+    expect(solarScaleFactor({ ...raw, corrected })).toBeCloseTo(0.6);
+  });
+
+  test("without a correction the daily scale is unchanged", () => {
+    expect(solarScaleFactor(raw)).toBe(0.87);
+    expect(adjustedSolar(raw)?.today?.energy).toBeCloseTo(8700);
+  });
+
+  test("expands the corrected series like the raw one", () => {
+    const res = expandForecast({
+      solar: { timeseries: [[1, 2]], corrected: { timeseries: [[1, 1]] } },
+    });
+    expect(res.solar?.corrected?.timeseries).toEqual([{ ts: 1000, val: 1 }]);
+    expect(res.solar?.timeseries).toEqual([{ ts: 1000, val: 2 }]);
   });
 });

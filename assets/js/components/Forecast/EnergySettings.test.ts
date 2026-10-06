@@ -347,3 +347,32 @@ test("focus returns to the invoker only after the modal has finished closing", a
     invoker.remove();
   }
 });
+
+test("solar shading toggle is off by default and saves both directions", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  vi.mocked(api.put).mockResolvedValue({});
+  const wrapper = mountSettings();
+  await open(wrapper);
+  const toggle = wrapper.get("#energy-solarShading");
+  expect((toggle.element as HTMLInputElement).checked).toBe(false);
+  expect(wrapper.text()).toContain("forecast.energy.solarShadingHint");
+  await toggle.setValue(true);
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(
+    "config/energyintelligence",
+    expect.objectContaining({ solarShading: true, robust: false })
+  );
+
+  vi.mocked(api.put).mockClear();
+  vi.mocked(api.get).mockResolvedValue({ data: { ...defaults(), solarShading: true } });
+  await open(wrapper);
+  expect((wrapper.get("#energy-solarShading").element as HTMLInputElement).checked).toBe(true);
+  await wrapper.get("#energy-solarShading").setValue(false);
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(
+    "config/energyintelligence",
+    expect.objectContaining({ solarShading: false })
+  );
+});

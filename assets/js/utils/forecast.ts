@@ -2,6 +2,7 @@ import type {
   Forecast,
   ForecastSlot,
   SolarDetails,
+  TimeseriesEntry,
   UiForecast,
   UiForecastSlot,
   UiTimeseriesEntry,
@@ -19,13 +20,18 @@ function expandSlots(slots?: ForecastSlot[]): UiForecastSlot[] | undefined {
   return slots?.map(([start, end, value]) => ({ start: start * 1000, end: end * 1000, value }));
 }
 
+function expandTimeseries(timeseries?: TimeseriesEntry[]): UiTimeseriesEntry[] | undefined {
+  return timeseries?.map(([ts, val]) => ({ ts: ts * 1000, val }));
+}
+
 function expandSolar(solar?: SolarDetails): UiSolarDetails | undefined {
   if (!solar) return undefined;
-  const { timeseries, ...rest } = solar;
-  return {
-    ...rest,
-    timeseries: timeseries?.map(([ts, val]) => ({ ts: ts * 1000, val })),
-  };
+  const { timeseries, corrected, ...rest } = solar;
+  const res: UiSolarDetails = { ...rest, timeseries: expandTimeseries(timeseries) };
+  if (corrected) {
+    res.corrected = { ...corrected, timeseries: expandTimeseries(corrected.timeseries) };
+  }
+  return res;
 }
 
 // The API publishes forecast slots as [start, end, value] and solar entries as
@@ -81,7 +87,28 @@ export function highestSlotIndexByDay(entries: UiTimeseriesEntry[], day: number 
   return entries.findIndex((entry) => entry.ts === highestEntry.ts);
 }
 
+// solarScaleFactor is the factor the adjusted forecast applies to today's
+// remaining yield: the learned sun-position correction while it is active,
+// else the daily scale.
+export function solarScaleFactor(solar?: UiSolarDetails): number | undefined {
+  const corrected = solar?.corrected?.today?.energy;
+  const raw = solar?.today?.energy;
+  if (corrected != null && raw) return corrected / raw;
+  return solar?.scale;
+}
+
 export function adjustedSolar(solar?: UiSolarDetails): UiSolarDetails | undefined {
+  if (solar?.corrected) {
+    const { corrected, ...raw } = solar;
+    const result = deepCopy(raw);
+    if (corrected.today) result.today = { ...corrected.today };
+    if (corrected.tomorrow) result.tomorrow = { ...corrected.tomorrow };
+    if (corrected.dayAfterTomorrow) result.dayAfterTomorrow = { ...corrected.dayAfterTomorrow };
+    if (corrected.timeseries) result.timeseries = corrected.timeseries.map((e) => ({ ...e }));
+    const factor = solarScaleFactor(solar);
+    result.scale = factor ? 1 / factor : 1; // invert to allow back-adjustment
+    return result;
+  }
   if (!solar?.scale) return solar;
 
   const { scale } = solar;

@@ -7,6 +7,7 @@ export interface EnergySettings {
   batteryEfficiency?: Record<string, { chargeEfficiency: number; dischargeEfficiency: number }>;
   settlementMode: "simulation" | "interval";
   settlementFrom?: string | null;
+  solarShading?: boolean;
 }
 
 export interface EnergyForecastSlot {

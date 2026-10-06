@@ -204,6 +204,14 @@
 			/>
 			<p class="small text-muted">{{ $t("forecast.energy.control.planNote") }}</p>
 		</details>
+		<details
+			class="plan-details"
+			data-testid="energy-solar-shading"
+			@toggle="shadingOpen = ($event.target as HTMLDetailsElement).open"
+		>
+			<summary>{{ $t("forecast.energy.shading.title") }}</summary>
+			<SolarShadingDetails v-if="shadingOpen" />
+		</details>
 		<details class="plan-details quality-details">
 			<summary>
 				{{ $t("forecast.energy.quality")
@@ -314,6 +322,7 @@ import Card from "../Helper/Card.vue";
 import EnergySettings from "./EnergySettings.vue";
 import EnergyPlanChart from "./EnergyPlanChart.vue";
 import BatteryControlStatus from "./BatteryControlStatus.vue";
+import SolarShadingDetails from "./SolarShadingDetails.vue";
 import formatter from "@/mixins/formatter";
 import { is12hFormat } from "@/units";
 import {
@@ -342,7 +351,13 @@ import {
 } from "@/types/evcc";
 
 export default defineComponent({
-	components: { Card, EnergySettings, EnergyPlanChart, BatteryControlStatus },
+	components: {
+		Card,
+		EnergySettings,
+		EnergyPlanChart,
+		BatteryControlStatus,
+		SolarShadingDetails,
+	},
 	emits: ["settingsClosed"],
 	mixins: [formatter],
 	props: {
@@ -370,6 +385,7 @@ export default defineComponent({
 			historyError: false,
 			historySeq: 0,
 			historyTimer: 0,
+			shadingOpen: false,
 		};
 	},
 	computed: {

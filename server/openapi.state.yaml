@@ -488,6 +488,24 @@ components:
           type: number
       required:
         - power
+    CorrectedSolar:
+      description: Solar production forecast corrected by sun position.
+      type: object
+      properties:
+        today:
+          $ref: "#/components/schemas/EnergyByDay"
+          description: Expected production today.
+        tomorrow:
+          $ref: "#/components/schemas/EnergyByDay"
+          description: Expected production tomorrow.
+        dayAfterTomorrow:
+          $ref: "#/components/schemas/EnergyByDay"
+          description: Expected production the day after tomorrow.
+        timeseries:
+          description: Expected production power over time.
+          type: array
+          items:
+            $ref: "#/components/schemas/TimeseriesEntry"
     Currency:
       description: Currency in ISO 4217 format.
       type: string
@@ -843,6 +861,8 @@ components:
         settlementFrom:
           type: string
           nullable: true
+        solarShading:
+          type: boolean
       required:
         - robust
         - arrivals
@@ -1937,6 +1957,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TimeseriesEntry"
+        corrected:
+          $ref: "#/components/schemas/CorrectedSolar"
+          description: The forecast with the learned solar shading correction applied. Present only while that correction is active.
     Sponsor:
       description: Sponsorship status.
       type: object

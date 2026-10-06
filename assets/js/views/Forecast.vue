@@ -159,7 +159,7 @@ import formatter from "@/mixins/formatter";
 import api from "@/api";
 import settings from "@/settings";
 import store from "../store";
-import { adjustedSolar, ForecastType, isStaticTariff } from "@/utils/forecast";
+import { adjustedSolar, ForecastType, isStaticTariff, solarScaleFactor } from "@/utils/forecast";
 import vehicleList from "@/utils/vehicleList";
 import { deviceColorMap } from "@/colors";
 
@@ -297,7 +297,7 @@ export default defineComponent({
 				: this.forecast.solar;
 		},
 		solarAdjustPercent(): string {
-			const scale = this.forecast.solar?.scale || 1;
+			const scale = solarScaleFactor(this.forecast.solar) || 1;
 			const percentDiff = scale * 100 - 100;
 			return this.fmtPercentage(percentDiff, 0, true);
 		},

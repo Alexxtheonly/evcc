@@ -3,7 +3,7 @@ import colors from "@/colors";
 import { attachTouchTooltipGate } from "@/utils/swipe";
 import escapeHtml from "@/utils/escapeHtml";
 import type { UiForecastSlot } from "@/types/evcc";
-import { BarChart, LineChart } from "echarts/charts";
+import { BarChart, HeatmapChart, LineChart } from "echarts/charts";
 import {
   GridComponent,
   TooltipComponent,
@@ -17,6 +17,7 @@ import { SVGRenderer } from "echarts/renderers";
 
 echarts.use([
   BarChart,
+  HeatmapChart,
   LineChart,
   GridComponent,
   TooltipComponent,

@@ -282,6 +282,11 @@ export default defineComponent({
 				label: "forecast.energy.learnedEfficiency",
 				hint: "forecast.energy.learnedHint",
 			},
+			{
+				key: "solarShading" as const,
+				label: "forecast.energy.solarShading",
+				hint: "forecast.energy.solarShadingHint",
+			},
 		],
 	}),
 	watch: {

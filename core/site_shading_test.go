@@ -1,7 +1,10 @@
 package core
 
 import (
+	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -217,4 +220,37 @@ func TestSolarShadingCachedPerDay(t *testing.T) {
 	_, _, again, err := site.solarShadingMap()
 	require.NoError(t, err, "same day: the learned map is reused, not recomputed")
 	assert.Equal(t, first, again)
+}
+
+// TestSolarShadingFromDatabase writes the status a real database copy produces
+// (for review and UI fixtures). Skipped unless EVCC_SHADING_DB names a database
+// file and EVCC_SHADING_OUT the JSON output; the database is copied first.
+func TestSolarShadingFromDatabase(t *testing.T) {
+	src, out := os.Getenv("EVCC_SHADING_DB"), os.Getenv("EVCC_SHADING_OUT")
+	if src == "" || out == "" {
+		t.Skip("EVCC_SHADING_DB/EVCC_SHADING_OUT not set")
+	}
+	b, err := os.ReadFile(src)
+	require.NoError(t, err)
+	dst := filepath.Join(t.TempDir(), "evcc.db")
+	require.NoError(t, os.WriteFile(dst, b, 0o600))
+	require.NoError(t, db.NewInstance("sqlite", dst))
+	t.Cleanup(func() { _ = db.Close() })
+
+	var other string
+	require.NoError(t, db.Instance.Raw(`SELECT value FROM configs WHERE class = 4 AND value LIKE '%forecast-solar%'`).Scan(&other).Error)
+	var conf map[string]any
+	require.NoError(t, json.Unmarshal([]byte(other), &conf))
+	loc, ok := tariff.LocationFromConfig(conf)
+	require.True(t, ok)
+
+	site := NewSite()
+	site.tariffs = &tariff.Tariffs{SolarLocations: []*tariff.Location{&loc}}
+	st := site.SolarShading()
+	require.True(t, st.Available, st.Reason)
+
+	res, err := json.MarshalIndent(st, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(out, res, 0o600))
+	t.Logf("location %+v, %d days, %d slots, %d bins", loc, st.Days, st.Samples, len(st.Bins))
 }

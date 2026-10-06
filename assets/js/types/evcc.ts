@@ -1337,6 +1337,20 @@ export interface SolarDetails {
   dayAfterTomorrow?: EnergyByDay;
   /** Expected production power over time. */
   timeseries?: TimeseriesEntry[];
+  /** The forecast with the learned solar shading correction applied. Present only while that correction is active. */
+  corrected?: CorrectedSolar;
+}
+
+/** Solar production forecast corrected by sun position. */
+export interface CorrectedSolar {
+  /** Expected production today. */
+  today?: EnergyByDay;
+  /** Expected production tomorrow. */
+  tomorrow?: EnergyByDay;
+  /** Expected production the day after tomorrow. */
+  dayAfterTomorrow?: EnergyByDay;
+  /** Expected production power over time. */
+  timeseries?: TimeseriesEntry[];
 }
 
 /** Price, CO₂ and solar production forecasts. */
@@ -1369,8 +1383,13 @@ export interface UiForecastSlot {
   value: number;
 }
 
-export interface UiSolarDetails extends Omit<SolarDetails, "timeseries"> {
+export interface UiCorrectedSolar extends Omit<CorrectedSolar, "timeseries"> {
   timeseries?: UiTimeseriesEntry[];
+}
+
+export interface UiSolarDetails extends Omit<SolarDetails, "timeseries" | "corrected"> {
+  timeseries?: UiTimeseriesEntry[];
+  corrected?: UiCorrectedSolar;
 }
 
 export interface UiForecast {

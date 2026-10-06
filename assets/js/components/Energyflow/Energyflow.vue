@@ -321,6 +321,7 @@ import Entry from "./Entry.vue";
 import formatter, { POWER_UNIT } from "@/mixins/formatter";
 import AnimatedNumber from "../Helper/AnimatedNumber.vue";
 import settings from "@/settings";
+import { solarScaleFactor } from "@/utils/forecast";
 import collector from "@/mixins/collector.js";
 import { defineComponent, type PropType } from "vue";
 import {
@@ -527,7 +528,8 @@ export default defineComponent({
 			if (!this.forecast?.solar) {
 				return undefined;
 			}
-			const { today, scale } = this.forecast.solar || {};
+			const { today } = this.forecast.solar || {};
+			const scale = solarScaleFactor(this.forecast.solar);
 			const factor = this.experimental && this.solarAdjusted && scale ? scale : 1;
 			const energy = today?.energy || 0;
 			return energy * factor;
