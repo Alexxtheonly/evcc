@@ -101,12 +101,7 @@ func (site *Site) energyForecast(req optimizer.OptimizationInput, details reques
 	issued := time.Now()
 	archive := make([]metrics.HomeForecastSlot, 0, len(details.Timestamps))
 	for i, start := range details.Timestamps {
-		raw := site.energyProfile.Rates[i]
-		fraction := float64(req.TimeSeries.Dt[i]) / tariff.SlotDuration.Seconds()
-		base := site.energyHome[i] * fraction
-		shift := base - raw.Base*fraction
-		low := max(0, min(base, raw.Low*fraction+shift))
-		high := max(base, raw.High*fraction+shift)
+		low, base, high := homeForecastBand(site.energyProfile.Rates[i], float64(req.TimeSeries.Dt[i])/tariff.SlotDuration.Seconds(), site.energyHome[i])
 		solar := float64(req.TimeSeries.Ft[i])
 		solarLow, solarHigh := solar, solar
 		if solar > 0 {
@@ -129,7 +124,62 @@ func (site *Site) energyForecast(req optimizer.OptimizationInput, details reques
 			archive = append(archive, metrics.HomeForecastSlot{Start: start, Low: low, Base: base, High: high})
 		}
 	}
-	return metrics.ArchiveHomeForecast(issued, archive)
+	if err := metrics.ArchiveHomeForecast(issued, archive); err != nil {
+		return err
+	}
+	site.archiveHeatingDegreeShadow(req, details, issued)
+	return nil
+}
+
+// homeForecastBand returns a slot's household low/base/high (Wh) for the
+// corrected energy home (Wh per full slot): the profile's band shifted by the
+// correction, scaled to the slot's fraction.
+func homeForecastBand(raw metrics.HomeForecastSlot, fraction, home float64) (low, base, high float64) {
+	base = home * fraction
+	shift := base - raw.Base*fraction
+	low = max(0, min(base, raw.Low*fraction+shift))
+	high = max(base, raw.High*fraction+shift)
+	return low, base, high
+}
+
+// archiveHeatingDegreeShadow archives the heating-degree variants not in use
+// at the lead times, and in each snapshot period the whole horizon of "auto"
+// and "on" (ADR-015 shadow). Failures are logged only: the shadow never
+// affects planning.
+func (site *Site) archiveHeatingDegreeShadow(req optimizer.OptimizationInput, details requestDetails, issued time.Time) {
+	slots := func(home []float64) []metrics.HomeForecastSlot {
+		res := make([]metrics.HomeForecastSlot, 0, len(details.Timestamps))
+		for i, start := range details.Timestamps {
+			if i == 0 || i >= len(home) {
+				continue
+			}
+			low, base, high := homeForecastBand(site.energyProfile.Rates[i], float64(req.TimeSeries.Dt[i])/tariff.SlotDuration.Seconds(), home[i])
+			res = append(res, metrics.HomeForecastSlot{Start: start, Low: low, Base: base, High: high})
+		}
+		return res
+	}
+
+	mode := heatingDegreeMode(site.energyInsights.Settings.HeatingDegree)
+	n := len(details.Timestamps)
+	snapshot := n > 0 && site.heatingDegreeSnapshotDue(issued, details.Timestamps[n-1].Add(time.Duration(req.TimeSeries.Dt[n-1])*time.Second))
+
+	ok := true
+	for _, v := range []string{heatingDegreeAuto, heatingDegreeOn} {
+		home, shadow := site.energyHomeShadow[v]
+		if v == mode {
+			home = site.energyHome
+		}
+		if (!shadow && !snapshot) || len(home) != n {
+			continue
+		}
+		if err := metrics.ArchiveHomeForecastShadow(issued, v, slots(home), snapshot); err != nil {
+			site.log.ERROR.Printf("heating degree shadow (%s): %v", v, err)
+			ok = false
+		}
+	}
+	if snapshot && ok {
+		site.heatingDegreeSnapshot, _, _, _, _ = heatingDegreeSnapshotPeriod(issued)
+	}
 }
 
 func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details requestDetails) error {

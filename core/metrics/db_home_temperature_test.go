@@ -36,6 +36,7 @@ func TestQueryHomeTemperatureSamples(t *testing.T) {
 	require.Len(t, rows, 1, "only the paired slot, the unpaired one is dropped")
 	require.InDelta(t, 1200.0, rows[0].Energy, 1e-9, "kWh converted to Wh")
 	require.InDelta(t, -2.5, rows[0].Temperature, 1e-9)
+	require.Equal(t, pairedSlot.Unix(), rows[0].Ts, "slot start, for the daily aggregation")
 }
 
 // TestQueryHomeTemperatureSamplesExcludesTaintedRows verifies #27: a recovered row (a

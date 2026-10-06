@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/evcc-io/evcc/core/metrics"
@@ -21,7 +22,8 @@ type EnergyIntelligenceSettings struct {
 	BatteryEfficiency    map[string]EnergyEfficiencySetting `json:"batteryEfficiency"`
 	SettlementMode       string                             `json:"settlementMode"`
 	SettlementFrom       *time.Time                         `json:"settlementFrom"`
-	SolarShading         bool                               `json:"solarShading"` // ADR-016 sun-position correction replaces the daily solar scale
+	SolarShading         bool                               `json:"solarShading"`  // ADR-016 sun-position correction replaces the daily solar scale
+	HeatingDegree        string                             `json:"heatingDegree"` // household demand temperature correction: auto (default), on or off
 }
 
 type EnergyEfficiencySetting struct {
@@ -32,6 +34,9 @@ type EnergyEfficiencySetting struct {
 func (cfg EnergyIntelligenceSettings) validate() error {
 	if cfg.SettlementMode != "simulation" && cfg.SettlementMode != "interval" {
 		return errors.New("settlementMode must be simulation or interval")
+	}
+	if !slices.Contains([]string{"", heatingDegreeAuto, heatingDegreeOn, heatingDegreeOff}, cfg.HeatingDegree) {
+		return errors.New("heatingDegree must be auto, on or off")
 	}
 	if len(cfg.BatteryWear) > 64 {
 		return errors.New("too many battery wear entries")
@@ -57,15 +62,17 @@ func (cfg EnergyIntelligenceSettings) validate() error {
 }
 
 func (site *Site) GetEnergyIntelligenceSettings() EnergyIntelligenceSettings {
+	defaults := EnergyIntelligenceSettings{SettlementMode: "simulation", BatteryWear: map[string]float64{}, HeatingDegree: heatingDegreeAuto}
 	cfg := EnergyIntelligenceSettings{SettlementMode: "simulation", BatteryWear: map[string]float64{}}
 	if err := settings.Json(energyIntelligenceKey, &cfg); err != nil && !errors.Is(err, settings.ErrNotFound) {
 		site.log.ERROR.Printf("energy intelligence settings: %v", err)
-		return EnergyIntelligenceSettings{SettlementMode: "simulation", BatteryWear: map[string]float64{}}
+		return defaults
 	}
 	if err := cfg.validate(); err != nil {
 		site.log.ERROR.Printf("energy intelligence settings: %v", err)
-		return EnergyIntelligenceSettings{SettlementMode: "simulation", BatteryWear: map[string]float64{}}
+		return defaults
 	}
+	cfg.HeatingDegree = heatingDegreeMode(cfg.HeatingDegree) // saved before the setting existed
 	return cfg
 }
 

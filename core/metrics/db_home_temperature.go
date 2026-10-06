@@ -10,6 +10,7 @@ import (
 // recorded for the same slot, for fitting a heating-degree correction to the home load
 // profile (see core.fitHeatingDegree).
 type TemperatureSample struct {
+	Ts          int64 // slot start, unix seconds
 	Energy      float64
 	Temperature float64
 }
@@ -36,7 +37,7 @@ func QueryHomeTemperatureSamples(from time.Time) ([]TemperatureSample, error) {
 	var res []TemperatureSample
 
 	err := db.Instance.Table("meters h").
-		Select(`COALESCE(h.energy, 0) * 1000 AS energy, t.soc_temp AS temperature`). // kWh -> Wh
+		Select(`h.ts AS ts, COALESCE(h.energy, 0) * 1000 AS energy, t.soc_temp AS temperature`). // kWh -> Wh
 		Joins(`JOIN entities eh ON eh.id = h.meter AND eh."group" = ?`, Home).
 		Joins(`JOIN meters t ON t.ts = h.ts`).
 		Joins(`JOIN entities et ON et.id = t.meter AND et."group" = ?`, Temperature).

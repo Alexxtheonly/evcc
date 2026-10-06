@@ -64,6 +64,19 @@ func fitHeatingDegree(samples []metrics.TemperatureSample) (heatingDegreeFit, bo
 		return heatingDegreeFit{}, false
 	}
 
+	fit, r, ok := regressHeatingDegree(samples)
+	if !ok || r < heatingDegreeMinCorrelation {
+		return heatingDegreeFit{}, false
+	}
+
+	return fit, true
+}
+
+// regressHeatingDegree is the ordinary least squares fit of slot energy on slot
+// heating-degree behind fitHeatingDegree, without its gate: the slope, the mean
+// heating-degree and Pearson's r. ok is false when either side has no variance
+// (a mild window, or a constant load), where neither r nor a slope exists.
+func regressHeatingDegree(samples []metrics.TemperatureSample) (heatingDegreeFit, float64, bool) {
 	var sumX, sumY float64
 	for _, s := range samples {
 		sumX += heatingDegree(s.Temperature)
@@ -83,15 +96,11 @@ func fitHeatingDegree(samples []metrics.TemperatureSample) (heatingDegreeFit, bo
 
 	// no variance in heating-degree (a mild window) or in load: nothing to fit either way
 	if sxx == 0 || syy == 0 {
-		return heatingDegreeFit{}, false
+		return heatingDegreeFit{}, 0, false
 	}
 
 	r := sxy / math.Sqrt(sxx*syy)
-	if r < heatingDegreeMinCorrelation {
-		return heatingDegreeFit{}, false
-	}
-
-	return heatingDegreeFit{slope: sxy / sxx, meanHDD: meanX}, true
+	return heatingDegreeFit{slope: sxy / sxx, meanHDD: meanX}, r, true
 }
 
 // heatingDegreeResult is what solarScaleCached-style caching wraps: the fit plus whether it
@@ -119,6 +128,8 @@ func (site *Site) queryHeatingDegreeFit() (heatingDegreeResult, error) {
 // back completely unchanged: no tariff configured, no cached fit yet, or a fit that failed
 // the correlation gate are all handled identically, on purpose - this is the "must not
 // degrade the profile" requirement, not three different code paths to keep in sync.
+//
+// This is the heatingDegree "auto" mode; testdata/heating_degree_golden.txt pins its output.
 func (site *Site) applyHeatingDegree(profile []float64) []float64 {
 	tempTariff := site.GetTariff(api.TariffUsageTemperature)
 	if tempTariff == nil {
@@ -140,14 +151,21 @@ func (site *Site) applyHeatingDegree(profile []float64) []float64 {
 	}
 
 	start := time.Now().Truncate(tariff.SlotDuration)
-	res := slices.Clone(profile)
+	return addHeatingDegree(profile, heatingDegreeCorrections(profile, start, rates, result.fit))
+}
+
+// heatingDegreeCorrections returns the correction (kWh) per profile slot for the forecast
+// temperature of that slot, NaN where the forecast has no value.
+func heatingDegreeCorrections(profile []float64, start time.Time, rates api.Rates, fit heatingDegreeFit) []float64 {
+	res := make([]float64, len(profile))
 	for i := range res {
 		rate, err := rates.At(start.Add(time.Duration(i) * tariff.SlotDuration))
 		if err != nil {
-			continue // no forecast for this slot: leave the historical average in place
+			res[i] = math.NaN() // no forecast for this slot: leave the historical average in place
+			continue
 		}
 
-		correction := result.fit.adjust(rate.Value) / 1e3 // Wh -> kWh
+		correction := fit.adjust(rate.Value) / 1e3 // Wh -> kWh
 
 		// cap the correction relative to the slot's own base value: an OLS slope driven by a
 		// thin or skewed sample set, applied to a forecast temperature far outside the fit
@@ -155,10 +173,19 @@ func (site *Site) applyHeatingDegree(profile []float64) []float64 {
 		// average. Bounding it to +/-100% of the base keeps the corrected value within
 		// [0, 2x base] - generous enough for a real heating effect, not enough for the fit to
 		// run away.
-		correction = min(max(correction, -res[i]), res[i])
-
-		res[i] = max(0, res[i]+correction)
+		res[i] = min(max(correction, -profile[i]), profile[i])
 	}
+	return res
+}
 
+// addHeatingDegree returns profile plus corrections, never below zero. Slots without a
+// correction (NaN) keep their profile value as it is.
+func addHeatingDegree(profile, corrections []float64) []float64 {
+	res := slices.Clone(profile)
+	for i, c := range corrections {
+		if !math.IsNaN(c) {
+			res[i] = max(0, res[i]+c)
+		}
+	}
 	return res
 }

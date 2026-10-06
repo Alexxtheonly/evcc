@@ -167,7 +167,8 @@ type Site struct {
 	energyInsights             optimizerInsights
 	energyProfile              *metrics.HomeForecastResult
 	energyHome                 []float64
-	energySolarSpread          []solarSpread // per request slot while solar shading is active, nil otherwise
+	energyHomeShadow           map[string][]float64 // heating-degree variants not in use, Wh per request slot like energyHome
+	energySolarSpread          []solarSpread        // per request slot while solar shading is active, nil otherwise
 	solarShading               solarShadingCache
 	energyCapabilitiesUntil    time.Time
 	energyCapabilitiesURI      string
@@ -180,9 +181,13 @@ type Site struct {
 	energyEfficiencyRefresh    bool
 	energyEfficiencyCandidates []metrics.BatteryEfficiencyCandidate
 
-	solarScaleCached       func() (float64, error)             // util.Cached wrapper around querySolarScale
-	solarScaleByLeadCached func() (map[int]float64, error)     // util.Cached wrapper around querySolarScaleByLead
-	heatingDegreeCached    func() (heatingDegreeResult, error) // util.Cached wrapper around queryHeatingDegreeFit
+	solarScaleCached        func() (float64, error)                // util.Cached wrapper around querySolarScale
+	solarScaleByLeadCached  func() (map[int]float64, error)        // util.Cached wrapper around querySolarScaleByLead
+	heatingDegreeCached     func() (heatingDegreeResult, error)    // util.Cached wrapper around queryHeatingDegreeFit
+	heatingDegreeDaily      func() (*heatingDegreeAnalysis, error) // heatingDegreeDailyAnalysis, the "on" gate
+	heatingDegreeDailyState heatingDegreeDailyCache
+	heatingDegreeLast       heatingDegreeLastState
+	heatingDegreeSnapshot   time.Time // start of the last shadow snapshot period taken
 }
 
 // siteState is the site's cached measurement state, updated once per meter cycle
@@ -452,6 +457,7 @@ func NewSite() *Site {
 	site.solarScaleByLeadCached = util.Cached(site.querySolarScaleByLead, 24*time.Hour)
 
 	site.heatingDegreeCached = util.Cached(site.queryHeatingDegreeFit, 24*time.Hour)
+	site.heatingDegreeDaily = site.heatingDegreeDailyAnalysis
 
 	return site
 }

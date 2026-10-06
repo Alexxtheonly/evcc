@@ -149,7 +149,7 @@ func SetupSchema() error {
 		return err
 	}
 
-	return db.Instance.AutoMigrate(new(optimizerRun), new(OptimizerSnapshot), new(homeForecastSample))
+	return db.Instance.AutoMigrate(new(optimizerRun), new(OptimizerSnapshot), new(homeForecastSample), new(homeForecastShadowSample))
 }
 
 // deleteRange removes the rows of T whose ts falls in [from,to). Both bounds are

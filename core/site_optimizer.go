@@ -1297,6 +1297,9 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		orig := slices.Clone(gt[:min(optimizerDecaySlots, len(gt))])
 		blendMeasured(gt, v, optimizerDecaySlots)
 		site.log.DEBUG.Printf("optimizer: home slots updated with measured %.0fWh: %.0f -> %.0f", v, orig, gt[:len(orig)])
+		for _, shadow := range site.energyHomeShadow {
+			blendMeasured(shadow, v, optimizerDecaySlots)
+		}
 	}
 	site.energyHome = slices.Clone(gt)
 
@@ -2079,6 +2082,7 @@ func (site *Site) homeProfile(minLen int) ([]float64, error) {
 	start := time.Now().Truncate(tariff.SlotDuration)
 	profile, err := metrics.HomeForecast(start, start.Add(time.Duration(minLen)*tariff.SlotDuration))
 	site.energyProfile = profile
+	site.energyHomeShadow = make(map[string][]float64)
 	if profile != nil {
 		site.energyInsights.Profile = &profile.Quality
 		if profile.Quality.Source == "cached" || profile.Quality.InterpolatedBuckets > 0 || profile.Quality.PooledBuckets > 0 {
@@ -2093,12 +2097,16 @@ func (site *Site) homeProfile(minLen int) ([]float64, error) {
 		res[i] = slot.Base / 1e3
 	}
 
-	res = site.applyHeatingDegree(res)
+	res, shadow := site.heatingDegreeVariants(site.energyInsights.Settings.HeatingDegree, res)
 
 	// convert to Wh
-	return lo.Map(res, func(v float64, i int) float64 {
+	toWh := func(v float64, i int) float64 {
 		return v * 1e3
-	}), nil
+	}
+	for v, profile := range shadow {
+		site.energyHomeShadow[v] = lo.Map(profile, toWh)
+	}
+	return lo.Map(res, toWh), nil
 }
 
 // profileSlotsFromNow strips away any slots before "now".

@@ -140,11 +140,16 @@ func DeleteOptimizerSnapshots(from, to time.Time) (int64, error) {
 	return int64(len(ids)), err
 }
 
-// DeleteHomeForecastSamples removes predictions targeting the selected period.
+// DeleteHomeForecastSamples removes predictions targeting the selected period,
+// the shadow forecasts included, and returns the number of rows removed.
 func DeleteHomeForecastSamples(from, to time.Time) (int64, error) {
 	if from.IsZero() || to.IsZero() || !to.After(from) {
 		return 0, errors.New("invalid forecast deletion interval")
 	}
 	r := db.Instance.Where("slot >= ? AND slot < ?", from.Unix(), to.Unix()).Delete(new(homeForecastSample))
-	return r.RowsAffected, r.Error
+	if r.Error != nil {
+		return r.RowsAffected, r.Error
+	}
+	shadow, err := deleteHomeForecastShadowSamples(from, to)
+	return r.RowsAffected + shadow, err
 }
