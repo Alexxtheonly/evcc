@@ -78,21 +78,25 @@ const history: PlanHistory = {
       gridImportWh: 1700,
       gridChargeWh: 1500,
       gridCost: 0.425,
+      // the run made 32 s into the slot governs it and planned only its remainder
       planned: {
         snapshotId: 7,
-        snapshot: "2026-10-05T09:45:32Z",
-        gridChargeMinWh: 0,
-        gridChargeMaxWh: 0,
+        snapshot: "2026-10-05T10:00:32Z",
+        start: "2026-10-05T10:00:32Z",
+        end: "2026-10-05T10:15:00Z",
+        gridChargeMinWh: 1450,
+        gridChargeMaxWh: 1450,
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 10,
+            chargeWh: 1450,
             dischargeWh: 0,
-            soc: 20,
+            soc: 34,
           },
         ],
+        decision: { action: "charge", reason: "minimumRegret" },
       },
     }),
     measured("2026-10-05T10:15:00Z", { flagged: true, gridChargeWh: 19 }),
@@ -102,7 +106,14 @@ const history: PlanHistory = {
       gridChargeWh: null,
       gridCost: null,
     }),
-    measured("2026-10-05T10:45:00Z"),
+    measured("2026-10-05T10:45:00Z", {
+      planned: {
+        snapshotId: 9,
+        snapshot: "2026-10-05T10:45:32Z",
+        devices: [],
+        decision: { action: "hold", sequence: ["hold", "charge"] },
+      },
+    }),
   ],
   devices: [
     {
@@ -275,6 +286,12 @@ describe("measured history window", () => {
     expect(new Date(blocks[0]!.start).toISOString()).toBe("2026-10-05T11:30:00.000Z");
     expect(new Date(blocks.at(-1)!.end).toISOString()).toBe("2026-10-05T14:15:00.000Z");
     expect(blocks.every((block) => block.definite)).toBe(true);
+    // the governing decision matches what was measured: charge while grid-charging
+    const decision = (time: string) =>
+      view.slots.find((slot) => slot.start === `2026-10-05T${time}:00+02:00`)!.planned?.decision;
+    expect(decision("13:45")).toEqual({ action: "charge", reason: "minimumRegret" });
+    expect(decision("14:00")?.sequence).toEqual(["hold", "charge"]);
+    expect(decision("16:15")?.action).toBe("normal");
     const merged = blocks.reduce((sum, block) => sum + block.minWh, 0);
     expect(merged).toBeGreaterThan(9000);
     const { option } = buildPlanChartOption({
@@ -308,15 +325,29 @@ describe("measured slot popup", () => {
       socEnd: 35,
       state: "charging",
       powerKW: 6,
-      gridWh: 1500,
-      planned: { state: "idle", soc: 20 },
+      planned: { state: "charging", soc: 34, socAt: "2026-10-05T10:15:00Z" },
     });
+    // the grid share is stated once, on the grid-charging row, not again per battery
+    expect(home).not.toHaveProperty("gridWh");
+    // planned power is averaged over the planned remainder, not the whole slot
+    expect(home!.planned!.powerKW).toBeCloseTo(1.45 / (868 / 3600));
     expect(heatPump).toMatchObject({ key: "loadpoint:2", title: "Heat pump", state: "charging" });
     expect(heatPump!.soc).toBeUndefined();
     expect(details.planned).toEqual({
-      snapshot: "2026-10-05T09:45:32Z",
-      grid: { kind: "none" },
+      snapshot: "2026-10-05T10:00:32Z",
+      grid: { kind: "definite", minWh: 1450, maxWh: 1450 },
+      decision: { action: "charge" },
     });
+  });
+
+  test("a changed decision is listed in order; a run without grid allocation shows no grid row", () => {
+    const details = pastSlotDetails(3, view, [battery], visibility)!;
+    expect(details.planned).toEqual({
+      snapshot: "2026-10-05T10:45:32Z",
+      grid: undefined,
+      decision: { action: "hold", sequence: ["hold", "charge"] },
+    });
+    expect(details.devices[0]!.planned).toBeUndefined();
   });
 
   test("without a covering snapshot the planned section is omitted, flagged rows say so", () => {

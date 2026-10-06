@@ -1395,7 +1395,7 @@
         "chipAutomatic": "automatic"
       },
       "plan": {
-        "layersForecast": "Forecast",
+        "layersForecast": "Layers",
         "layersPower": "Charge/discharge power",
         "layer": {
           "price": "Grid price",
@@ -1462,7 +1462,12 @@
           "fromGrid": "{energy} from the grid",
           "level": "{start} → {end}",
           "noData": "No data",
-          "plannedAt": "Plan in force at the start (as of {time})"
+          "plannedAt": "Plan in force at the start (as of {time})",
+          "decision": "evcc decision",
+          "decisionThen": "then {modes}",
+          "decisionNote": "What evcc decided, not proof of what the battery did; the measured values above show that.",
+          "plannedLevel": "{planned} at {time} · measured {measured}",
+          "plannedLevelOnly": "{planned} at {time}"
         }
       }
     },

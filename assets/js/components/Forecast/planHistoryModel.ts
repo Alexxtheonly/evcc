@@ -120,9 +120,9 @@ export interface PastDeviceDetail {
   socEnd?: number;
   state: TransferState | "noData";
   powerKW?: number;
-  gridWh?: number;
   flagged: boolean;
-  planned?: { state: TransferState; powerKW?: number; soc?: number };
+  // planned soc is the level at `socAt`, the end of the governing run's entry
+  planned?: { state: TransferState; powerKW?: number; soc?: number; socAt: string };
 }
 
 export interface PastSlotDetails {
@@ -139,7 +139,12 @@ export interface PastSlotDetails {
   gridCost?: number;
   feedInRevenue?: number;
   devices: PastDeviceDetail[];
-  planned?: { snapshot: string; grid?: GridChargeState };
+  planned?: {
+    snapshot: string;
+    grid?: GridChargeState;
+    // what the controller decided, not proof of what was applied
+    decision?: { action: string; sequence?: string[] };
+  };
 }
 
 // The popup for a measured slot: what happened, and - when a snapshot covers the slot -
@@ -156,8 +161,15 @@ export function pastSlotDetails(
   const { layers } = visibility;
   const next = view.slots[index + 1];
   const contiguous = next && ms(next.start) === ms(slot.end);
-  const batteries = view.devices.filter((device) => device.kind === "battery");
   const planned = slot.planned;
+  // a run made inside the slot planned only its remainder
+  const entry = { start: planned?.start ?? slot.start, end: planned?.end ?? slot.end };
+  const plannedGrid = planned
+    ? gridChargeState({
+        gridChargeMinWh: planned.gridChargeMinWh,
+        gridChargeMaxWh: planned.gridChargeMaxWh,
+      })
+    : undefined;
   const planDevices = new Map(devices.map((device) => [device.key, device]));
 
   const shown = view.devices.filter((history) => {
@@ -205,14 +217,6 @@ export function pastSlotDetails(
         detail.state = transfer(point.chargeWh, discharge);
         if (detail.state !== "idle")
           detail.powerKW = kw(detail.state === "charging" ? point.chargeWh : discharge, slot);
-        // the site-level grid share belongs to a device only when there is one battery
-        if (
-          detail.state === "charging" &&
-          history.kind === "battery" &&
-          batteries.length === 1 &&
-          finite(slot.gridChargeWh)
-        )
-          detail.gridWh = slot.gridChargeWh;
       }
       const plan = planned?.devices.find((entry) => entry.key === history.key);
       if (plan) {
@@ -222,8 +226,9 @@ export function pastSlotDetails(
           powerKW:
             state === "idle"
               ? undefined
-              : kw(state === "charging" ? plan.chargeWh : plan.dischargeWh, slot),
+              : kw(state === "charging" ? plan.chargeWh : plan.dischargeWh, entry),
           soc: history.kind === "battery" && finite(plan.soc) ? plan.soc : undefined,
+          socAt: entry.end,
         };
       }
       return detail;
@@ -231,11 +236,12 @@ export function pastSlotDetails(
     planned: planned
       ? {
           snapshot: planned.snapshot,
-          grid: layers.grid
-            ? gridChargeState({
-                gridChargeMinWh: planned.gridChargeMinWh,
-                gridChargeMaxWh: planned.gridChargeMaxWh,
-              })
+          grid: layers.grid && plannedGrid?.kind !== "unavailable" ? plannedGrid : undefined,
+          decision: planned.decision
+            ? {
+                action: planned.decision.action,
+                ...(planned.decision.sequence ? { sequence: planned.decision.sequence } : {}),
+              }
             : undefined,
         }
       : undefined,

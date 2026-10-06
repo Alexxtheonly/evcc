@@ -159,6 +159,9 @@ export interface HistorySlot {
   planned?: {
     snapshotId: number;
     snapshot: string;
+    // bounds of the governing run's entry; partial when the run started inside the slot
+    start?: string;
+    end?: string;
     gridChargeMinWh?: number;
     gridChargeMaxWh?: number;
     devices: {
@@ -169,6 +172,8 @@ export interface HistorySlot {
       dischargeWh: number;
       soc?: number;
     }[];
+    // the controller's robust decision; sequence only when runs inside the slot changed it
+    decision?: { action: string; reason?: string; sequence?: string[] };
   };
 }
 

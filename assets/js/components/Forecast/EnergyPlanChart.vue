@@ -282,6 +282,29 @@
 								}}
 							</th>
 						</tr>
+						<tr v-if="pastDetails.planned.decision" data-testid="plan-tooltip-decision">
+							<th>{{ $t("forecast.energy.plan.history.decision") }}</th>
+							<td class="wrap">
+								{{ modeName(pastDetails.planned.decision.action) }}
+								<small
+									v-if="pastDetails.planned.decision.sequence"
+									class="d-block"
+									>{{
+										$t("forecast.energy.plan.history.decisionThen", {
+											modes: pastDetails.planned.decision.sequence
+												.slice(1)
+												.map(modeName)
+												.join(" → "),
+										})
+									}}</small
+								>
+							</td>
+						</tr>
+						<tr v-if="pastDetails.planned.decision">
+							<td colspan="2" class="wrap decision-note">
+								{{ $t("forecast.energy.plan.history.decisionNote") }}
+							</td>
+						</tr>
 						<tr v-if="pastDetails.planned.grid">
 							<th>{{ $t("forecast.energy.plan.layer.grid") }}</th>
 							<td class="wrap">{{ gridText(pastDetails.planned.grid) }}</td>
@@ -295,7 +318,7 @@
 								</th>
 								<td class="wrap">
 									<template v-if="device.planned.soc != null"
-										>{{ percent(device.planned.soc) }}
+										>{{ plannedLevel(device) }}
 									</template>
 									<small :class="{ 'd-block': device.planned.soc != null }">{{
 										plannedState(device.planned)
@@ -724,12 +747,31 @@ export default defineComponent({
 		pastDeviceState(device: PastDeviceDetail) {
 			if (device.state === "noData") return this.$t("forecast.energy.plan.history.noData");
 			if (device.state === "idle") return this.$t("forecast.energy.idle");
-			const state = this.$t(`forecast.energy.plan.state.${device.state}`, {
+			return this.$t(`forecast.energy.plan.state.${device.state}`, {
 				power: this.power(device.powerKW),
 			});
-			return device.gridWh != null && device.gridWh >= TRANSFER_MIN_WH
-				? `${state} · ${this.$t("forecast.energy.plan.history.fromGrid", { energy: this.kwh(device.gridWh) })}`
-				: state;
+		},
+		// planned and measured levels at the same instant: the end of the planned entry
+		plannedLevel(device: PastDeviceDetail) {
+			const planned = device.planned;
+			if (planned?.soc == null) return "";
+			const args = {
+				planned: this.percent(planned.soc),
+				time: this.timeFormat(planned.socAt, false),
+			};
+			return device.socEnd != null &&
+				Date.parse(planned.socAt) === Date.parse(this.pastDetails?.end ?? "")
+				? this.$t("forecast.energy.plan.history.plannedLevel", {
+						...args,
+						measured: this.percent(device.socEnd),
+					})
+				: this.$t("forecast.energy.plan.history.plannedLevelOnly", args);
+		},
+		modeName(action: string) {
+			const key = `forecast.optimizer.mode${action.charAt(0).toUpperCase()}${action.slice(1)}`;
+			return ["normal", "hold", "charge", "holdcharge"].includes(action)
+				? this.$t(key)
+				: action;
 		},
 		plannedState(planned: NonNullable<PastDeviceDetail["planned"]>) {
 			if (planned.state === "idle") return this.$t("forecast.energy.idle");
@@ -1043,6 +1085,11 @@ export default defineComponent({
 /* long measured/planned states wrap instead of widening the popup past its max width */
 .tooltip-table td.wrap {
 	white-space: normal;
+}
+.tooltip-table td.decision-note {
+	text-align: left;
+	font-size: 0.75rem;
+	color: var(--bs-secondary-color);
 }
 .tooltip-table th.planned-title {
 	white-space: normal;

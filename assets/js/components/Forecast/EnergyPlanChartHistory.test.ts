@@ -72,7 +72,9 @@ const history: PlanHistory = {
     measured(starts[0]!, starts[1]!, {
       planned: {
         snapshotId: 1,
-        snapshot: "2026-10-05T08:45:30Z",
+        snapshot: "2026-10-05T09:00:32Z",
+        start: "2026-10-05T09:00:32Z",
+        end: "2026-10-05T09:15:00Z",
         devices: [
           {
             key: battery.key,
@@ -83,6 +85,7 @@ const history: PlanHistory = {
             soc: 20,
           },
         ],
+        decision: { action: "charge", sequence: ["charge", "hold"] },
       },
     }),
     measured(starts[1]!, starts[2]!, { flagged: true }),
@@ -197,12 +200,24 @@ describe("energy plan chart with measured history", () => {
     expect(text).toContain("forecast.energy.plan.history.gridImport");
     expect(text).toContain("7.2 kW");
     expect(text).toContain('forecast.energy.plan.history.level{"start":"20 %","end":"26 %"}');
-    expect(text).toContain('forecast.energy.plan.history.fromGrid{"energy":"1.50 kWh"}');
+    // grid energy is stated once, on the grid-charging row, not again on the battery row
+    expect(
+      text.split('forecast.energy.plan.history.fromGrid{"energy":"1.50\u00a0kWh"}')
+    ).toHaveLength(2);
     expect(text).toContain("€0.38");
     expect(wrapper.find('[data-testid="plan-tooltip-planned"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="plan-tooltip-planned"]').text()).toContain(
-      "forecast.energy.idle"
+    const planned = wrapper.get('[data-testid="plan-tooltip-planned"]').text();
+    expect(planned).toContain("forecast.energy.idle");
+    expect(wrapper.get('[data-testid="plan-tooltip-decision"]').text()).toContain(
+      'forecast.optimizer.modeCharge forecast.energy.plan.history.decisionThen{"modes":"forecast.optimizer.modeHold"}'
     );
+    expect(planned).toContain("forecast.energy.plan.history.decisionNote");
+    // planned and measured levels compared at the same instant, the slot end
+    expect(planned).toMatch(
+      /forecast\.energy\.plan\.history\.plannedLevel\{"planned":"20\u00a0%","time":"[^"]+","measured":"26\u00a0%"\}/
+    );
+    // no grid allocation in the run: no "unavailable" grid row
+    expect(planned).not.toContain("forecast.energy.plan.layer.grid");
     // the next slot has no covering snapshot, and a flagged reading says so
     await wrap.trigger("pointermove", { pointerType: "mouse", clientX: 120, clientY: 300 });
     await wrapper.vm.$nextTick();

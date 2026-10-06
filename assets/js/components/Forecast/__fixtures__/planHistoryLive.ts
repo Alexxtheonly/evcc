@@ -1,6 +1,7 @@
 // Read-only from a copy of a live evcc database (GET /api/energyplan/history logic,
 // 2026-10-05 13:00-17:00, rounded to Wh): the afternoon the home battery grid-charged
-// from 15 % to 75 % at 0.21-0.29 EUR/kWh while the plan in force mostly kept it idle.
+// from 15 % to 75 % at 0.21-0.29 EUR/kWh. Each slot carries the run that governed it and
+// that run's control decision (charge 13:30-14:45 except 14:00 hold then charge).
 import type { PlanHistory } from "../energyIntelligence";
 
 export const planHistoryAfternoon: PlanHistory = {
@@ -24,18 +25,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.033,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3205,
-        snapshot: "2026-10-05T12:45:33+02:00",
+        snapshotId: 3206,
+        snapshot: "2026-10-05T13:00:32+02:00",
+        start: "2026-10-05T13:00:32+02:00",
+        end: "2026-10-05T13:15:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 123.065,
+            chargeWh: 0,
             dischargeWh: 0,
-            soc: 16.273,
+            soc: 15.7,
           },
         ],
+        decision: {
+          action: "hold",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -55,8 +62,10 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.114,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3206,
-        snapshot: "2026-10-05T13:00:32+02:00",
+        snapshotId: 3207,
+        snapshot: "2026-10-05T13:15:32+02:00",
+        start: "2026-10-05T13:15:32+02:00",
+        end: "2026-10-05T13:30:00+02:00",
         devices: [
           {
             key: "battery:db:11",
@@ -64,9 +73,13 @@ export const planHistoryAfternoon: PlanHistory = {
             kind: "battery",
             chargeWh: 0,
             dischargeWh: 0,
-            soc: 15.7,
+            soc: 15.6,
           },
         ],
+        decision: {
+          action: "hold",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -86,18 +99,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.425,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3207,
-        snapshot: "2026-10-05T13:15:32+02:00",
+        snapshotId: 3208,
+        snapshot: "2026-10-05T13:30:32+02:00",
+        start: "2026-10-05T13:30:32+02:00",
+        end: "2026-10-05T13:45:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 16.283,
+            chargeWh: 1446.667,
             dischargeWh: 0,
-            soc: 15.676,
+            soc: 22.239,
           },
         ],
+        decision: {
+          action: "charge",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -117,18 +136,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.356,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3208,
-        snapshot: "2026-10-05T13:30:32+02:00",
+        snapshotId: 3209,
+        snapshot: "2026-10-05T13:45:32+02:00",
+        start: "2026-10-05T13:45:32+02:00",
+        end: "2026-10-05T14:00:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 0,
+            chargeWh: 1446.667,
             dischargeWh: 0,
-            soc: 22.239,
+            soc: 29.639,
           },
         ],
+        decision: {
+          action: "charge",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -148,8 +173,10 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.193,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3209,
-        snapshot: "2026-10-05T13:45:32+02:00",
+        snapshotId: 3210,
+        snapshot: "2026-10-05T14:00:32+02:00",
+        start: "2026-10-05T14:00:32+02:00",
+        end: "2026-10-05T14:15:00+02:00",
         devices: [
           {
             key: "battery:db:11",
@@ -157,9 +184,14 @@ export const planHistoryAfternoon: PlanHistory = {
             kind: "battery",
             chargeWh: 0,
             dischargeWh: 0,
-            soc: 29.639,
+            soc: 30.3,
           },
         ],
+        decision: {
+          action: "hold",
+          reason: "minimumRegret",
+          sequence: ["hold", "charge"],
+        },
       },
     },
     {
@@ -179,18 +211,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.4,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3211,
-        snapshot: "2026-10-05T14:08:02+02:00",
+        snapshotId: 3212,
+        snapshot: "2026-10-05T14:15:06+02:00",
+        start: "2026-10-05T14:15:02+02:00",
+        end: "2026-10-05T14:30:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 0,
+            chargeWh: 1496.667,
             dischargeWh: 0,
-            soc: 33.545,
+            soc: 40.672,
           },
         ],
+        decision: {
+          action: "charge",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -210,18 +248,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.427,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3212,
-        snapshot: "2026-10-05T14:15:06+02:00",
+        snapshotId: 3213,
+        snapshot: "2026-10-05T14:30:06+02:00",
+        start: "2026-10-05T14:30:02+02:00",
+        end: "2026-10-05T14:45:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 429.13,
+            chargeWh: 1496.667,
             dischargeWh: 0,
-            soc: 42.671,
+            soc: 48.472,
           },
         ],
+        decision: {
+          action: "charge",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -241,18 +285,25 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.014,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3214,
-        snapshot: "2026-10-05T14:30:36+02:00",
+        snapshotId: 3215,
+        snapshot: "2026-10-05T14:45:12+02:00",
+        start: "2026-10-05T14:45:02+02:00",
+        end: "2026-10-05T15:00:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 0,
+            chargeWh: 402.919,
             dischargeWh: 0,
-            soc: 48.339,
+            soc: 51.077,
           },
         ],
+        decision: {
+          action: "normal",
+          reason: "minimumRegret",
+          sequence: ["normal", "hold"],
+        },
       },
     },
     {
@@ -272,18 +323,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.4,
       feedInRevenue: 0,
       planned: {
-        snapshotId: 3216,
-        snapshot: "2026-10-05T14:45:36+02:00",
+        snapshotId: 3217,
+        snapshot: "2026-10-05T15:00:12+02:00",
+        start: "2026-10-05T15:00:02+02:00",
+        end: "2026-10-05T15:15:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 649.394,
+            chargeWh: 1496.667,
             dischargeWh: 0,
-            soc: 52.325,
+            soc: 56.272,
           },
         ],
+        decision: {
+          action: "charge",
+          reason: "preferredUnavailable",
+        },
       },
     },
     {
@@ -303,18 +360,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.412,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3217,
-        snapshot: "2026-10-05T15:00:12+02:00",
+        snapshotId: 3218,
+        snapshot: "2026-10-05T15:15:36+02:00",
+        start: "2026-10-05T15:15:32+02:00",
+        end: "2026-10-05T15:30:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 0,
+            chargeWh: 1446.667,
             dischargeWh: 0,
-            soc: 56.272,
+            soc: 63.839,
           },
         ],
+        decision: {
+          action: "charge",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -334,18 +397,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.001,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3218,
-        snapshot: "2026-10-05T15:15:36+02:00",
+        snapshotId: 3219,
+        snapshot: "2026-10-05T15:30:34+02:00",
+        start: "2026-10-05T15:30:32+02:00",
+        end: "2026-10-05T15:45:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 31.778,
+            chargeWh: 13.316,
             dischargeWh: 0,
-            soc: 63.987,
+            soc: 64.762,
           },
         ],
+        decision: {
+          action: "normal",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -365,18 +434,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.001,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3219,
-        snapshot: "2026-10-05T15:30:34+02:00",
+        snapshotId: 3220,
+        snapshot: "2026-10-05T15:45:05+02:00",
+        start: "2026-10-05T15:45:02+02:00",
+        end: "2026-10-05T16:00:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 84.864,
+            chargeWh: 335.233,
             dischargeWh: 0,
-            soc: 65.157,
+            soc: 66.862,
           },
         ],
+        decision: {
+          action: "normal",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -396,18 +471,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.422,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3220,
-        snapshot: "2026-10-05T15:45:05+02:00",
+        snapshotId: 3221,
+        snapshot: "2026-10-05T16:00:07+02:00",
+        start: "2026-10-05T16:00:02+02:00",
+        end: "2026-10-05T16:15:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 293.268,
+            chargeWh: 1496.667,
             dischargeWh: 0,
-            soc: 68.228,
+            soc: 72.772,
           },
         ],
+        decision: {
+          action: "charge",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -427,18 +508,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.0,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3221,
-        snapshot: "2026-10-05T16:00:07+02:00",
+        snapshotId: 3222,
+        snapshot: "2026-10-05T16:15:04+02:00",
+        start: "2026-10-05T16:15:02+02:00",
+        end: "2026-10-05T16:30:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 274.039,
+            chargeWh: 320.181,
             dischargeWh: 0,
-            soc: 74.049,
+            soc: 74.992,
           },
         ],
+        decision: {
+          action: "normal",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -458,18 +545,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.0,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3222,
-        snapshot: "2026-10-05T16:15:04+02:00",
+        snapshotId: 3223,
+        snapshot: "2026-10-05T16:30:04+02:00",
+        start: "2026-10-05T16:30:02+02:00",
+        end: "2026-10-05T16:45:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 287.864,
+            chargeWh: 287.223,
             dischargeWh: 0,
-            soc: 76.333,
+            soc: 75.838,
           },
         ],
+        decision: {
+          action: "normal",
+          reason: "minimumRegret",
+        },
       },
     },
     {
@@ -489,18 +582,24 @@ export const planHistoryAfternoon: PlanHistory = {
       gridCost: 0.002,
       feedInRevenue: 0.0,
       planned: {
-        snapshotId: 3223,
-        snapshot: "2026-10-05T16:30:04+02:00",
+        snapshotId: 3224,
+        snapshot: "2026-10-05T16:45:04+02:00",
+        start: "2026-10-05T16:45:02+02:00",
+        end: "2026-10-05T17:00:00+02:00",
         devices: [
           {
             key: "battery:db:11",
             title: "Home battery",
             kind: "battery",
-            chargeWh: 240.23,
+            chargeWh: 239.695,
             dischargeWh: 0,
-            soc: 76.957,
+            soc: 76.117,
           },
         ],
+        decision: {
+          action: "normal",
+          reason: "minimumRegret",
+        },
       },
     },
   ],
