@@ -53,14 +53,28 @@ type PlanHistorySlot struct {
 	Planned      *PlanHistoryPlanned `json:"planned,omitempty"`
 }
 
-// PlanHistoryPlanned is the plan in force when the slot started: the slot's entry in
-// the latest optimizer snapshot taken at or before the slot start.
+// PlanHistoryPlanned is what governed the slot: the first optimizer run inside it (runs
+// land ~30s after each boundary), else the latest run before it. Start/End bound the
+// snapshot's entry for the slot, which is partial when the run itself started inside it.
 type PlanHistoryPlanned struct {
 	SnapshotID      uint64                     `json:"snapshotId"`
 	Snapshot        time.Time                  `json:"snapshot"`
+	Start           *time.Time                 `json:"start,omitempty"`
+	End             *time.Time                 `json:"end,omitempty"`
 	GridChargeMinWh *float64                   `json:"gridChargeMinWh,omitempty"`
 	GridChargeMaxWh *float64                   `json:"gridChargeMaxWh,omitempty"`
 	Devices         []PlanHistoryPlannedDevice `json:"devices"`
+	Decision        *PlanHistoryDecision       `json:"decision,omitempty"`
+}
+
+// PlanHistoryDecision is the controller's robust battery decision
+// (scenarios.control.selectedAction) - what evcc decided, not proof of what was
+// applied. Sequence lists the distinct actions of all runs inside the slot, in order,
+// only when it changed.
+type PlanHistoryDecision struct {
+	Action   string   `json:"action"`
+	Reason   string   `json:"reason,omitempty"`
+	Sequence []string `json:"sequence,omitempty"`
 }
 
 // PlanHistoryPlannedDevice is one device's planned slot; Soc is the planned level at
@@ -352,6 +366,12 @@ type snapshotPlan struct {
 			Soc         float64   `json:"soc"`
 		} `json:"plan"`
 	} `json:"devices"`
+	Scenarios struct {
+		Control struct {
+			SelectedAction string `json:"selectedAction"`
+			Reason         string `json:"reason"`
+		} `json:"control"`
+	} `json:"scenarios"`
 }
 
 type plannedSnapshot struct {
@@ -360,17 +380,18 @@ type plannedSnapshot struct {
 	plan *snapshotPlan
 }
 
-// attachPlannedReference adds, per slot, the entry of the latest snapshot at or before
-// the slot start - only when that snapshot planned exactly this slot.
+// attachPlannedReference adds, per slot, the governing snapshot's entry and decision.
+// An unusable governing snapshot leaves the slot without one: an older plan that was no
+// longer in force is never substituted.
 func attachPlannedReference(ctx context.Context, slots []PlanHistorySlot) error {
 	if len(slots) == 0 {
 		return nil
 	}
-	first, last := slots[0].Start.Unix(), slots[len(slots)-1].Start.Unix()
+	first, last := slots[0].Start.Unix(), slots[len(slots)-1].End.Unix()
 
 	var rows []OptimizerSnapshot
 	tx := db.Instance.WithContext(ctx).Select("id, version, ts, quality")
-	if err := tx.Where("ts <= ? AND ts >= COALESCE((SELECT MAX(ts) FROM optimizer_snapshots WHERE ts <= ?), ?)", last, first, first).
+	if err := tx.Where("ts < ? AND ts >= COALESCE((SELECT MAX(ts) FROM optimizer_snapshots WHERE ts < ?), ?)", last, first, first).
 		Order("ts, id").Find(&rows).Error; err != nil {
 		return err
 	}
@@ -379,34 +400,79 @@ func attachPlannedReference(ctx context.Context, slots []PlanHistorySlot) error 
 	for _, r := range rows {
 		s := plannedSnapshot{id: r.ID, ts: time.Unix(r.TS, 0)}
 		var plan snapshotPlan
-		if r.Version == 1 && json.Unmarshal(r.Quality, &plan) == nil && plan.Status != "unavailable" && len(plan.Devices) > 0 {
+		if r.Version == 1 && json.Unmarshal(r.Quality, &plan) == nil && plan.Status != "unavailable" {
 			s.plan = &plan
 		}
 		snapshots = append(snapshots, s)
 	}
 
 	for i := range slots {
-		start := slots[i].Start
-		// latest snapshot at or before the slot start; an unusable one is not skipped
-		// over in favour of an older plan that was no longer in force
-		n := slices.IndexFunc(snapshots, func(s plannedSnapshot) bool { return s.ts.After(start) })
-		if n < 0 {
-			n = len(snapshots)
-		}
-		if n == 0 || snapshots[n-1].plan == nil {
-			continue
-		}
-		slots[i].Planned = plannedEntry(snapshots[n-1], slots[i])
+		slots[i].Planned = plannedReference(snapshots, slots[i])
 	}
 	return nil
 }
 
+func plannedReference(snapshots []plannedSnapshot, slot PlanHistorySlot) *PlanHistoryPlanned {
+	inside := slices.DeleteFunc(slices.Clone(snapshots), func(s plannedSnapshot) bool {
+		return s.ts.Before(slot.Start) || !s.ts.Before(slot.End)
+	})
+	var governing plannedSnapshot
+	if len(inside) > 0 {
+		governing = inside[0]
+	} else {
+		n := slices.IndexFunc(snapshots, func(s plannedSnapshot) bool { return !s.ts.Before(slot.Start) })
+		if n < 0 {
+			n = len(snapshots)
+		}
+		if n == 0 {
+			return nil
+		}
+		governing = snapshots[n-1]
+	}
+	if governing.plan == nil {
+		return nil
+	}
+
+	res := plannedEntry(governing, slot)
+	if control := governing.plan.Scenarios.Control; control.SelectedAction != "" {
+		decision := &PlanHistoryDecision{Action: control.SelectedAction, Reason: control.Reason}
+		var sequence []string
+		for _, s := range inside {
+			if s.plan == nil || s.plan.Scenarios.Control.SelectedAction == "" {
+				continue
+			}
+			if action := s.plan.Scenarios.Control.SelectedAction; len(sequence) == 0 || sequence[len(sequence)-1] != action {
+				sequence = append(sequence, action)
+			}
+		}
+		if len(sequence) > 1 {
+			decision.Sequence = sequence
+		}
+		if res == nil {
+			res = &PlanHistoryPlanned{SnapshotID: governing.id, Snapshot: governing.ts, Devices: []PlanHistoryPlannedDevice{}}
+		}
+		res.Decision = decision
+	}
+	return res
+}
+
+// coversSlot accepts the snapshot entry whose [start,end) holds the slot start, or the
+// partial first entry of a run made inside the slot that ends with it.
+func coversSlot(start, end time.Time, slot PlanHistorySlot) bool {
+	holds := !start.After(slot.Start) && end.After(slot.Start)
+	partial := !start.Before(slot.Start) && start.Before(slot.End) && end.Equal(slot.End)
+	return holds || partial
+}
+
 func plannedEntry(s plannedSnapshot, slot PlanHistorySlot) *PlanHistoryPlanned {
 	res := &PlanHistoryPlanned{SnapshotID: s.id, Snapshot: s.ts, Devices: []PlanHistoryPlannedDevice{}}
+	var entryStart time.Time
 	found := false
 	for _, f := range s.plan.Forecast {
-		if f.Start.Equal(slot.Start) && f.End.Equal(slot.End) {
+		if coversSlot(f.Start, f.End, slot) {
 			res.GridChargeMinWh, res.GridChargeMaxWh = f.GridChargeMinWh, f.GridChargeMaxWh
+			res.Start, res.End = new(f.Start), new(f.End)
+			entryStart = f.Start
 			found = true
 			break
 		}
@@ -416,7 +482,7 @@ func plannedEntry(s plannedSnapshot, slot PlanHistorySlot) *PlanHistoryPlanned {
 	}
 	for _, d := range s.plan.Devices {
 		for _, p := range d.Plan {
-			if !p.Start.Equal(slot.Start) {
+			if !p.Start.Equal(entryStart) {
 				continue
 			}
 			device := PlanHistoryPlannedDevice{Key: d.Key, Title: d.Title, Kind: d.Kind, ChargeWh: p.ChargeWh, DischargeWh: p.DischargeWh}

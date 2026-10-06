@@ -31,7 +31,8 @@ func energyPlanHistoryHandler(site site.API) http.HandlerFunc {
 				return
 			}
 		}
-		from, to, err := metrics.PlanHistoryWindow(time.Now(), hours)
+		now := time.Now()
+		from, to, err := metrics.PlanHistoryWindow(now, hours)
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, err)
 			return
@@ -43,9 +44,7 @@ func energyPlanHistoryHandler(site site.API) http.HandlerFunc {
 			return
 		}
 
-		// data only changes at the next slot boundary
-		maxAge := time.Until(time.Now().Truncate(tariff.SlotDuration).Add(tariff.SlotDuration))
-		w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d", int(maxAge.Seconds())))
+		w.Header().Set("Cache-Control", planHistoryCacheControl(now, res))
 
 		jsonWrite(w, res)
 	}
@@ -70,4 +69,21 @@ func loadpointPlanKeys(site site.API) map[string]string {
 		delete(keys, title)
 	}
 	return keys
+}
+
+// planHistorySettle is how long after a boundary the finished slot may still be unwritten:
+// collectors persist it on their first reading in the new slot.
+const planHistorySettle = time.Minute
+
+// planHistoryCacheControl caches until the next boundary, except while the newest slot
+// may still be missing - caching that gap would keep it next to "now" for a whole slot.
+func planHistoryCacheControl(now time.Time, res *metrics.PlanHistory) string {
+	boundary := now.Truncate(tariff.SlotDuration)
+	if now.Sub(boundary) < planHistorySettle {
+		return "no-store"
+	}
+	if n := len(res.Forecast); n > 0 && (res.Forecast[n-1].GridImportWh == nil || res.Forecast[n-1].HomeWh == nil) {
+		return "no-store"
+	}
+	return fmt.Sprintf("private, max-age=%d", int(boundary.Add(tariff.SlotDuration).Sub(now).Seconds()))
 }

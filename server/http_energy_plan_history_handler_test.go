@@ -59,6 +59,7 @@ func TestEnergyPlanHistoryHandler(t *testing.T) {
 	w = request("/api/energyplan/history?hours=6")
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+	require.Equal(t, "no-store", w.Header().Get("Cache-Control"), "an unwritten newest slot is never cached")
 	var res metrics.PlanHistory
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
 	require.Len(t, res.Forecast, 24, "six hours of empty 15min slots")
@@ -76,4 +77,19 @@ func TestEnergyPlanHistoryHandler(t *testing.T) {
 func TestLoadpointPlanKeys(t *testing.T) {
 	keys := loadpointPlanKeys(planHistoryTestSite{titles: []string{"Carport", "", "Garage", "Garage", "Heat pump"}})
 	require.Equal(t, map[string]string{"Carport": "loadpoint:0", "Heat pump": "loadpoint:4"}, keys)
+}
+
+func TestPlanHistoryCacheControl(t *testing.T) {
+	wh := 100.0
+	slot := func(home, grid *float64) *metrics.PlanHistory {
+		return &metrics.PlanHistory{Forecast: []metrics.PlanHistorySlot{{HomeWh: home, GridImportWh: grid}}}
+	}
+	boundary := time.Date(2026, 10, 5, 13, 45, 0, 0, time.UTC)
+	complete := slot(&wh, &wh)
+
+	require.Equal(t, "no-store", planHistoryCacheControl(boundary.Add(20*time.Second), complete), "slot may still be unwritten")
+	require.Equal(t, "private, max-age=840", planHistoryCacheControl(boundary.Add(time.Minute), complete))
+	require.Equal(t, "no-store", planHistoryCacheControl(boundary.Add(5*time.Minute), slot(nil, &wh)))
+	require.Equal(t, "no-store", planHistoryCacheControl(boundary.Add(5*time.Minute), slot(&wh, nil)))
+	require.Equal(t, "private, max-age=600", planHistoryCacheControl(boundary.Add(5*time.Minute), complete))
 }

@@ -148,23 +148,27 @@ func TestComputePlanHistoryPartialGroupIsGap(t *testing.T) {
 	require.Nil(t, res.Forecast[1].SolarWh, "one of two strings missing is not a measured total")
 }
 
-func savePlanSnapshot(t *testing.T, ts time.Time, status string, start time.Time, chargeWh float64) {
+// savePlanSnapshot stores a run made at ts like the controller does: the first entry is
+// the partial slot from ts to the next boundary, then three whole slots.
+func savePlanSnapshot(t *testing.T, ts time.Time, status, action string, chargeWh float64) {
 	t.Helper()
-	end := start.Add(15 * time.Minute)
-	quality, err := json.Marshal(map[string]any{
-		"status": status,
-		"forecast": []map[string]any{
-			{"start": start.Add(-15 * time.Minute), "end": start},
-			{"start": start, "end": end, "gridChargeMinWh": chargeWh, "gridChargeMaxWh": chargeWh},
-		},
+	var forecast, plan []map[string]any
+	start := ts
+	for end := ts.Truncate(15 * time.Minute).Add(15 * time.Minute); len(forecast) < 4; start, end = end, end.Add(15*time.Minute) {
+		forecast = append(forecast, map[string]any{"start": start, "end": end, "gridChargeMinWh": chargeWh, "gridChargeMaxWh": chargeWh})
+		plan = append(plan, map[string]any{"start": start, "chargeWh": chargeWh, "dischargeWh": 0, "soc": 20})
+	}
+	payload := map[string]any{
+		"status":   status,
+		"forecast": forecast,
 		"devices": []map[string]any{{
-			"key": "battery:db:11", "title": "Battery", "kind": "battery", "capacityKWh": 19.32,
-			"plan": []map[string]any{
-				{"start": start.Add(-15 * time.Minute), "chargeWh": 0, "dischargeWh": 0, "soc": 10},
-				{"start": start, "chargeWh": chargeWh, "dischargeWh": 0, "soc": 20},
-			},
+			"key": "battery:db:11", "title": "Battery", "kind": "battery", "capacityKWh": 19.32, "plan": plan,
 		}},
-	})
+	}
+	if action != "" {
+		payload["scenarios"] = map[string]any{"control": map[string]any{"selectedAction": action, "reason": "minimumRegret"}}
+	}
+	quality, err := json.Marshal(payload)
 	require.NoError(t, err)
 	_, err = SaveOptimizerSnapshot(OptimizerSnapshot{Timestamp: ts, ControllerVersion: "test", Quality: quality})
 	require.NoError(t, err)
@@ -172,29 +176,41 @@ func savePlanSnapshot(t *testing.T, ts time.Time, status string, start time.Time
 
 func TestComputePlanHistoryPlannedReference(t *testing.T) {
 	f := newPlanHistoryFixture(t)
-	// snapshots: before slot 0 (plans slot 0), during slot 0 (plans slot 1),
-	// an unavailable plan before slot 2, nothing that plans slot 3
-	savePlanSnapshot(t, f.slot(0).Add(-30*time.Second), "ready", f.slot(0), 1500)
-	savePlanSnapshot(t, f.slot(0).Add(30*time.Second), "ready", f.slot(1), 700)
-	savePlanSnapshot(t, f.slot(2).Add(-30*time.Second), "unavailable", f.slot(2), 900)
-	savePlanSnapshot(t, f.slot(3).Add(-30*time.Second), "ready", f.slot(5), 100)
+	second := func(i int, s int) time.Time { return f.slot(i).Add(time.Duration(s) * time.Second) }
+	savePlanSnapshot(t, second(0, -30), "ready", "hold", 0)        // before slot 0
+	savePlanSnapshot(t, second(0, 32), "ready", "charge", 1200)    // governs slot 0
+	savePlanSnapshot(t, second(1, 32), "ready", "hold", 0)         // governs slot 1 ...
+	savePlanSnapshot(t, second(1, 482), "ready", "charge", 900)    // ... then changes; also slot 2's fallback
+	savePlanSnapshot(t, second(3, 30), "unavailable", "charge", 0) // governs slot 3, unusable
+	savePlanSnapshot(t, second(4, 30), "ready", "", 50)            // governs slot 4, no decision
 
-	res, err := ComputePlanHistory(context.Background(), f.slot(0), f.slot(4), nil)
+	res, err := ComputePlanHistory(context.Background(), f.slot(0), f.slot(5), nil)
 	require.NoError(t, err)
 	s := res.Forecast
 
-	require.NotNil(t, s[0].Planned)
-	require.Equal(t, f.slot(0).Add(-30*time.Second).Unix(), s[0].Planned.Snapshot.Unix())
-	require.Len(t, s[0].Planned.Devices, 1)
-	require.Equal(t, 1500.0, s[0].Planned.Devices[0].ChargeWh)
-	require.Equal(t, 20.0, *s[0].Planned.Devices[0].Soc, "planned level is the slot-end level")
-	require.Equal(t, 1500.0, *s[0].Planned.GridChargeMinWh)
+	p := s[0].Planned
+	require.NotNil(t, p)
+	require.Equal(t, second(0, 32).Unix(), p.Snapshot.Unix(), "the run inside the slot governs, not the one before")
+	require.Equal(t, second(0, 32).Unix(), p.Start.Unix(), "its partial first entry is accepted")
+	require.Equal(t, f.slot(1).Unix(), p.End.Unix())
+	require.Equal(t, 1200.0, p.Devices[0].ChargeWh)
+	require.Equal(t, 20.0, *p.Devices[0].Soc, "planned level is the slot-end level")
+	require.Equal(t, 1200.0, *p.GridChargeMinWh)
+	require.Equal(t, &PlanHistoryDecision{Action: "charge", Reason: "minimumRegret"}, p.Decision)
 
-	require.NotNil(t, s[1].Planned, "the snapshot taken during slot 0 was in force at slot 1's start")
-	require.Equal(t, 700.0, s[1].Planned.Devices[0].ChargeWh)
+	require.Equal(t, &PlanHistoryDecision{Action: "hold", Reason: "minimumRegret", Sequence: []string{"hold", "charge"}}, s[1].Planned.Decision)
 
-	require.Nil(t, s[2].Planned, "an unavailable plan is not replaced by an older one")
-	require.Nil(t, s[3].Planned, "the latest snapshot did not plan this slot")
+	require.NotNil(t, s[2].Planned, "without a run inside the slot the latest earlier run governs")
+	require.Equal(t, second(1, 482).Unix(), s[2].Planned.Snapshot.Unix())
+	require.Equal(t, f.slot(2).Unix(), s[2].Planned.Start.Unix(), "a whole-slot entry holds the slot start")
+	require.Equal(t, "charge", s[2].Planned.Decision.Action)
+	require.Nil(t, s[2].Planned.Decision.Sequence)
+
+	require.Nil(t, s[3].Planned, "an unusable governing run is not replaced by an older one")
+
+	require.NotNil(t, s[4].Planned)
+	require.Nil(t, s[4].Planned.Decision, "no decision recorded, none invented")
+	require.Equal(t, 50.0, s[4].Planned.Devices[0].ChargeWh)
 }
 
 func TestComputePlanHistoryEmpty(t *testing.T) {
