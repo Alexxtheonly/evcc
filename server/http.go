@@ -199,6 +199,7 @@ func (s *HTTPd) RegisterSiteHandlers(site site.API) {
 		"gridsessions":            {"GET", "/gridsessions", gridSessionsHandler},
 		"energyhistory":           {"GET", "/history/energy", energyHistoryHandler},
 		"energyprices":            {"GET", "/energyprices", energyPricesHandler(site)},
+		"energyplanhistory":       {"GET", "/energyplan/history", energyPlanHistoryHandler(site)},
 		"savingsledger":           {"GET", "/savingsledger", savingsLedgerHandler(site)},
 		"optimizersnapshot":       {"GET", "/optimizer/snapshots/{id:[0-9]+}", optimizerSnapshotHandler},
 		"optimize":                {"POST", "/optimize", callHandler(site.Optimize)},
