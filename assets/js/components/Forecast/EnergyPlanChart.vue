@@ -229,7 +229,7 @@
 									$t("forecast.energy.plan.layer.grid")
 								}}
 							</th>
-							<td>
+							<td class="wrap">
 								{{
 									pastDetails.gridChargeWh == null
 										? $t("forecast.energy.plan.unavailable")
@@ -264,7 +264,7 @@
 									device.title
 								}}</span>
 							</th>
-							<td>
+							<td class="wrap">
 								<template v-if="device.soc != null">{{ level(device) }}</template>
 								<small :class="{ 'd-block': device.soc != null }">{{
 									pastDeviceState(device)
@@ -284,7 +284,7 @@
 						</tr>
 						<tr v-if="pastDetails.planned.grid">
 							<th>{{ $t("forecast.energy.plan.layer.grid") }}</th>
-							<td>{{ gridText(pastDetails.planned.grid) }}</td>
+							<td class="wrap">{{ gridText(pastDetails.planned.grid) }}</td>
 						</tr>
 						<template v-for="device in pastDetails.devices" :key="device.key">
 							<tr v-if="device.planned">
@@ -293,7 +293,7 @@
 										device.title
 									}}</span>
 								</th>
-								<td>
+								<td class="wrap">
 									<template v-if="device.planned.soc != null"
 										>{{ percent(device.planned.soc) }}
 									</template>
@@ -1040,7 +1040,12 @@ export default defineComponent({
 .flagged-note {
 	color: var(--bs-secondary-color);
 }
+/* long measured/planned states wrap instead of widening the popup past its max width */
+.tooltip-table td.wrap {
+	white-space: normal;
+}
 .tooltip-table th.planned-title {
+	white-space: normal;
 	padding-top: 0.5rem;
 	font-weight: 600;
 	border-top: 1px solid var(--bs-border-color);
