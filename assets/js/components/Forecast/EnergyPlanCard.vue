@@ -212,6 +212,14 @@
 			<summary>{{ $t("forecast.energy.shading.title") }}</summary>
 			<SolarShadingDetails v-if="shadingOpen" />
 		</details>
+		<details
+			class="plan-details"
+			data-testid="energy-heating-degree"
+			@toggle="heatingOpen = ($event.target as HTMLDetailsElement).open"
+		>
+			<summary>{{ $t("forecast.energy.heating.title") }}</summary>
+			<HeatingDegreeDetails v-if="heatingOpen" />
+		</details>
 		<details class="plan-details quality-details">
 			<summary>
 				{{ $t("forecast.energy.quality")
@@ -323,6 +331,7 @@ import EnergySettings from "./EnergySettings.vue";
 import EnergyPlanChart from "./EnergyPlanChart.vue";
 import BatteryControlStatus from "./BatteryControlStatus.vue";
 import SolarShadingDetails from "./SolarShadingDetails.vue";
+import HeatingDegreeDetails from "./HeatingDegreeDetails.vue";
 import formatter from "@/mixins/formatter";
 import { is12hFormat } from "@/units";
 import {
@@ -357,6 +366,7 @@ export default defineComponent({
 		EnergyPlanChart,
 		BatteryControlStatus,
 		SolarShadingDetails,
+		HeatingDegreeDetails,
 	},
 	emits: ["settingsClosed"],
 	mixins: [formatter],
@@ -386,6 +396,7 @@ export default defineComponent({
 			historySeq: 0,
 			historyTimer: 0,
 			shadingOpen: false,
+			heatingOpen: false,
 		};
 	},
 	computed: {

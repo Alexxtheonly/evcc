@@ -55,6 +55,30 @@
 						}}</label>
 						<div class="small text-muted">{{ $t(setting.hint) }}</div>
 					</div>
+					<fieldset class="mb-3" data-testid="energy-heatingDegree">
+						<legend class="form-label fs-6 mb-1">
+							{{ $t("forecast.energy.heatingDegree") }}
+						</legend>
+						<div v-for="mode in heatingDegreeModes" :key="mode" class="form-check mb-1">
+							<input
+								:id="`energy-heatingDegree-${mode}`"
+								v-model="draft.heatingDegree"
+								class="form-check-input"
+								type="radio"
+								name="heatingDegree"
+								:value="mode"
+							/>
+							<label :for="`energy-heatingDegree-${mode}`" class="form-check-label">{{
+								$t(`forecast.energy.heatingDegreeModes.${mode}`)
+							}}</label>
+							<div class="small text-muted">
+								{{ $t(`forecast.energy.heatingDegreeHints.${mode}`) }}
+							</div>
+						</div>
+						<div class="small text-muted mt-2">
+							{{ $t("forecast.energy.heatingDegreeNote") }}
+						</div>
+					</fieldset>
 					<p class="small">{{ $t("forecast.energy.arrivalPrerequisites") }}</p>
 				</section>
 				<section v-show="activeSection === 'billing'">
@@ -265,6 +289,7 @@ export default defineComponent({
 		invoker: null as HTMLElement | null,
 		badInputs: {} as Record<string, boolean>,
 		activeSection: "planning",
+		heatingDegreeModes: ["auto", "on", "off"] as const,
 		sections: ["planning", "billing", "batteries"],
 		toggles: [
 			{
@@ -398,7 +423,11 @@ export default defineComponent({
 				const settings = (await api.get<EnergySettings>("config/energyintelligence")).data;
 				if (request !== this.request) return;
 				this.badInputs = {};
-				this.draft = { ...settings, batteryWear: { ...settings.batteryWear } };
+				this.draft = {
+					...settings,
+					batteryWear: { ...settings.batteryWear },
+					heatingDegree: settings.heatingDegree || "auto",
+				};
 				this.planes = { ...settings.batteryEnergyPlane };
 				this.efficiencies = Object.fromEntries(
 					Object.entries(settings.batteryEfficiency || {}).map(([name, value]) => [

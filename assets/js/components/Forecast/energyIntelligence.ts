@@ -8,6 +8,7 @@ export interface EnergySettings {
   settlementMode: "simulation" | "interval";
   settlementFrom?: string | null;
   solarShading?: boolean;
+  heatingDegree?: "auto" | "on" | "off";
 }
 
 export interface EnergyForecastSlot {

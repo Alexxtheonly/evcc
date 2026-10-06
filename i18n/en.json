@@ -1314,6 +1314,77 @@
       "robust": "Evaluate solar and demand uncertainty",
       "solarShading": "Correct the solar forecast by sun position (shading)",
       "solarShadingHint": "Learns from measured solar yield how much of the forecast arrives at each sun position, for example behind trees, and uses that instead of the single daily adjustment. Review the learned map in the plan details first.",
+      "heatingDegree": "Household demand: temperature correction",
+      "heatingDegreeModes": {
+        "auto": "Auto",
+        "on": "On",
+        "off": "Off"
+      },
+      "heatingDegreeHints": {
+        "auto": "As before: corrects only when 15-minute consumption and temperature correlate, which the daily load cycle usually prevents.",
+        "on": "Corrects in the heating season, when daily consumption tracks the cold, by at most 25 % of the day’s forecast (2 kWh at least).",
+        "off": "Never corrects the household forecast for temperature."
+      },
+      "heatingDegreeNote": "The options not in use are recorded as shadow forecasts. Compare them in the plan details before switching.",
+      "heating": {
+        "title": "Household demand and temperature",
+        "loading": "Loading the temperature correction…",
+        "loadError": "The temperature correction could not be loaded.",
+        "correcting": "Correcting",
+        "notCorrecting": "Not correcting",
+        "modeLine": "Setting: {mode}.",
+        "modes": {
+          "auto": "Auto",
+          "on": "On",
+          "off": "Off"
+        },
+        "gateOpen": "Daily gate (On): open. Daily consumption follows heating degrees.",
+        "gateShut": "Daily gate (On): shut, {reason}",
+        "reasons": {
+          "no_tariff": "no temperature forecast is configured.",
+          "few_days": "fewer complete days than needed.",
+          "few_samples": "fewer paired readings than needed.",
+          "daily_r_low": "daily consumption does not follow heating degrees.",
+          "slope_not_positive": "consumption does not rise when it gets colder.",
+          "error": "the history could not be read."
+        },
+        "fitCaption": "Last 30 days: {from} to {to}",
+        "check": {
+          "days": "Complete days",
+          "samples": "Paired readings",
+          "dailyR": "Daily correlation r",
+          "slope": "Slope per K colder"
+        },
+        "slopeValue": "{perSlot} Wh/slot ({perDay} kWh/day)",
+        "met": "met",
+        "notMet": "not met",
+        "slotR": "15-minute correlation r",
+        "autoGate": "Auto needs ≥ {value}",
+        "meanHDD": "Mean heating degrees",
+        "baseTemp": "below {value} °C",
+        "daysCaption": "Forecast by day",
+        "date": "Day",
+        "uncorrected": "Profile",
+        "onCorrection": "On",
+        "cap": "Cap",
+        "autoCorrection": "Auto",
+        "partial": "partial",
+        "capped": "capped",
+        "cappedTitle": "Uncapped {value}",
+        "shadowTitle": "Shadow comparison (On vs Auto, energy totals)",
+        "shadowUnavailable": "The shadow forecasts could not be read.",
+        "window": {
+          "day": "Day, issued 00:00",
+          "overnight": "Night 17:00–07:00, issued from 12:00"
+        },
+        "collecting": "collecting ({n}/{required} complete windows)",
+        "shadowScore": {
+          "better": "On is more accurate: mean error {on} vs {auto} kWh, difference {delta} [{low}, {high}], {n} windows.",
+          "worse": "On is less accurate: mean error {on} vs {auto} kWh, difference {delta} [{low}, {high}], {n} windows.",
+          "unclear": "no clear difference: mean error {on} vs {auto} kWh, difference {delta} [{low}, {high}], {n} windows."
+        },
+        "explain": "The correction shifts the household profile by the slope times the heating degrees (15 °C minus the forecast temperature) relative to the last 30 days. It is refitted every midnight. The options not in use are recorded alongside, so On can be judged on measured days before it plans."
+      },
       "shading": {
         "title": "Solar shading by sun position",
         "loading": "Loading learned shading…",

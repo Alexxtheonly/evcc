@@ -4,6 +4,7 @@ import EnergyPlanCard from "./EnergyPlanCard.vue";
 import EnergyPlanChart from "./EnergyPlanChart.vue";
 import BatteryControlStatus from "./BatteryControlStatus.vue";
 import SolarShadingDetails from "./SolarShadingDetails.vue";
+import HeatingDegreeDetails from "./HeatingDegreeDetails.vue";
 import { CURRENCY } from "@/types/evcc";
 import { forecastTotals, socTimeline, type EnergyInsights } from "./energyIntelligence";
 import { livePlanEvening } from "./__fixtures__/energyPlanLive";
@@ -216,5 +217,19 @@ describe("energy plan card", () => {
     (details.element as HTMLDetailsElement).open = true;
     await details.trigger("toggle");
     expect(wrapper.findComponent(SolarShadingDetails).exists()).toBe(true);
+  });
+
+  test("heating degree details stay collapsed and unloaded until opened", async () => {
+    const wrapper = shallowMount(EnergyPlanCard, {
+      props: { insights: livePlanEvening.optimizerInsights },
+      global,
+    });
+    const details = wrapper.get('[data-testid="energy-heating-degree"]');
+    expect(details.attributes("open")).toBeUndefined();
+    expect(details.text()).toContain("forecast.energy.heating.title");
+    expect(wrapper.findComponent(HeatingDegreeDetails).exists()).toBe(false);
+    (details.element as HTMLDetailsElement).open = true;
+    await details.trigger("toggle");
+    expect(wrapper.findComponent(HeatingDegreeDetails).exists()).toBe(true);
   });
 });

@@ -1314,6 +1314,77 @@
       "robust": "Unsicherheit bei Solar und Bedarf bewerten",
       "solarShading": "Solarprognose nach Sonnenstand korrigieren (Verschattung)",
       "solarShadingHint": "Lernt aus dem gemessenen Solarertrag, wie viel der Prognose bei jedem Sonnenstand ankommt, zum Beispiel hinter Bäumen, und nutzt das statt der einen täglichen Anpassung. Prüfe die gelernte Karte vorher in den Plandetails.",
+      "heatingDegree": "Haushaltsverbrauch: Temperaturkorrektur",
+      "heatingDegreeModes": {
+        "auto": "Automatisch",
+        "on": "An",
+        "off": "Aus"
+      },
+      "heatingDegreeHints": {
+        "auto": "Wie bisher: korrigiert nur, wenn 15-Minuten-Verbrauch und Temperatur korrelieren, was der Tagesgang meist verhindert.",
+        "on": "Korrigiert in der Heizperiode, wenn der Tagesverbrauch der Kälte folgt, um höchstens 25 % der Tagesprognose (mindestens 2 kWh).",
+        "off": "Korrigiert die Haushaltsprognose nie nach Temperatur."
+      },
+      "heatingDegreeNote": "Die nicht genutzten Varianten werden als Schattenprognosen aufgezeichnet. Vergleiche sie vor dem Umstellen in den Plandetails.",
+      "heating": {
+        "title": "Haushaltsverbrauch und Temperatur",
+        "loading": "Temperaturkorrektur wird geladen …",
+        "loadError": "Die Temperaturkorrektur konnte nicht geladen werden.",
+        "correcting": "Korrigiert",
+        "notCorrecting": "Korrigiert nicht",
+        "modeLine": "Einstellung: {mode}.",
+        "modes": {
+          "auto": "Automatisch",
+          "on": "An",
+          "off": "Aus"
+        },
+        "gateOpen": "Tagesprüfung (An): offen. Der Tagesverbrauch folgt den Heizgraden.",
+        "gateShut": "Tagesprüfung (An): geschlossen, {reason}",
+        "reasons": {
+          "no_tariff": "keine Temperaturprognose eingerichtet.",
+          "few_days": "weniger vollständige Tage als nötig.",
+          "few_samples": "weniger Messpaare als nötig.",
+          "daily_r_low": "der Tagesverbrauch folgt den Heizgraden nicht.",
+          "slope_not_positive": "der Verbrauch steigt nicht, wenn es kälter wird.",
+          "error": "der Verlauf konnte nicht gelesen werden."
+        },
+        "fitCaption": "Letzte 30 Tage: {from} bis {to}",
+        "check": {
+          "days": "Vollständige Tage",
+          "samples": "Messpaare",
+          "dailyR": "Tageskorrelation r",
+          "slope": "Steigung je K kälter"
+        },
+        "slopeValue": "{perSlot} Wh/Slot ({perDay} kWh/Tag)",
+        "met": "erfüllt",
+        "notMet": "nicht erfüllt",
+        "slotR": "15-Minuten-Korrelation r",
+        "autoGate": "Automatisch braucht ≥ {value}",
+        "meanHDD": "Mittlere Heizgrade",
+        "baseTemp": "unter {value} °C",
+        "daysCaption": "Prognose nach Tag",
+        "date": "Tag",
+        "uncorrected": "Profil",
+        "onCorrection": "An",
+        "cap": "Grenze",
+        "autoCorrection": "Auto",
+        "partial": "Teil",
+        "capped": "begrenzt",
+        "cappedTitle": "Unbegrenzt {value}",
+        "shadowTitle": "Schattenvergleich (An gegen Automatisch, Energiesummen)",
+        "shadowUnavailable": "Die Schattenprognosen konnten nicht gelesen werden.",
+        "window": {
+          "day": "Tag, erstellt 00:00",
+          "overnight": "Nacht 17:00–07:00, erstellt ab 12:00"
+        },
+        "collecting": "sammelt ({n}/{required} vollständige Zeiträume)",
+        "shadowScore": {
+          "better": "An ist genauer: mittlerer Fehler {on} gegen {auto} kWh, Differenz {delta} [{low}, {high}], {n} Zeiträume.",
+          "worse": "An ist ungenauer: mittlerer Fehler {on} gegen {auto} kWh, Differenz {delta} [{low}, {high}], {n} Zeiträume.",
+          "unclear": "kein klarer Unterschied: mittlerer Fehler {on} gegen {auto} kWh, Differenz {delta} [{low}, {high}], {n} Zeiträume."
+        },
+        "explain": "Die Korrektur verschiebt das Haushaltsprofil um die Steigung mal die Heizgrade (15 °C minus Prognosetemperatur), bezogen auf die letzten 30 Tage. Sie wird jede Mitternacht neu angepasst. Die nicht genutzten Varianten werden mitgeschrieben, damit An an gemessenen Tagen beurteilt werden kann, bevor es plant."
+      },
       "shading": {
         "title": "Verschattung nach Sonnenstand",
         "loading": "Gelernte Verschattung wird geladen …",

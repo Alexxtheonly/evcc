@@ -70,6 +70,7 @@ test("default values are explained without creating manual overrides or assuming
     ...defaults(),
     batteryEnergyPlane: {},
     batteryEfficiency: {},
+    heatingDegree: "auto", // absent means auto
   });
 });
 
@@ -104,6 +105,7 @@ test("unchanged configured values preserve billing instant, meter plane and expl
     batteryEfficiency: { storage: { chargeEfficiency: 0.95, dischargeEfficiency: 0.92 } },
     settlementMode: "interval",
     settlementFrom: "2026-04-01T13:00:00+05:30",
+    heatingDegree: "off",
   };
   vi.mocked(api.get).mockResolvedValue({ data: settings });
   vi.mocked(api.put).mockResolvedValue({});
@@ -374,5 +376,39 @@ test("solar shading toggle is off by default and saves both directions", async (
   expect(api.put).toHaveBeenCalledExactlyOnceWith(
     "config/energyintelligence",
     expect.objectContaining({ solarShading: false })
+  );
+});
+
+test("heating degree: three options with explanations, auto when absent, saved as chosen", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  vi.mocked(api.put).mockResolvedValue({});
+  const wrapper = mountSettings();
+  await open(wrapper);
+  const radio = (mode: string) => wrapper.get(`#energy-heatingDegree-${mode}`);
+  expect((radio("auto").element as HTMLInputElement).checked).toBe(true);
+  expect((radio("on").element as HTMLInputElement).checked).toBe(false);
+  const text = wrapper.get('[data-testid="energy-heatingDegree"]').text();
+  for (const mode of ["auto", "on", "off"]) {
+    expect(text).toContain(`forecast.energy.heatingDegreeModes.${mode}`);
+    expect(text).toContain(`forecast.energy.heatingDegreeHints.${mode}`);
+  }
+  await radio("on").setValue(true);
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(
+    "config/energyintelligence",
+    expect.objectContaining({ heatingDegree: "on", robust: false })
+  );
+
+  vi.mocked(api.put).mockClear();
+  vi.mocked(api.get).mockResolvedValue({ data: { ...defaults(), heatingDegree: "on" } });
+  await open(wrapper);
+  expect((radio("on").element as HTMLInputElement).checked).toBe(true);
+  await radio("off").setValue(true);
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(
+    "config/energyintelligence",
+    expect.objectContaining({ heatingDegree: "off" })
   );
 });

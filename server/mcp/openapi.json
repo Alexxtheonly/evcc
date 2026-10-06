@@ -3823,6 +3823,14 @@
           },
           "solarShading": {
             "type": "boolean"
+          },
+          "heatingDegree": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "on",
+              "off"
+            ]
           }
         },
         "required": [

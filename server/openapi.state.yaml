@@ -863,6 +863,12 @@ components:
           nullable: true
         solarShading:
           type: boolean
+        heatingDegree:
+          type: string
+          enum:
+            - auto
+            - on
+            - off
       required:
         - robust
         - arrivals
