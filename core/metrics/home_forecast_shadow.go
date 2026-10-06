@@ -165,19 +165,9 @@ func HomeForecastShadowWindows(window ShadowWindowFunc, variants []string, to ti
 		return nil, nil
 	}
 
-	type measured struct {
-		Ts     int64
-		Energy float64
-	}
-	var actual []measured
-	if err := db.Instance.Raw(`SELECT ts, energy FROM meters WHERE meter = 1 AND ts >= ? AND ts < ? AND energy IS NOT NULL AND COALESCE(recovered,0)=0 AND COALESCE(incomplete,0)=0`, from, until).Scan(&actual).Error; err != nil {
+	energy, err := measuredHomeEnergy(from, until)
+	if err != nil {
 		return nil, err
-	}
-	energy := make(map[int64]float64, len(actual))
-	for _, m := range actual {
-		if finite(m.Energy) && m.Energy >= 0 {
-			energy[m.Ts] = m.Energy
-		}
 	}
 
 	for i := range res {
@@ -204,6 +194,26 @@ func HomeForecastShadowWindows(window ShadowWindowFunc, variants []string, to ti
 			for v, f := range values {
 				w.Variants[v] += f
 			}
+		}
+	}
+	return res, nil
+}
+
+// measuredHomeEnergy returns the clean household slot energy (kWh) by slot
+// start in [from, until), excluding recovered and incomplete slots.
+func measuredHomeEnergy(from, until int64) (map[int64]float64, error) {
+	type measured struct {
+		Ts     int64
+		Energy float64
+	}
+	var rows []measured
+	if err := db.Instance.Raw(`SELECT ts, energy FROM meters WHERE meter = 1 AND ts >= ? AND ts < ? AND energy IS NOT NULL AND COALESCE(recovered,0)=0 AND COALESCE(incomplete,0)=0`, from, until).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	res := make(map[int64]float64, len(rows))
+	for _, m := range rows {
+		if finite(m.Energy) && m.Energy >= 0 {
+			res[m.Ts] = m.Energy
 		}
 	}
 	return res, nil
