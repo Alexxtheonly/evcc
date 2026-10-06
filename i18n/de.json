@@ -1462,7 +1462,7 @@
           "fromGrid": "{energy} aus dem Netz",
           "level": "{start} → {end}",
           "noData": "Keine Daten",
-          "plannedAt": "Geltender Plan zu Beginn (Stand {time})",
+          "plannedAt": "Maßgeblicher Plan (Lauf um {time})",
           "decision": "evcc-Entscheidung",
           "decisionThen": "danach {modes}",
           "decisionNote": "Was evcc entschieden hat, kein Nachweis, was der Speicher tat; das zeigen die Messwerte oben.",

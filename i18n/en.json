@@ -1462,7 +1462,7 @@
           "fromGrid": "{energy} from the grid",
           "level": "{start} → {end}",
           "noData": "No data",
-          "plannedAt": "Plan in force at the start (as of {time})",
+          "plannedAt": "Plan governing this slot (run at {time})",
           "decision": "evcc decision",
           "decisionThen": "then {modes}",
           "decisionNote": "What evcc decided, not proof of what the battery did; the measured values above show that.",
