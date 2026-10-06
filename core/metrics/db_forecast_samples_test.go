@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -122,4 +123,82 @@ func TestArchiveForecastSampleOutsideHorizon(t *testing.T) {
 	require.NoError(t, db.Instance.Order("lead_minutes").Find(&samples).Error)
 	require.Len(t, samples, 1, "only the in-horizon lead time is archived")
 	require.Equal(t, int(time.Hour.Minutes()), samples[0].LeadMinutes)
+}
+
+// TestQueryShadingSamples: a slot appears only with a forecast at the requested
+// lead and a clean reading from every PV entity reporting by then. Missing,
+// recovered, incomplete or partial-group readings are absent, never zero.
+func TestQueryShadingSamples(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, SetupSchema())
+	ctx := context.Background()
+
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC).Local() // the query returns local times
+	slot := func(i int) time.Time { return base.Add(time.Duration(i) * 15 * time.Minute) }
+
+	_, hasPV, err := QueryShadingSamples(ctx, 60, base, slot(10))
+	require.NoError(t, err)
+	require.False(t, hasPV, "no pv entity at all")
+
+	east := mustCreateEntity(t, PV, "db:5")
+	west := mustCreateEntity(t, PV, "db:6")
+
+	for i := range 7 {
+		require.NoError(t, db.Instance.Create(&forecastSample{Slot: slot(i).Unix(), LeadMinutes: 60, Energy: 1}).Error)
+		require.NoError(t, db.Instance.Create(&forecastSample{Slot: slot(i).Unix(), LeadMinutes: 1440, Energy: 2}).Error)
+	}
+	// slot 0: east only - west has not reported yet, so the group is complete
+	require.NoError(t, persist(east, slot(0), 0.4, 0, nil, false, false))
+	// slot 1: both, clean
+	require.NoError(t, persist(east, slot(1), 0.3, 0, nil, false, false))
+	require.NoError(t, persist(west, slot(1), 0.2, 0, nil, false, false))
+	// slot 2: west recovered
+	require.NoError(t, persist(east, slot(2), 0.3, 0, nil, false, false))
+	require.NoError(t, persist(west, slot(2), 0.2, 0, nil, true, false))
+	// slot 3: east incomplete
+	require.NoError(t, persist(east, slot(3), 0.3, 0, nil, false, true))
+	require.NoError(t, persist(west, slot(3), 0.2, 0, nil, false, false))
+	// slot 4: west missing after it had reported - partial group
+	require.NoError(t, persist(east, slot(4), 0.3, 0, nil, false, false))
+	// slot 5: no reading at all
+	// slot 6: both, measured zero - a real zero is kept
+	require.NoError(t, persist(east, slot(6), 0, 0, nil, false, false))
+	require.NoError(t, persist(west, slot(6), 0, 0, nil, false, false))
+	// slot 7: measured but no forecast archived
+	require.NoError(t, persist(east, slot(7), 0.3, 0, nil, false, false))
+	require.NoError(t, persist(west, slot(7), 0.3, 0, nil, false, false))
+
+	res, hasPV, err := QueryShadingSamples(ctx, 60, base, slot(10))
+	require.NoError(t, err)
+	require.True(t, hasPV)
+	require.Equal(t, []ShadingSample{
+		{Slot: slot(0), Forecast: 1, Measured: 0.4},
+		{Slot: slot(1), Forecast: 1, Measured: 0.5},
+		{Slot: slot(6), Forecast: 1, Measured: 0},
+	}, res)
+
+	res, _, err = QueryShadingSamples(ctx, 1440, slot(1), slot(2))
+	require.NoError(t, err)
+	require.Equal(t, []ShadingSample{{Slot: slot(1), Forecast: 2, Measured: 0.5}}, res, "lead and window are honoured")
+}
+
+// TestArchiveForecastSampleShadingRetention: other leads expire after 90 days,
+// the shading lead is kept for the seasonal windows of earlier years.
+func TestArchiveForecastSampleShadingRetention(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.AutoMigrate(new(forecastSample)))
+
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	old := now.AddDate(0, 0, -100)
+	ancient := now.AddDate(-ShadingRetentionYears, 0, -31)
+	for _, ts := range []time.Time{old, ancient} {
+		for _, lead := range []int{60, 360, 1440} {
+			require.NoError(t, db.Instance.Create(&forecastSample{Slot: ts.Unix(), LeadMinutes: lead, Energy: 1}).Error)
+		}
+	}
+	require.NoError(t, ArchiveForecastSample(now, func(_, _ time.Time) (float64, bool) { return 0, false }))
+
+	var kept []forecastSample
+	require.NoError(t, db.Instance.Find(&kept).Error)
+	require.Equal(t, []forecastSample{{Slot: old.Unix(), LeadMinutes: ShadingLeadMinutes, Energy: 1}}, kept)
 }

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -88,8 +89,24 @@ func ArchiveForecastSample(now time.Time, energyAt func(from, to time.Time) (flo
 		}
 	}
 
-	return errors.Join(errs, db.Instance.Where("slot < ?", now.AddDate(0, 0, -90).Unix()).Delete(new(forecastSample)).Error)
+	// samples at ShadingLeadMinutes are kept long enough for the shading map to
+	// learn from the same calendar weeks of earlier years (ADR-016)
+	return errors.Join(errs, db.Instance.
+		Where("slot < ? AND (lead_minutes <> ? OR slot < ?)",
+			now.AddDate(0, 0, -90).Unix(), ShadingLeadMinutes, now.AddDate(-ShadingRetentionYears, 0, -30).Unix()).
+		Delete(new(forecastSample)).Error)
 }
+
+// ShadingLeadMinutes is the forecast lead the solar shading map learns from.
+// The 60 min samples gave a slightly better day-ahead backtest than the 1440 min
+// ones (47 vs 48 % slot error, core/shading/backtest_test.go): a nearer
+// forecast carries less weather error, leaving more of the fixed geometry in
+// the ratio.
+const ShadingLeadMinutes = 60
+
+// ShadingRetentionYears is how many years of ShadingLeadMinutes samples are
+// kept (plus a month, covering the seasonal window around the anniversary).
+const ShadingRetentionYears = 3
 
 // LeadTimeSample pairs one archived forecast reading with the actual PV energy
 // measured for the same slot, for a per-lead-time forecast bias calculation.
@@ -120,4 +137,40 @@ func QueryLeadTimeSamples(from time.Time) ([]LeadTimeSample, error) {
 		Scan(&res).Error
 
 	return res, err
+}
+
+// ShadingSample is one completed slot with both its archived forecast and a
+// clean measurement of the whole PV group, in kWh.
+type ShadingSample struct {
+	Slot     time.Time
+	Forecast float64
+	Measured float64
+}
+
+// QueryShadingSamples returns the slots in [from,to) that have a forecast
+// archived at leadMinutes and a measurement from every PV entity reporting by
+// then. Slots with a missing, recovered, incomplete or invalid PV reading, or
+// a missing forecast, are absent from the result - never zero. hasPV is false
+// when no PV entity exists at all.
+func QueryShadingSamples(ctx context.Context, leadMinutes int, from, to time.Time) (res []ShadingSample, hasPV bool, err error) {
+	pv, err := queryGroupSeries(ctx, PV, from, to)
+	if err != nil || !pv.present {
+		return nil, pv.present, err
+	}
+
+	var rows []forecastSample
+	if err := db.Instance.WithContext(ctx).
+		Where("lead_minutes = ? AND slot >= ? AND slot < ?", leadMinutes, from.Unix(), to.Unix()).
+		Order("slot").Find(&rows).Error; err != nil {
+		return nil, true, err
+	}
+
+	for _, r := range rows {
+		wh, excluded := pv.energy(r.Slot, false)
+		if wh == nil || excluded || !finite(r.Energy) || r.Energy < 0 {
+			continue
+		}
+		res = append(res, ShadingSample{Slot: time.Unix(r.Slot, 0), Forecast: r.Energy, Measured: *wh / 1e3})
+	}
+	return res, true, nil
 }
