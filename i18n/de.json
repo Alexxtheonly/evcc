@@ -1336,6 +1336,7 @@
         "elevation": "Sonnenhöhe",
         "legendBelow": "weniger als Prognose",
         "legendAbove": "mehr",
+        "legendNeighbour": "von Nachbarn übernommen",
         "legendEmpty": "keine Daten",
         "explain": "Jede Zelle zeigt gemessene ÷ prognostizierte Solarenergie, während die Sonne dort stand; jüngere Tage zählen mehr. 1,0 heißt: Die Prognose stimmte.",
         "tooltipPosition": "Richtung {azimuth}, Höhe {elevation}",

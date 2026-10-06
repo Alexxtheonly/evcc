@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/evcc-io/evcc/api"
+	"github.com/evcc-io/evcc/core/keys"
 	"github.com/evcc-io/evcc/core/metrics"
 	"github.com/evcc-io/evcc/core/shading"
 	"github.com/evcc-io/evcc/server/db"
@@ -246,6 +247,9 @@ func TestSolarShadingFromDatabase(t *testing.T) {
 
 	site := NewSite()
 	site.tariffs = &tariff.Tariffs{SolarLocations: []*tariff.Location{&loc}}
+	if v, err := settings.Bool(keys.SolarAdjusted); err == nil {
+		site.solarAdjusted = v // as stored in the copy, without persisting
+	}
 	st := site.SolarShading()
 	require.True(t, st.Available, st.Reason)
 

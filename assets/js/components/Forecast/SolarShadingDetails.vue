@@ -24,7 +24,7 @@
 					· {{ $t("forecast.energy.shading.updated", { time: updated }) }}</template
 				>
 			</p>
-			<p class="small text-muted mb-2">{{ fallbackNote }}</p>
+			<p v-if="status.available" class="small text-muted mb-2">{{ fallbackNote }}</p>
 			<template v-if="grid.cells.length">
 				<div
 					ref="chartEl"
@@ -34,14 +34,27 @@
 					data-testid="solar-shading-chart"
 				></div>
 				<div class="shading-legend small text-muted mt-1" aria-hidden="true">
-					<span>{{ $t("forecast.energy.shading.legendBelow") }}</span>
-					<span class="legend-ramp" :style="{ background: legendRamp }"></span>
-					<span>{{ $t("forecast.energy.shading.legendAbove") }}</span>
-					<span class="legend-empty"></span>
-					<span>{{ $t("forecast.energy.shading.legendEmpty") }}</span>
+					<span class="legend-item">
+						<span>{{ $t("forecast.energy.shading.legendBelow") }}</span>
+						<span class="legend-ramp" :style="{ background: legendRamp }"></span>
+						<span>{{ $t("forecast.energy.shading.legendAbove") }}</span>
+					</span>
+					<span class="legend-item">
+						<span
+							class="legend-swatch legend-neighbour"
+							:style="{ background: neighbourSwatch }"
+						></span>
+						<span>{{ $t("forecast.energy.shading.legendNeighbour") }}</span>
+					</span>
+					<span class="legend-item">
+						<span class="legend-swatch legend-empty"></span>
+						<span>{{ $t("forecast.energy.shading.legendEmpty") }}</span>
+					</span>
 				</div>
 			</template>
-			<p class="small text-muted mt-2 mb-0">{{ $t("forecast.energy.shading.explain") }}</p>
+			<p v-if="grid.cells.length" class="small text-muted mt-2 mb-0">
+				{{ $t("forecast.energy.shading.explain") }}
+			</p>
 		</template>
 	</div>
 </template>
@@ -64,6 +77,7 @@ import {
 // a blue for "more than forecast": the palette's mid blue, distinct from the
 // danger hue for colour-vision deficiencies
 const ABOVE = () => colors.palette[7] || "#2563EB";
+const NEIGHBOUR_OPACITY = 0.45;
 
 export default defineComponent({
 	name: "SolarShadingDetails",
@@ -105,6 +119,9 @@ export default defineComponent({
 		range() {
 			const p = this.status?.parameters;
 			return { min: p?.minFactor ?? 0.05, max: p?.maxFactor ?? 1.5 };
+		},
+		neighbourSwatch(): string {
+			return factorColor(0.4, this.range, this.palette);
 		},
 		legendRamp(): string {
 			const stops = [this.range.min, 0.5, 1, (1 + this.range.max) / 2, this.range.max];
@@ -181,6 +198,8 @@ export default defineComponent({
 							value: [c.x, c.y, c.bin.factor],
 							itemStyle: {
 								color: factorColor(c.bin.factor, this.range, this.palette),
+								// borrowed from neighbouring positions: shown, but fainter
+								opacity: c.bin.source === "learned" ? 1 : NEIGHBOUR_OPACITY,
 								borderColor: colors.box || "",
 								borderWidth: 1,
 							},
@@ -260,18 +279,28 @@ export default defineComponent({
 	flex-wrap: wrap;
 	gap: 0.4rem;
 }
+.legend-item {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	margin-right: 0.6rem;
+}
 .legend-ramp {
 	display: inline-block;
 	width: 6rem;
 	height: 0.6rem;
 	border-radius: 2px;
 }
-.legend-empty {
+.legend-swatch {
 	display: inline-block;
 	width: 0.8rem;
 	height: 0.6rem;
-	margin-left: 0.6rem;
-	border: 1px dashed var(--bs-border-color);
 	border-radius: 2px;
+}
+.legend-neighbour {
+	opacity: 0.45;
+}
+.legend-empty {
+	border: 1px dashed var(--bs-border-color);
 }
 </style>

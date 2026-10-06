@@ -1336,6 +1336,7 @@
         "elevation": "Sun height",
         "legendBelow": "less than forecast",
         "legendAbove": "more",
+        "legendNeighbour": "borrowed from neighbours",
         "legendEmpty": "no data",
         "explain": "Each cell shows measured ÷ forecast solar energy while the sun stood there, recent days weighted more. 1.0 means the forecast was right.",
         "tooltipPosition": "Direction {azimuth}, height {elevation}",

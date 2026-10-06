@@ -41,7 +41,10 @@ const mountWith = async (data: unknown) => {
 };
 
 type HeatmapOption = {
-  series: { type: string; data: { value: number[]; itemStyle: { color: string } }[] }[];
+  series: {
+    type: string;
+    data: { value: number[]; itemStyle: { color: string; opacity: number } }[];
+  }[];
   tooltip: { formatter: (p: { dataIndex: number }) => string };
 };
 const lastOption = () => setOption.mock.calls.at(-1)?.[0] as HeatmapOption;
@@ -94,6 +97,8 @@ test("unavailable without coordinates: reason, no chart", async () => {
   );
   expect(wrapper.text()).toContain("forecast.energy.shading.unavailable.coordinates");
   expect(wrapper.find('[data-testid="solar-shading-chart"]').exists()).toBe(false);
+  expect(wrapper.text()).not.toContain("forecast.energy.shading.fallback");
+  expect(wrapper.text()).not.toContain("forecast.energy.shading.explain");
   expect(setOption).not.toHaveBeenCalled();
 });
 
@@ -104,4 +109,12 @@ test("load failure is shown, not an empty map", async () => {
   await flushPromises();
   expect(wrapper.text()).toContain("forecast.energy.shading.loadError");
   expect(wrapper.find('[data-testid="solar-shading-status"]').exists()).toBe(false);
+});
+
+test("bins borrowed from neighbours are drawn fainter than learned ones", async () => {
+  const s = status();
+  s.bins[1] = { ...s.bins[1]!, source: "neighbour" };
+  await mountWith(s);
+  const data = lastOption().series[0]!.data;
+  expect(data.map((d) => d.itemStyle.opacity)).toEqual([1, 0.45, 1]);
 });
