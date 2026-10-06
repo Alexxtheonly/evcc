@@ -46,6 +46,10 @@
 				:high="insights?.scenarios?.batterySocHigh"
 				:currency="currency"
 				:device-color-overrides="deviceColors"
+				:history="history"
+				:history-hours="historyHours"
+				:history-error="historyError"
+				@update:history-hours="setHistoryHours"
 			/>
 			<h4 class="fs-6 mt-4 mb-2">{{ $t("forecast.energy.plan.daysTitle") }}</h4>
 			<div class="days mb-3" data-testid="energy-plan-days">
@@ -304,6 +308,8 @@
 </template>
 <script lang="ts">
 import { defineComponent, type PropType } from "vue";
+import api from "@/api";
+import settings, { type PlanHistoryHours } from "@/settings";
 import Card from "../Helper/Card.vue";
 import EnergySettings from "./EnergySettings.vue";
 import EnergyPlanChart from "./EnergyPlanChart.vue";
@@ -315,8 +321,9 @@ import {
 	planWindows,
 	type EnergyDevice,
 	type EnergyInsights,
+	type PlanHistory,
 } from "./energyIntelligence";
-import { gridChargeBlocks } from "./planChartModel";
+import { SLOT_MS, gridChargeBlocks } from "./planChartModel";
 import {
 	daySummaries,
 	planHeadline,
@@ -353,8 +360,25 @@ export default defineComponent({
 			default: () => [],
 		},
 		deviceColors: { type: Object as PropType<DeviceColors>, default: () => ({}) },
+		// the Plan tab is showing; measured history is only fetched then
+		active: Boolean,
+	},
+	data() {
+		return {
+			history: undefined as PlanHistory | undefined,
+			historyError: false,
+			historySeq: 0,
+			historyTimer: 0,
+		};
 	},
 	computed: {
+		historyHours(): PlanHistoryHours {
+			return settings.planHistoryHours;
+		},
+		// the window to fetch, 0 while nothing should be fetched
+		historyRequest(): number {
+			return this.active && this.slots.length ? this.historyHours : 0;
+		},
 		status() {
 			return this.insights?.status ?? (this.health?.ok ? "ready" : "unavailable");
 		},
@@ -428,7 +452,54 @@ export default defineComponent({
 			});
 		},
 	},
+	watch: {
+		historyRequest: {
+			immediate: true,
+			handler(hours: number) {
+				window.clearTimeout(this.historyTimer);
+				if (!hours) return;
+				this.fetchHistory();
+				this.scheduleHistory();
+			},
+		},
+	},
+	beforeUnmount() {
+		window.clearTimeout(this.historyTimer);
+		this.historySeq++;
+	},
 	methods: {
+		setHistoryHours(hours: PlanHistoryHours) {
+			settings.planHistoryHours = hours;
+		},
+		async fetchHistory() {
+			const seq = ++this.historySeq;
+			const hours = this.historyRequest;
+			try {
+				// answered quietly: a missing database is shown beside the chart, not raised
+				const response = await api.get<PlanHistory>("energyplan/history", {
+					params: { hours },
+					validateStatus: () => true,
+				});
+				if (seq !== this.historySeq) return;
+				const ok = response.status === 200 && Array.isArray(response.data?.forecast);
+				this.history = ok ? response.data : undefined;
+				this.historyError = !ok;
+			} catch {
+				if (seq !== this.historySeq) return;
+				this.history = undefined;
+				this.historyError = true;
+			}
+		},
+		// measured slots are written just after each boundary: refresh once per slot,
+		// not on every websocket update
+		scheduleHistory() {
+			const now = Date.now();
+			const next = Math.floor(now / SLOT_MS) * SLOT_MS + SLOT_MS + 45_000;
+			this.historyTimer = window.setTimeout(() => {
+				this.fetchHistory();
+				this.scheduleHistory();
+			}, next - now);
+		},
 		openSettings(event: Event) {
 			(this.$refs["settings"] as unknown as InstanceType<typeof EnergySettings>).open(event);
 		},

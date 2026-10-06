@@ -32,6 +32,7 @@
 				:currency="currency"
 				:configured-batteries="configuredBatteries"
 				:device-colors="deviceColors"
+				:active="activeTab === 'plan'"
 			/>
 		</section>
 		<section

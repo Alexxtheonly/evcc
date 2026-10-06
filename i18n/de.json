@@ -1446,7 +1446,24 @@
         "ribbonHint": "Die Fläche um den Ladestand des Speichers ist der Szenariobereich, keine Garantie.",
         "moreLayers": "Weitere Ebenen",
         "whenUntilPlanEnd": "bis zum Ende des Plans",
-        "whenFromToPlanEnd": "ab {start} bis zum Ende des Plans"
+        "whenFromToPlanEnd": "ab {start} bis zum Ende des Plans",
+        "history": {
+          "label": "Vergangenheit",
+          "off": "Aus (nur Plan)",
+          "hours": "{hours} h",
+          "measured": "Gemessen",
+          "plan": "Plan",
+          "unavailable": "Messwerte nicht verfügbar",
+          "flagged": "Enthält nachgeholte oder unvollständige Zählerwerte.",
+          "gridImport": "Netzbezug",
+          "gridExport": "Einspeisung",
+          "gridCost": "Netzkosten",
+          "feedInRevenue": "Einspeisevergütung",
+          "fromGrid": "{energy} aus dem Netz",
+          "level": "{start} → {end}",
+          "noData": "Keine Daten",
+          "plannedAt": "Geltender Plan zu Beginn (Stand {time})"
+        }
       }
     },
     "co2": {

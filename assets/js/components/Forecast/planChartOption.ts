@@ -6,12 +6,17 @@ import {
   hasSoc,
   kw,
   ms,
+  pastDevicePower,
+  pastGridBlocks,
+  pastSocPoints,
   socRibbon,
   stepBands,
   stepPoints,
   type Band,
   type ChartLayout,
   type ChartVisibility,
+  type GridBlock,
+  type PastView,
   type Point,
 } from "./planChartModel";
 import type { EnergyDevice, EnergyForecastSlot } from "./energyIntelligence";
@@ -31,6 +36,8 @@ export interface ChartInput {
   visibility: ChartVisibility;
   low?: number[];
   high?: number[];
+  // measured slots before the plan; absent draws the plan alone
+  past?: PastView;
   colors: ChartColors;
   width: number;
   formatHour: (date: Date) => string;
@@ -126,8 +133,12 @@ const SOC: Axis = { xAxisIndex: 1, yAxisIndex: 2 };
 
 // Vertical shading for grid charging, drawn in every visible grid.
 function gridSeries(input: ChartInput, showSoc: boolean) {
-  const { price } = input.colors;
   const blocks = input.visibility.layers.grid ? gridChargeBlocks(input.slots) : [];
+  return gridShading(input, showSoc, blocks, "grid");
+}
+
+function gridShading(input: ChartInput, showSoc: boolean, blocks: GridBlock[], prefix: string) {
+  const { price } = input.colors;
   if (!blocks.length) return [];
   const shading = (axis: Axis, id: string) => ({
     id,
@@ -153,7 +164,7 @@ function gridSeries(input: ChartInput, showSoc: boolean) {
       ]),
     },
   });
-  return [shading(POWER, "grid-power"), ...(showSoc ? [shading(SOC, "grid-soc")] : [])];
+  return [shading(POWER, `${prefix}-power`), ...(showSoc ? [shading(SOC, `${prefix}-soc`)] : [])];
 }
 
 // Solar and household demand: estimate line over its stepped low-high band.
@@ -223,10 +234,16 @@ function powerSeries(input: ChartInput) {
     });
 }
 
+// Past prices are known facts, so the price line simply runs on through "now".
 function priceSeries(input: ChartInput) {
   if (!input.visibility.layers.price) return [];
-  const price = (slot: EnergyForecastSlot) => (finite(slot.gridPrice) ? slot.gridPrice : undefined);
-  return [lineSeries("price", stepPoints(input.slots, price), input.colors.price, PRICE)];
+  const price = (slot: { gridPrice: number | null }) =>
+    finite(slot.gridPrice) ? slot.gridPrice : undefined;
+  const plan = stepPoints(input.slots, price);
+  const past = input.past ? stepPoints(input.past.slots, price) : [];
+  const seam = past.length && input.past!.end - (past.at(-1)![0] ?? 0) > 60_000;
+  const data: Point[] = [...past, ...(seam ? [[input.past!.end, null] as Point] : []), ...plan];
+  return [lineSeries("price", data, input.colors.price, PRICE)];
 }
 
 // Charge levels at interval ends, with the battery's scenario ribbon underneath.
@@ -251,6 +268,88 @@ function socSeries(input: ChartInput, socDevices: EnergyDevice[]) {
           ]
         : [];
     }),
+  ];
+}
+
+// Measured past: a tinted region ending at a "now" line, solid measured lines in the
+// plan's colours (no estimate bands), measured grid charging and charge levels.
+function pastSeries(input: ChartInput, showSoc: boolean, socDevices: EnergyDevice[]) {
+  const past = input.past;
+  if (!past) return [];
+  const { colors, visibility } = input;
+  const region = (axis: Axis, id: string) => ({
+    id,
+    type: "line",
+    data: [],
+    silent: true,
+    z: 0,
+    ...axis,
+    markArea: {
+      silent: true,
+      itemStyle: { color: alpha(colors.text, 0.05) },
+      data: [[{ xAxis: past.start }, { xAxis: past.end }]],
+    },
+    markLine: {
+      silent: true,
+      symbol: "none",
+      label: { show: false },
+      lineStyle: { color: colors.muted, type: "solid", width: 1 },
+      data: [{ xAxis: past.end }],
+    },
+  });
+  const color = (device: EnergyDevice) => colors.devices[device.key] ?? colors.muted;
+  const measured = past.slots;
+  return [
+    region(POWER, "past-region-power"),
+    ...(showSoc ? [region(SOC, "past-region-soc")] : []),
+    ...gridShading(
+      input,
+      showSoc,
+      visibility.layers.grid ? pastGridBlocks(measured) : [],
+      "past-grid"
+    ),
+    ...(visibility.layers.solar
+      ? [
+          lineSeries(
+            "past-solar",
+            stepPoints(measured, (s) => kw(s.solarWh, s)),
+            colors.solar,
+            POWER,
+            { area: alpha(colors.solar, 0.28) }
+          ),
+        ]
+      : []),
+    ...(visibility.layers.home
+      ? [
+          lineSeries(
+            "past-home",
+            stepPoints(measured, (s) => kw(s.homeWh, s)),
+            colors.text,
+            POWER,
+            { width: 1.5 }
+          ),
+        ]
+      : []),
+    ...input.devices
+      .filter((device) => visibility.power[device.key] && past.points[device.key])
+      .map((device) => {
+        const battery = device.kind === "battery";
+        return lineSeries(
+          `past-power-${device.key}`,
+          stepPoints(measured, (s) => pastDevicePower(past, device.key, s)),
+          color(device),
+          POWER,
+          { width: battery ? 2 : 1.5, area: battery ? undefined : alpha(color(device), 0.35) }
+        );
+      }),
+    ...(showSoc
+      ? socDevices.flatMap((device) => {
+          const points = pastSocPoints(past, device.key, device.initialSoc);
+          return points.length
+            ? [lineSeries(`past-soc-${device.key}`, points, color(device), SOC)]
+            : [];
+        })
+      : []),
   ];
 }
 
@@ -362,7 +461,7 @@ export function buildPlanChartOption(input: ChartInput) {
   const socDevices = devices.filter((device) => hasSoc(device) && visibility.soc[device.key]);
   const showSoc = socDevices.length > 0;
   const layout = chartLayout(showSoc);
-  const start = ms(slots[0]!.start);
+  const start = input.past?.start ?? ms(slots[0]!.start);
   const end = ms(slots.at(-1)!.end);
   const power = gridRect(layout, layout.powerTop, layout.powerHeight);
   return {
@@ -380,6 +479,7 @@ export function buildPlanChartOption(input: ChartInput) {
         ...powerSeries(input),
         ...priceSeries(input),
         ...(showSoc ? socSeries(input, socDevices) : []),
+        ...pastSeries(input, showSoc, socDevices),
       ],
     },
   };

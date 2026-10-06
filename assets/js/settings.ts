@@ -22,6 +22,7 @@ const SESSIONS_TYPE = "sessions_type";
 const BATTERY_UNIT = "battery_unit";
 const SETTINGS_PRICE_ZOOM = "settings_price_zoom";
 const SETTINGS_HIDE_FEEDIN = "settings_hide_feedin";
+const SETTINGS_PLAN_HISTORY_HOURS = "settings_plan_history_hours";
 const LAST_BATTERY_SMART_COST_LIMIT = "last_battery_smart_cost_limit";
 const LAST_TARGET_TIME = "last_target_time";
 const LAST_SOC_GOAL = "last_soc_goal";
@@ -99,6 +100,18 @@ function saveJSON(key: string) {
   };
 }
 
+// Measured past shown before the energy plan; 0 shows the plan only.
+export const PLAN_HISTORY_HOURS = [0, 6, 12, 24, 48] as const;
+export type PlanHistoryHours = (typeof PLAN_HISTORY_HOURS)[number];
+const DEFAULT_PLAN_HISTORY_HOURS: PlanHistoryHours = 24;
+
+export function parsePlanHistoryHours(value: string | undefined | null): PlanHistoryHours {
+  const hours = Number(value);
+  return value != null && value !== "" && PLAN_HISTORY_HOURS.some((option) => option === hours)
+    ? (hours as PlanHistoryHours)
+    : DEFAULT_PLAN_HISTORY_HOURS;
+}
+
 export interface LoadpointSettings {
   order?: number;
   visible?: boolean;
@@ -127,6 +140,7 @@ export interface Settings {
   batteryUnit: string;
   priceZoom: boolean;
   hideFeedin: boolean;
+  planHistoryHours: PlanHistoryHours;
   loadpoints: Record<string, LoadpointSettings>;
   lastBatterySmartCostLimit: number | undefined;
   lastTargetTime: string | null;
@@ -156,6 +170,7 @@ const settings: Settings = reactive({
   batteryUnit: read(BATTERY_UNIT),
   priceZoom: readBool(SETTINGS_PRICE_ZOOM),
   hideFeedin: readBool(SETTINGS_HIDE_FEEDIN),
+  planHistoryHours: parsePlanHistoryHours(read(SETTINGS_PLAN_HISTORY_HOURS)),
   loadpoints: readJSON(LOADPOINTS),
   lastBatterySmartCostLimit: readNumber(LAST_BATTERY_SMART_COST_LIMIT),
   lastTargetTime: read(LAST_TARGET_TIME),
@@ -184,6 +199,11 @@ watch(() => settings.sessionsType, save(SESSIONS_TYPE));
 watch(() => settings.batteryUnit, save(BATTERY_UNIT));
 watch(() => settings.priceZoom, saveBool(SETTINGS_PRICE_ZOOM));
 watch(() => settings.hideFeedin, saveBool(SETTINGS_HIDE_FEEDIN));
+// stored explicitly, "0" included: Off must survive a reload instead of reverting to the default
+watch(
+  () => settings.planHistoryHours,
+  (value) => save(SETTINGS_PLAN_HISTORY_HOURS)(String(value))
+);
 watch(() => settings.loadpoints, saveJSON(LOADPOINTS), { deep: true });
 watch(() => settings.lastBatterySmartCostLimit, saveNumber(LAST_BATTERY_SMART_COST_LIMIT));
 watch(() => settings.lastTargetTime, save(LAST_TARGET_TIME));

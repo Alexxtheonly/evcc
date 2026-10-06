@@ -1446,7 +1446,24 @@
         "ribbonHint": "The band around the battery's charge level is the scenario range, not a guarantee.",
         "moreLayers": "More layers",
         "whenUntilPlanEnd": "until the end of the plan",
-        "whenFromToPlanEnd": "from {start} until the end of the plan"
+        "whenFromToPlanEnd": "from {start} until the end of the plan",
+        "history": {
+          "label": "Past",
+          "off": "Off (plan only)",
+          "hours": "{hours} h",
+          "measured": "Measured",
+          "plan": "Plan",
+          "unavailable": "Measured values unavailable",
+          "flagged": "Includes catch-up or incomplete meter readings.",
+          "gridImport": "Grid import",
+          "gridExport": "Grid feed-in",
+          "gridCost": "Grid cost",
+          "feedInRevenue": "Feed-in revenue",
+          "fromGrid": "{energy} from the grid",
+          "level": "{start} → {end}",
+          "noData": "No data",
+          "plannedAt": "Plan in force at the start (as of {time})"
+        }
       }
     },
     "co2": {

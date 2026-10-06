@@ -22,6 +22,33 @@
 					{{ $t(`forecast.energy.plan.layer.${layer}`) }}
 				</button>
 			</div>
+			<div class="legend-group">
+				<label class="legend-label" :for="`${uid}-history`">{{
+					$t("forecast.energy.plan.history.label")
+				}}</label>
+				<select
+					:id="`${uid}-history`"
+					class="form-select form-select-sm history-select"
+					:value="historyHours"
+					data-testid="plan-history-hours"
+					@change="selectHistory"
+				>
+					<option v-for="hours in historyOptions" :key="hours" :value="hours">
+						{{
+							hours
+								? $t("forecast.energy.plan.history.hours", { hours })
+								: $t("forecast.energy.plan.history.off")
+						}}
+					</option>
+				</select>
+				<span
+					v-if="historyHours && historyError"
+					class="small text-muted"
+					role="status"
+					data-testid="plan-history-error"
+					>{{ $t("forecast.energy.plan.history.unavailable") }}</span
+				>
+			</div>
 			<div
 				v-if="socDevices.length"
 				class="legend-group"
@@ -111,6 +138,22 @@
 			@keydown="onKey"
 		>
 			<div ref="chartEl" class="chart-canvas" :style="{ height: `${layout.height}px` }" />
+			<template v-if="eras">
+				<span
+					class="era-label"
+					aria-hidden="true"
+					data-testid="era-measured"
+					:style="{ right: `${eras.right}px`, maxWidth: `${eras.pastWidth}px` }"
+					>{{ $t("forecast.energy.plan.history.measured") }}</span
+				>
+				<span
+					class="era-label"
+					aria-hidden="true"
+					data-testid="era-plan"
+					:style="{ left: `${eras.left}px`, maxWidth: `${eras.planWidth}px` }"
+					>{{ $t("forecast.energy.plan.history.plan") }}</span
+				>
+			</template>
 			<div
 				v-if="crosshair"
 				class="crosshair"
@@ -128,7 +171,7 @@
 			tooltip.mode === "keyboard" ? liveText : ""
 		}}</span>
 		<div
-			v-if="details"
+			v-if="details || pastDetails"
 			ref="tooltip"
 			class="plan-tooltip shadow"
 			:class="{ interactive: tooltip.mode === 'touch' }"
@@ -136,66 +179,195 @@
 			aria-hidden="true"
 			data-testid="plan-tooltip"
 		>
-			<div class="fw-semibold mb-1">{{ interval(details.start, details.end) }}</div>
-			<table class="tooltip-table">
-				<tbody>
-					<tr v-if="details.price != null">
-						<th>
-							<span class="legend-mark mark-price" />{{
-								$t("forecast.energy.plan.layer.price")
-							}}
-						</th>
-						<td>{{ fmtPricePerKWh(details.price, currency) }}</td>
-					</tr>
-					<tr v-if="details.home">
-						<th>
-							<span class="legend-mark mark-home" />{{
-								$t("forecast.energy.plan.layer.home")
-							}}
-						</th>
-						<td>
-							{{ power(details.home.value) }}
-							<small class="d-block">{{ range(details.home) }}</small>
-						</td>
-					</tr>
-					<tr v-if="details.solar">
-						<th>
-							<span class="legend-mark mark-solar" />{{
-								$t("forecast.energy.plan.layer.solar")
-							}}
-						</th>
-						<td>
-							{{ power(details.solar.value) }}
-							<small class="d-block">{{ range(details.solar) }}</small>
-						</td>
-					</tr>
-					<tr v-if="details.grid">
-						<th>
-							<span class="legend-mark mark-grid" />{{
-								$t("forecast.energy.plan.layer.grid")
-							}}
-						</th>
-						<td>{{ gridText(details.grid) }}</td>
-					</tr>
-					<tr v-for="device in details.devices" :key="device.key">
-						<th>
-							<span
-								class="legend-mark mark-line"
-								:style="{ color: deviceColors[device.key] }"
-							/><span class="device-name" :title="device.title">{{
-								device.title
-							}}</span>
-						</th>
-						<td>
-							<template v-if="device.soc != null">
-								{{ percent(device.soc) }}
-								<small class="d-block">{{ deviceState(device) }}</small>
-							</template>
-							<template v-else>{{ deviceState(device) }}</template>
-						</td>
-					</tr>
-				</tbody>
-			</table>
+			<template v-if="pastDetails">
+				<div class="fw-semibold mb-1">
+					{{ interval(pastDetails.start, pastDetails.end) }}
+					<span class="measured-badge">{{
+						$t("forecast.energy.plan.history.measured")
+					}}</span>
+				</div>
+				<p v-if="pastDetails.flagged" class="small mb-1 flagged-note">
+					{{ $t("forecast.energy.plan.history.flagged") }}
+				</p>
+				<table class="tooltip-table">
+					<tbody>
+						<tr v-if="pastDetails.price != null">
+							<th>
+								<span class="legend-mark mark-price" />{{
+									$t("forecast.energy.plan.layer.price")
+								}}
+							</th>
+							<td>{{ fmtPricePerKWh(pastDetails.price, currency) }}</td>
+						</tr>
+						<tr v-if="visibility.layers.home">
+							<th>
+								<span class="legend-mark mark-home" />{{
+									$t("forecast.energy.plan.layer.home")
+								}}
+							</th>
+							<td>{{ power(pastDetails.home) }}</td>
+						</tr>
+						<tr v-if="visibility.layers.solar">
+							<th>
+								<span class="legend-mark mark-solar" />{{
+									$t("forecast.energy.plan.layer.solar")
+								}}
+							</th>
+							<td>{{ power(pastDetails.solar) }}</td>
+						</tr>
+						<tr>
+							<th>{{ $t("forecast.energy.plan.history.gridImport") }}</th>
+							<td>{{ power(pastDetails.gridImport) }}</td>
+						</tr>
+						<tr>
+							<th>{{ $t("forecast.energy.plan.history.gridExport") }}</th>
+							<td>{{ power(pastDetails.gridExport) }}</td>
+						</tr>
+						<tr v-if="visibility.layers.grid">
+							<th>
+								<span class="legend-mark mark-grid" />{{
+									$t("forecast.energy.plan.layer.grid")
+								}}
+							</th>
+							<td>
+								{{
+									pastDetails.gridChargeWh == null
+										? $t("forecast.energy.plan.unavailable")
+										: pastDetails.gridChargeWh < transferMinWh
+											? $t("forecast.energy.plan.gridNone")
+											: $t("forecast.energy.plan.history.fromGrid", {
+													energy: kwh(pastDetails.gridChargeWh),
+												})
+								}}
+							</td>
+						</tr>
+						<tr>
+							<th>{{ $t("forecast.energy.plan.history.gridCost") }}</th>
+							<td>
+								{{
+									pastDetails.gridCost != null
+										? money(pastDetails.gridCost)
+										: $t("forecast.energy.plan.unavailable")
+								}}
+							</td>
+						</tr>
+						<tr v-if="pastDetails.feedInRevenue">
+							<th>{{ $t("forecast.energy.plan.history.feedInRevenue") }}</th>
+							<td>{{ money(pastDetails.feedInRevenue) }}</td>
+						</tr>
+						<tr v-for="device in pastDetails.devices" :key="device.key">
+							<th>
+								<span
+									class="legend-mark mark-line"
+									:style="{ color: deviceColors[device.key] }"
+								/><span class="device-name" :title="device.title">{{
+									device.title
+								}}</span>
+							</th>
+							<td>
+								<template v-if="device.soc != null">{{ level(device) }}</template>
+								<small :class="{ 'd-block': device.soc != null }">{{
+									pastDeviceState(device)
+								}}</small>
+							</td>
+						</tr>
+					</tbody>
+					<tbody v-if="pastDetails.planned" data-testid="plan-tooltip-planned">
+						<tr>
+							<th colspan="2" class="planned-title">
+								{{
+									$t("forecast.energy.plan.history.plannedAt", {
+										time: timeFormat(pastDetails.planned.snapshot, true),
+									})
+								}}
+							</th>
+						</tr>
+						<tr v-if="pastDetails.planned.grid">
+							<th>{{ $t("forecast.energy.plan.layer.grid") }}</th>
+							<td>{{ gridText(pastDetails.planned.grid) }}</td>
+						</tr>
+						<template v-for="device in pastDetails.devices" :key="device.key">
+							<tr v-if="device.planned">
+								<th>
+									<span class="device-name" :title="device.title">{{
+										device.title
+									}}</span>
+								</th>
+								<td>
+									<template v-if="device.planned.soc != null"
+										>{{ percent(device.planned.soc) }}
+									</template>
+									<small :class="{ 'd-block': device.planned.soc != null }">{{
+										plannedState(device.planned)
+									}}</small>
+								</td>
+							</tr>
+						</template>
+					</tbody>
+				</table>
+			</template>
+			<template v-else-if="details">
+				<div class="fw-semibold mb-1">{{ interval(details.start, details.end) }}</div>
+				<table class="tooltip-table">
+					<tbody>
+						<tr v-if="details.price != null">
+							<th>
+								<span class="legend-mark mark-price" />{{
+									$t("forecast.energy.plan.layer.price")
+								}}
+							</th>
+							<td>{{ fmtPricePerKWh(details.price, currency) }}</td>
+						</tr>
+						<tr v-if="details.home">
+							<th>
+								<span class="legend-mark mark-home" />{{
+									$t("forecast.energy.plan.layer.home")
+								}}
+							</th>
+							<td>
+								{{ power(details.home.value) }}
+								<small class="d-block">{{ range(details.home) }}</small>
+							</td>
+						</tr>
+						<tr v-if="details.solar">
+							<th>
+								<span class="legend-mark mark-solar" />{{
+									$t("forecast.energy.plan.layer.solar")
+								}}
+							</th>
+							<td>
+								{{ power(details.solar.value) }}
+								<small class="d-block">{{ range(details.solar) }}</small>
+							</td>
+						</tr>
+						<tr v-if="details.grid">
+							<th>
+								<span class="legend-mark mark-grid" />{{
+									$t("forecast.energy.plan.layer.grid")
+								}}
+							</th>
+							<td>{{ gridText(details.grid) }}</td>
+						</tr>
+						<tr v-for="device in details.devices" :key="device.key">
+							<th>
+								<span
+									class="legend-mark mark-line"
+									:style="{ color: deviceColors[device.key] }"
+								/><span class="device-name" :title="device.title">{{
+									device.title
+								}}</span>
+							</th>
+							<td>
+								<template v-if="device.soc != null">
+									{{ percent(device.soc) }}
+									<small class="d-block">{{ deviceState(device) }}</small>
+								</template>
+								<template v-else>{{ deviceState(device) }}</template>
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</template>
 		</div>
 	</div>
 </template>
@@ -207,13 +379,20 @@ import { CURRENCY, type DeviceColors } from "@/types/evcc";
 import { is12hFormat } from "@/units";
 import { echarts } from "./echarts";
 import { CustomChart } from "echarts/charts";
-import type { EnergyDevice, EnergyForecastSlot } from "./energyIntelligence";
+import {
+	TRANSFER_MIN_WH,
+	type EnergyDevice,
+	type EnergyForecastSlot,
+	type PlanHistory,
+} from "./energyIntelligence";
 import {
 	FORECAST_LAYERS,
 	chartLayout,
 	defaultVisibility,
 	deviceColorAssignment,
 	hasSoc,
+	pastSlotDetails,
+	pastView,
 	placeTooltip,
 	slotDetails,
 	slotIndexAt,
@@ -222,8 +401,12 @@ import {
 	type ChartVisibility,
 	type DeviceSlotDetail,
 	type GridChargeState,
+	type PastDeviceDetail,
+	type PastView,
 	type PointerMode,
+	type TimeSlot,
 } from "./planChartModel";
+import { PLAN_HISTORY_HOURS, parsePlanHistoryHours } from "@/settings";
 import { buildPlanChartOption } from "./planChartOption";
 
 echarts.use([CustomChart]);
@@ -239,11 +422,18 @@ export default defineComponent({
 		high: { type: Array as PropType<number[]>, default: undefined },
 		currency: { type: String as PropType<CURRENCY>, default: CURRENCY.EUR },
 		deviceColorOverrides: { type: Object as PropType<DeviceColors>, default: () => ({}) },
+		// measured past in front of the plan; 0 hours (the default) shows the plan alone
+		history: { type: Object as PropType<PlanHistory>, default: undefined },
+		historyHours: { type: Number, default: 0 },
+		historyError: Boolean,
 	},
+	emits: ["update:historyHours"],
 	data() {
 		return {
 			uid: `energy-plan-${++uidCounter}`,
 			forecastLayers: FORECAST_LAYERS,
+			historyOptions: PLAN_HISTORY_HOURS,
+			transferMinWh: TRANSFER_MIN_WH,
 			visibility: defaultVisibility(this.devices) as ChartVisibility,
 			width: 0,
 			chart: null as echarts.ECharts | null,
@@ -267,8 +457,21 @@ export default defineComponent({
 		deviceColors(): Record<string, string> {
 			return deviceColorAssignment(this.devices, this.deviceColorOverrides, colors.palette);
 		},
-		start() {
+		planStart() {
 			return Date.parse(this.slots[0]?.start ?? "");
+		},
+		past(): PastView | undefined {
+			return pastView(this.history, this.planStart, this.historyHours);
+		},
+		pastCount() {
+			return this.past?.slots.length ?? 0;
+		},
+		// every slot on the axis, measured first: tooltip and keyboard indices refer to this
+		timeline(): TimeSlot[] {
+			return this.past ? [...this.past.slots, ...this.slots] : this.slots;
+		},
+		start() {
+			return this.past?.start ?? this.planStart;
 		},
 		end() {
 			return Date.parse(this.slots.at(-1)?.end ?? "");
@@ -281,6 +484,7 @@ export default defineComponent({
 				visibility: this.visibility,
 				low: this.low,
 				high: this.high,
+				past: this.past,
 				width: this.width || 600,
 				colors: {
 					text: colors.text || "#28293e",
@@ -313,12 +517,33 @@ export default defineComponent({
 			);
 		},
 		details() {
-			return this.tooltip.index >= 0
-				? slotDetails(this.tooltip.index, this.slots, this.devices, this.visibility)
+			return this.tooltip.index >= this.pastCount
+				? slotDetails(
+						this.tooltip.index - this.pastCount,
+						this.slots,
+						this.devices,
+						this.visibility
+					)
 				: undefined;
 		},
+		pastDetails() {
+			return this.past && this.tooltip.index >= 0 && this.tooltip.index < this.pastCount
+				? pastSlotDetails(this.tooltip.index, this.past, this.devices, this.visibility)
+				: undefined;
+		},
+		// "Measured" ends and "Plan" starts at the now line; each label stays inside its side
+		eras() {
+			if (!this.past || !this.width) return undefined;
+			const now = xAtTime(this.past.end, this.width, this.layout, this.start, this.end);
+			return {
+				right: this.width - now + 6,
+				left: now + 6,
+				pastWidth: Math.max(0, now - this.layout.left - 16),
+				planWidth: Math.max(0, this.width - this.layout.right - now - 16),
+			};
+		},
 		crosshair() {
-			const slot = this.slots[this.tooltip.index];
+			const slot = this.timeline[this.tooltip.index];
 			if (!slot || !this.width) return undefined;
 			const left = xAtTime(
 				Date.parse(slot.start),
@@ -345,6 +570,19 @@ export default defineComponent({
 			};
 		},
 		liveText() {
+			const past = this.pastDetails;
+			if (past)
+				return [
+					this.interval(past.start, past.end),
+					this.$t("forecast.energy.plan.history.measured"),
+					past.price != null ? this.fmtPricePerKWh(past.price, this.currency) : "",
+					...past.devices.map(
+						(device) =>
+							`${device.title}: ${device.soc != null ? `${this.level(device)}, ` : ""}${this.pastDeviceState(device)}`
+					),
+				]
+					.filter(Boolean)
+					.join(". ");
 			const d = this.details;
 			if (!d) return "";
 			return [
@@ -372,10 +610,17 @@ export default defineComponent({
 			this.visibility.power = { ...defaults.power, ...this.visibility.power };
 		},
 		slots() {
-			if (this.tooltip.index >= this.slots.length) this.hideTooltip();
+			if (this.tooltip.index >= this.timeline.length) this.hideTooltip();
+		},
+		// new measurements or a new plan shift every index; keep no popup pointing at another slot
+		past() {
+			if (this.tooltip.index >= 0) this.hideTooltip();
 		},
 		details() {
 			if (this.details) this.$nextTick(() => this.place());
+		},
+		pastDetails() {
+			if (this.pastDetails) this.$nextTick(() => this.place());
 		},
 	},
 	mounted() {
@@ -459,6 +704,41 @@ export default defineComponent({
 		kwh(wh: number) {
 			return `${this.number(wh / 1000, 2)}\u00a0kWh`;
 		},
+		money(value: number) {
+			return new Intl.NumberFormat(this.$i18n.locale, {
+				style: "currency",
+				currency: this.currency,
+			}).format(value);
+		},
+		level(device: PastDeviceDetail) {
+			if (device.soc == null) return "";
+			return device.socEnd != null
+				? this.$t("forecast.energy.plan.history.level", {
+						start: this.percent(device.soc),
+						end: this.percent(device.socEnd),
+					})
+				: this.percent(device.soc);
+		},
+		pastDeviceState(device: PastDeviceDetail) {
+			if (device.state === "noData") return this.$t("forecast.energy.plan.history.noData");
+			if (device.state === "idle") return this.$t("forecast.energy.idle");
+			const state = this.$t(`forecast.energy.plan.state.${device.state}`, {
+				power: this.power(device.powerKW),
+			});
+			return device.gridWh != null && device.gridWh >= TRANSFER_MIN_WH
+				? `${state} · ${this.$t("forecast.energy.plan.history.fromGrid", { energy: this.kwh(device.gridWh) })}`
+				: state;
+		},
+		plannedState(planned: NonNullable<PastDeviceDetail["planned"]>) {
+			if (planned.state === "idle") return this.$t("forecast.energy.idle");
+			return this.$t(`forecast.energy.plan.state.${planned.state}`, {
+				power: this.power(planned.powerKW),
+			});
+		},
+		selectHistory(event: Event) {
+			const value = (event.target as HTMLSelectElement).value;
+			this.$emit("update:historyHours", parsePlanHistoryHours(value));
+		},
 		gridText(state: GridChargeState) {
 			if (state.kind === "unavailable") return this.$t("forecast.energy.plan.unavailable");
 			if (state.kind === "none") return this.$t("forecast.energy.plan.gridNone");
@@ -481,7 +761,7 @@ export default defineComponent({
 			if (!wrap || !this.slots.length) return;
 			const bounds = wrap.getBoundingClientRect();
 			const index = slotIndexAt(
-				this.slots,
+				this.timeline,
 				timeAtX(x - bounds.left, bounds.width, this.layout, this.start, this.end)
 			);
 			if (index < 0) return this.hideTooltip();
@@ -547,18 +827,20 @@ export default defineComponent({
 		onKey(event: KeyboardEvent) {
 			if (event.key === "Escape") return this.hideTooltip();
 			const current = this.tooltip.index;
+			// the first arrow press starts at "now", the boundary between measured and plan
+			const now = this.pastCount;
 			const next = {
-				ArrowLeft: current < 0 ? 0 : current - 1,
-				ArrowRight: current + 1,
+				ArrowLeft: current < 0 ? now : current - 1,
+				ArrowRight: current < 0 ? now : current + 1,
 				Home: 0,
-				End: this.slots.length - 1,
+				End: this.timeline.length - 1,
 			}[event.key];
 			if (next == null) return;
 			event.preventDefault();
-			const index = Math.max(0, Math.min(this.slots.length - 1, next));
+			const index = Math.max(0, Math.min(this.timeline.length - 1, next));
 			const wrap = this.$refs["wrap"] as HTMLElement;
 			const bounds = wrap.getBoundingClientRect();
-			const slot = this.slots[index]!;
+			const slot = this.timeline[index]!;
 			const mid = (Date.parse(slot.start) + Date.parse(slot.end)) / 2;
 			const x = bounds.left + xAtTime(mid, bounds.width, this.layout, this.start, this.end);
 			if (this.tooltip.index < 0) this.position = undefined;
@@ -723,6 +1005,43 @@ export default defineComponent({
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	vertical-align: bottom;
+}
+.history-select {
+	width: auto;
+	min-width: 0;
+	padding-top: 0.15rem;
+	padding-bottom: 0.15rem;
+	font-size: 0.8125rem;
+	border-radius: 1rem;
+}
+.era-label {
+	position: absolute;
+	top: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-size: 0.75rem;
+	line-height: 1.2;
+	color: var(--bs-secondary-color);
+	pointer-events: none;
+}
+.measured-badge {
+	margin-left: 0.35rem;
+	padding: 0 0.35rem;
+	font-size: 0.6875rem;
+	font-weight: normal;
+	color: var(--bs-secondary-color);
+	border: 1px solid var(--bs-border-color);
+	border-radius: 1rem;
+	vertical-align: middle;
+}
+.flagged-note {
+	color: var(--bs-secondary-color);
+}
+.tooltip-table th.planned-title {
+	padding-top: 0.5rem;
+	font-weight: 600;
+	border-top: 1px solid var(--bs-border-color);
 }
 .more-layers {
 	font-size: 0.8125rem;

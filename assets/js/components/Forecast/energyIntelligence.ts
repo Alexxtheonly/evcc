@@ -136,3 +136,62 @@ export function forecastTotals(slots: EnergyForecastSlot[]) {
     { home: 0, homeLow: 0, homeHigh: 0, solar: 0, solarLow: 0, solarHigh: 0 }
   );
 }
+
+// Measured past from /api/energyplan/history, shaped like the plan. Every value is
+// measured; null means not recorded (a gap), never zero.
+export interface HistorySlot {
+  start: string;
+  end: string;
+  measured: true;
+  flagged?: boolean;
+  homeWh: number | null;
+  solarWh: number | null;
+  gridImportWh: number | null;
+  gridExportWh: number | null;
+  batteryChargeWh: number | null;
+  batteryDischargeWh: number | null;
+  loadpointWh: number | null;
+  gridChargeWh: number | null;
+  gridPrice: number | null;
+  feedInPrice: number | null;
+  gridCost: number | null;
+  feedInRevenue: number | null;
+  planned?: {
+    snapshotId: number;
+    snapshot: string;
+    gridChargeMinWh?: number;
+    gridChargeMaxWh?: number;
+    devices: {
+      key: string;
+      title: string;
+      kind: string;
+      chargeWh: number;
+      dischargeWh: number;
+      soc?: number;
+    }[];
+  };
+}
+
+export interface HistoryDevice {
+  key: string;
+  name: string;
+  title: string;
+  kind: "battery" | "loadpoint";
+  capacityKWh: number;
+  // soc is the level at the slot START (the plan's is at the slot end)
+  plan: {
+    start: string;
+    chargeWh: number | null;
+    dischargeWh: number | null;
+    soc: number | null;
+    flagged?: boolean;
+  }[];
+}
+
+export interface PlanHistory {
+  from: string;
+  to: string;
+  forecast: HistorySlot[];
+  devices: HistoryDevice[];
+  unmapped?: { name: string; title: string }[];
+}
