@@ -87,3 +87,12 @@ func solarShadingHandler(site *core.Site) http.HandlerFunc {
 		jsonWrite(w, site.SolarShading())
 	}
 }
+
+// heatingDegreeHandler returns the household demand temperature correction's
+// gate, fit, per-date correction and shadow score. Read-only; the setting
+// lives in energyintelligence.
+func heatingDegreeHandler(site *core.Site) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jsonWrite(w, site.HeatingDegree())
+	}
+}

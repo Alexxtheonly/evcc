@@ -67,3 +67,54 @@ func TestSolarShadingSettingToggle(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, put(`{"settlementMode":"interval","solarShading":"yes"}`).Code)
 	assert.False(t, site.GetEnergyIntelligenceSettings().SolarShading)
 }
+
+// TestHeatingDegreeSettingToggle: the setting persists through the energy
+// settings endpoint, reads as auto when absent (settings saved before it
+// existed), rejects unknown values and is reflected by the status endpoint.
+func TestHeatingDegreeSettingToggle(t *testing.T) {
+	site := core.NewSite()
+	t.Cleanup(func() { _ = settings.SetJson("energyIntelligence", map[string]any{"settlementMode": "simulation"}) })
+
+	require.NoError(t, settings.SetJson("energyIntelligence", map[string]any{"robust": true, "settlementMode": "interval"}))
+	assert.Equal(t, "auto", site.GetEnergyIntelligenceSettings().HeatingDegree)
+
+	put := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPut, "/api/config/energyintelligence", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		energyIntelligenceHandler(site)(w, r)
+		return w
+	}
+	status := func() map[string]any {
+		w := httptest.NewRecorder()
+		heatingDegreeHandler(site)(w, httptest.NewRequest(http.MethodGet, "/api/energyplan/heatingdegree", nil))
+		require.Equal(t, http.StatusOK, w.Code)
+		var res map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+		return res
+	}
+
+	assert.Equal(t, "auto", status()["mode"])
+
+	for _, mode := range []string{"on", "off", "auto"} {
+		w := put(`{"robust":true,"settlementMode":"interval","heatingDegree":"` + mode + `"}`)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Contains(t, w.Body.String(), `"heatingDegree":"`+mode+`"`)
+		assert.Equal(t, mode, site.GetEnergyIntelligenceSettings().HeatingDegree)
+		assert.True(t, site.GetEnergyIntelligenceSettings().Robust, "other settings preserved")
+		st := status()
+		assert.Equal(t, mode, st["mode"])
+		assert.Equal(t, false, st["temperatureForecast"])
+		assert.Equal(t, false, st["open"])
+		assert.Equal(t, "no_tariff", st["reason"])
+		assert.Equal(t, "none", st["applied"])
+	}
+
+	// a client that does not know the setting keeps the default
+	require.Equal(t, http.StatusOK, put(`{"settlementMode":"interval"}`).Code)
+	assert.Equal(t, "auto", site.GetEnergyIntelligenceSettings().HeatingDegree)
+
+	for _, bad := range []string{`"yes"`, `true`, `"ON"`} {
+		assert.Equal(t, http.StatusBadRequest, put(`{"settlementMode":"interval","heatingDegree":`+bad+`}`).Code, bad)
+	}
+	assert.Equal(t, "auto", site.GetEnergyIntelligenceSettings().HeatingDegree)
+}
