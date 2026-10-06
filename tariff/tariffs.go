@@ -10,6 +10,10 @@ import (
 type Tariffs struct {
 	Currency                                       currency.Unit
 	Grid, FeedIn, Co2, Planner, Solar, Temperature api.Tariff
+
+	// SolarLocations holds the configured coordinates of each solar forecast,
+	// nil where a forecast's configuration has none
+	SolarLocations []*Location
 }
 
 // At returns the rate at the given time

@@ -1302,35 +1302,14 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 
 	// allow empty solar forecast
 	ft := lo.RepeatBy(minLen, func(i int) float32 { return float32(0) })
+	site.energySolarSpread = nil
 	if solarTariff != nil && len(solar) > 0 {
 		solarEnergy, err := solarRatesToEnergy(solar)
 		if err != nil {
 			return req, details, err
 		}
 
-		scale := site.effectiveSolarScale()
-		scaleAt := site.effectiveSolarScaleAt(scale)
-		ftSlots := scaleAndPruneByLead(solarEnergy, now, scaleAt, minLen)
-
-		// decay the scale derived from measured vs forecasted energy of the last
-		// completed slot. fcstRaw is deliberately NOT pre-multiplied by scale here -
-		// blendScaleByLead below evaluates the per-slot ratio pv/(fcstRaw*scaleAt(lead))
-		// using each target slot's OWN lead, the same scale ftSlots[i] was built with
-		// - a single flat ratio computed with one scale, applied to slots built with
-		// a per-lead scale, silently mixes the two for every slot but the one whose
-		// lead happens to match.
-		if pv, fcstRaw := site.measuredSlotEnergy(site.Meters.PVMetersRef...), site.measuredSlotEnergy(metrics.Forecast); pv > 0 && fcstRaw > 0 {
-			orig := slices.Clone(ftSlots[:min(optimizerDecaySlots, len(ftSlots))])
-			blendScaleByLead(ftSlots, solarEnergy, now, func(lead time.Duration) float64 {
-				s := scaleAt(lead)
-				if s == 0 {
-					return 1 // degenerate scale, no correction rather than a division by zero
-				}
-				return pv / (fcstRaw * s)
-			}, optimizerDecaySlots)
-			site.log.DEBUG.Printf("optimizer: pv slots updated with measured %.0fWh vs forecast %.0fWh: %.0f -> %.0f", pv, fcstRaw, orig, ftSlots[:len(orig)])
-		}
-		ft = prorate(ftSlots, firstSlotDuration)
+		ft, site.energySolarSpread = site.solarSlots(solarEnergy, now, minLen, firstSlotDuration)
 	}
 
 	req = optimizer.OptimizationInput{
@@ -2305,6 +2284,40 @@ func scaleAndPruneByLead(rates api.Rates, now time.Time, scaleAt func(lead time.
 	}
 
 	return res
+}
+
+// solarSlots is the optimizer's solar input: the forecast energy per slot,
+// corrected by the solar shading map while it is active (with each slot's band
+// multipliers), else by the daily scale as before, without band information.
+func (site *Site) solarSlots(solarEnergy api.Rates, now time.Time, minLen int, firstSlotDuration time.Duration) ([]float32, []solarSpread) {
+	scale := site.effectiveSolarScale()
+	scaleAt := site.effectiveSolarScaleAt(scale)
+
+	if m := site.activeSolarShading(); m != nil {
+		return site.shadedSolarSlots(solarEnergy, now, m, scaleAt, minLen, firstSlotDuration)
+	}
+
+	ftSlots := scaleAndPruneByLead(solarEnergy, now, scaleAt, minLen)
+
+	// decay the scale derived from measured vs forecasted energy of the last
+	// completed slot. fcstRaw is deliberately NOT pre-multiplied by scale here -
+	// blendScaleByLead below evaluates the per-slot ratio pv/(fcstRaw*scaleAt(lead))
+	// using each target slot's OWN lead, the same scale ftSlots[i] was built with
+	// - a single flat ratio computed with one scale, applied to slots built with
+	// a per-lead scale, silently mixes the two for every slot but the one whose
+	// lead happens to match.
+	if pv, fcstRaw := site.measuredSlotEnergy(site.Meters.PVMetersRef...), site.measuredSlotEnergy(metrics.Forecast); pv > 0 && fcstRaw > 0 {
+		orig := slices.Clone(ftSlots[:min(optimizerDecaySlots, len(ftSlots))])
+		blendScaleByLead(ftSlots, solarEnergy, now, func(lead time.Duration) float64 {
+			s := scaleAt(lead)
+			if s == 0 {
+				return 1 // degenerate scale, no correction rather than a division by zero
+			}
+			return pv / (fcstRaw * s)
+		}, optimizerDecaySlots)
+		site.log.DEBUG.Printf("optimizer: pv slots updated with measured %.0fWh vs forecast %.0fWh: %.0f -> %.0f", pv, fcstRaw, orig, ftSlots[:len(orig)])
+	}
+	return prorate(ftSlots, firstSlotDuration), nil
 }
 
 func (site *Site) applyPlanGoal(lp loadpoint.API, bat *optimizer.BatteryConfig, minLen int) {

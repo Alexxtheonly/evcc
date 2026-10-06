@@ -26,11 +26,12 @@ func (s forecastSeries) MarshalBytes() ([]byte, error) {
 }
 
 type solarDetails struct {
-	Scale            float64      `json:"scale"`                // trailing percentile solar scale factor, 1 if unscaled
-	Today            dailyDetails `json:"today"`                // tomorrow
-	Tomorrow         dailyDetails `json:"tomorrow"`             // tomorrow
-	DayAfterTomorrow dailyDetails `json:"dayAfterTomorrow"`     // day after tomorrow
-	Timeseries       timeseries   `json:"timeseries,omitempty"` // timeseries of forecasted energy
+	Scale            float64         `json:"scale"`                // trailing percentile solar scale factor, 1 if unscaled
+	Today            dailyDetails    `json:"today"`                // tomorrow
+	Tomorrow         dailyDetails    `json:"tomorrow"`             // tomorrow
+	DayAfterTomorrow dailyDetails    `json:"dayAfterTomorrow"`     // day after tomorrow
+	Timeseries       timeseries      `json:"timeseries,omitempty"` // timeseries of forecasted energy
+	Corrected        *correctedSolar `json:"corrected,omitempty"`  // with the solar shading map applied, while active
 }
 
 var _ api.BytesMarshaler = (*solarDetails)(nil)
@@ -296,6 +297,7 @@ func (site *Site) solarDetails(solar api.Rates) solarDetails {
 	}
 
 	res.Scale = site.solarScale()
+	res.Corrected = site.correctedSolarDetails(solar, res)
 
 	return res
 }

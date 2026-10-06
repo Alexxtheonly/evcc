@@ -1164,6 +1164,31 @@ func configureSolarTariffs(confs []config.Typed, deviceNames []string, target *a
 	return nil
 }
 
+// solarLocations returns the configured coordinates of each enabled solar
+// forecast, resolved the same way as configureSolarTariffs, nil where unknown.
+func solarLocations(confs []config.Typed, deviceNames []string) []*tariff.Location {
+	var res []*tariff.Location
+	add := func(other map[string]any) {
+		if l, ok := tariff.LocationFromConfig(other); ok {
+			res = append(res, &l)
+		} else {
+			res = append(res, nil)
+		}
+	}
+	if len(confs) > 0 {
+		for _, c := range confs {
+			add(c.Other)
+		}
+		return res
+	}
+	for _, name := range deviceNames {
+		if dev, err := config.Tariffs().ByName(name); err == nil && dev.Instance() != nil {
+			add(dev.Config().Other)
+		}
+	}
+	return res
+}
+
 func configureTariffs(conf *globalconfig.Tariffs, names ...string) (*tariff.Tariffs, error) {
 	tariffs := tariff.Tariffs{
 		Currency: currency.EUR,
@@ -1246,6 +1271,7 @@ func configureTariffs(conf *globalconfig.Tariffs, names ...string) (*tariff.Tari
 	if err := eg.Wait(); err != nil {
 		return &tariffs, &ClassError{ClassTariff, err}
 	}
+	tariffs.SolarLocations = solarLocations(conf.Solar, refs.Solar)
 
 	// validate currency
 	if cur, _ := settings.String(keys.Currency); cur != "" {

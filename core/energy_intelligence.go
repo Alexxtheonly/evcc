@@ -21,6 +21,7 @@ type EnergyIntelligenceSettings struct {
 	BatteryEfficiency    map[string]EnergyEfficiencySetting `json:"batteryEfficiency"`
 	SettlementMode       string                             `json:"settlementMode"`
 	SettlementFrom       *time.Time                         `json:"settlementFrom"`
+	SolarShading         bool                               `json:"solarShading"` // ADR-016 sun-position correction replaces the daily solar scale
 }
 
 type EnergyEfficiencySetting struct {

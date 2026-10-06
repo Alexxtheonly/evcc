@@ -167,6 +167,8 @@ type Site struct {
 	energyInsights             optimizerInsights
 	energyProfile              *metrics.HomeForecastResult
 	energyHome                 []float64
+	energySolarSpread          []solarSpread // per request slot while solar shading is active, nil otherwise
+	solarShading               solarShadingCache
 	energyCapabilitiesUntil    time.Time
 	energyCapabilitiesURI      string
 	energySnapshotID           *uint64

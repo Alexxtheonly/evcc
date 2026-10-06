@@ -79,3 +79,11 @@ func deleteEnergyIntelligenceHistory(remove func(time.Time, time.Time) (int64, e
 		jsonWrite(w, deleteResult{rows})
 	}
 }
+
+// solarShadingHandler returns the learned solar shading map and whether it is
+// in effect (ADR-016). Read-only; the setting lives in energyintelligence.
+func solarShadingHandler(site *core.Site) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jsonWrite(w, site.SolarShading())
+	}
+}

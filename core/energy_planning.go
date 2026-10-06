@@ -115,6 +115,9 @@ func (site *Site) energyForecast(req optimizer.OptimizationInput, details reques
 			if err != nil {
 				return fmt.Errorf("solar forecast envelope: %w", err)
 			}
+			if i < len(site.energySolarSpread) {
+				solarLow, solarHigh = widenSolarBand(solar, solarLow, solarHigh, site.energySolarSpread[i])
+			}
 		}
 		site.energyInsights.Forecast = append(site.energyInsights.Forecast, energyForecastSlot{
 			Start: start, End: start.Add(time.Duration(req.TimeSeries.Dt[i]) * time.Second),
