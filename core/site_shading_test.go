@@ -28,7 +28,7 @@ func newShadingSite(t *testing.T, withData bool, locs ...*tariff.Location) *Site
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 	require.NoError(t, metrics.SetupSchema())
 	t.Cleanup(func() {
-		settings.SetJson(energyIntelligenceKey, EnergyIntelligenceSettings{SettlementMode: "simulation"})
+		_ = settings.SetJson(energyIntelligenceKey, EnergyIntelligenceSettings{SettlementMode: "simulation"})
 	})
 
 	require.NoError(t, db.Instance.Exec(`INSERT INTO entities ("group", name, title) VALUES ('pv', 'db:5', 'PV')`).Error)
