@@ -2,6 +2,7 @@ package shading
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -193,4 +194,52 @@ func copyFile(t *testing.T, src, dst string) {
 	_, err = io.Copy(out, in)
 	require.NoError(t, err)
 	require.NoError(t, out.Close())
+}
+
+// TestDumpFactors writes the per-slot factors and bands a map learned at the
+// start of EVCC_SHADING_DAY would apply over the following three days, for
+// replaying stored optimizer requests. Skipped unless EVCC_SHADING_DB and
+// EVCC_SHADING_FACTORS_OUT are set; the database is copied first.
+func TestDumpFactors(t *testing.T) {
+	src, out := os.Getenv("EVCC_SHADING_DB"), os.Getenv("EVCC_SHADING_FACTORS_OUT")
+	if src == "" || out == "" {
+		t.Skip("EVCC_SHADING_DB/EVCC_SHADING_FACTORS_OUT not set")
+	}
+	dst := filepath.Join(t.TempDir(), "evcc.db")
+	copyFile(t, src, dst)
+	require.NoError(t, db.NewInstance("sqlite", dst))
+	t.Cleanup(func() { _ = db.Close() })
+
+	tz, err := time.LoadLocation("Europe/Berlin")
+	require.NoError(t, err)
+	day, err := time.ParseInLocation(time.DateOnly, os.Getenv("EVCC_SHADING_DAY"), tz)
+	require.NoError(t, err)
+	loc := Location{49.1579, 9.1737} // the live forecast-solar configuration
+
+	cfg := DefaultConfig
+	var samples []Sample
+	for _, w := range cfg.TrainingWindows(day) {
+		rows, _, err := metrics.QueryShadingSamples(context.Background(), metrics.ShadingLeadMinutes, w.From, w.To)
+		require.NoError(t, err)
+		for _, r := range rows {
+			samples = append(samples, Sample{Slot: r.Slot, Forecast: r.Forecast, Measured: r.Measured})
+		}
+	}
+	m := Learn(samples, loc, day, cfg)
+
+	type row struct {
+		Slot   int64   `json:"slot"`
+		Factor float64 `json:"factor"`
+		Low    float64 `json:"low"`
+		High   float64 `json:"high"`
+		Source string  `json:"source"`
+	}
+	var res []row
+	for ts := day; ts.Before(day.AddDate(0, 0, 3)); ts = ts.Add(SlotDuration) {
+		c := m.Factor(ts, 1) // the caller substitutes its daily scale where Source is fallback
+		res = append(res, row{ts.Unix(), c.Factor, c.Low, c.High, c.Source})
+	}
+	b, err := json.Marshal(res)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(out, b, 0o600))
 }
