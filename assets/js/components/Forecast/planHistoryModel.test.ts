@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vite-plus/test";
+import { defaultVisibility } from "./planChartModel";
 import {
-  defaultVisibility,
   pastGridBlocks,
   pastSlotDetails,
   pastSocPoints,
   pastView,
   SLOT_MS,
-} from "./planChartModel";
+} from "./planHistoryModel";
 import { buildPlanChartOption, type ChartInput } from "./planChartOption";
 import type {
   EnergyDevice,

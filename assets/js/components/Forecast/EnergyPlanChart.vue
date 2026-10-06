@@ -391,8 +391,6 @@ import {
 	defaultVisibility,
 	deviceColorAssignment,
 	hasSoc,
-	pastSlotDetails,
-	pastView,
 	placeTooltip,
 	slotDetails,
 	slotIndexAt,
@@ -401,11 +399,15 @@ import {
 	type ChartVisibility,
 	type DeviceSlotDetail,
 	type GridChargeState,
-	type PastDeviceDetail,
-	type PastView,
 	type PointerMode,
 	type TimeSlot,
 } from "./planChartModel";
+import {
+	pastSlotDetails,
+	pastView,
+	type PastDeviceDetail,
+	type PastView,
+} from "./planHistoryModel";
 import { PLAN_HISTORY_HOURS, parsePlanHistoryHours } from "@/settings";
 import { buildPlanChartOption } from "./planChartOption";
 

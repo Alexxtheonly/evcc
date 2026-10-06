@@ -6,20 +6,20 @@ import {
   hasSoc,
   kw,
   ms,
-  pastDevicePower,
-  pastGridBlocks,
-  pastSocPoints,
   socRibbon,
   stepBands,
   stepPoints,
   type Band,
   type ChartLayout,
   type ChartVisibility,
-  type GridBlock,
-  type PastView,
   type Point,
 } from "./planChartModel";
+import { POWER, PRICE, SOC, alpha, gridShading, lineSeries } from "./planChartSeries";
+import type { PastView } from "./planHistoryModel";
+import { pastSeries } from "./planHistoryOption";
 import type { EnergyDevice, EnergyForecastSlot } from "./energyIntelligence";
+
+export { alpha } from "./planChartSeries";
 
 export interface ChartColors {
   text: string;
@@ -45,25 +45,6 @@ export interface ChartInput {
   formatPrice: (value: number) => string;
   formatPower: (value: number) => string;
   labels: { power: string; price: string; soc: string };
-}
-
-// Translucent variant of a theme colour; hex is converted to rgba because the renderer
-// needs a colour it can parse.
-export function alpha(color: string, value: number) {
-  const hex = color.trim().replace(/^#/, "");
-  const full =
-    hex.length === 3 || hex.length === 4
-      ? hex
-          .slice(0, 3)
-          .split("")
-          .map((c) => c + c)
-          .join("")
-      : hex.slice(0, 6);
-  if (/^[0-9a-f]{6}$/i.test(full) && color.trim().startsWith("#")) {
-    const [r, g, b] = [0, 2, 4].map((offset) => parseInt(full.slice(offset, offset + 2), 16));
-    return `rgba(${r}, ${g}, ${b}, ${value})`;
-  }
-  return `color-mix(in srgb, ${color} ${Math.round(value * 100)}%, transparent)`;
 }
 
 // Polygons drawn by a custom series: each data item is one band, its extremes encoded so
@@ -99,72 +80,16 @@ function bandSeries(
   };
 }
 
-function lineSeries(
-  id: string,
-  data: Point[] | [number, number][],
-  color: string,
-  axis: { xAxisIndex: number; yAxisIndex: number },
-  options: { width?: number; dashed?: boolean; area?: string } = {}
-) {
-  return {
-    id,
-    type: "line",
-    silent: true,
-    animation: false,
-    showSymbol: false,
-    ...axis,
-    z: 3,
-    data,
-    lineStyle: { color, width: options.width ?? 2, type: options.dashed ? "dashed" : "solid" },
-    ...(options.area ? { areaStyle: { color: options.area, origin: 0 } } : {}),
-  };
-}
-
 // Label every n hours so labels never crowd: about one label per 56 px.
 export function labelStepHours(width: number, horizonHours: number) {
   const wanted = horizonHours / Math.max(1, width / 56);
   return [1, 2, 3, 4, 6, 12, 24].find((step) => step >= wanted) ?? 24;
 }
 
-type Axis = { xAxisIndex: number; yAxisIndex: number };
-const POWER: Axis = { xAxisIndex: 0, yAxisIndex: 0 };
-const PRICE: Axis = { xAxisIndex: 0, yAxisIndex: 1 };
-const SOC: Axis = { xAxisIndex: 1, yAxisIndex: 2 };
-
 // Vertical shading for grid charging, drawn in every visible grid.
 function gridSeries(input: ChartInput, showSoc: boolean) {
   const blocks = input.visibility.layers.grid ? gridChargeBlocks(input.slots) : [];
   return gridShading(input, showSoc, blocks, "grid");
-}
-
-function gridShading(input: ChartInput, showSoc: boolean, blocks: GridBlock[], prefix: string) {
-  const { price } = input.colors;
-  if (!blocks.length) return [];
-  const shading = (axis: Axis, id: string) => ({
-    id,
-    type: "line",
-    data: [],
-    silent: true,
-    ...axis,
-    markArea: {
-      silent: true,
-      data: blocks.map((block) => [
-        {
-          xAxis: block.start,
-          itemStyle: block.definite
-            ? { color: alpha(price, 0.22) }
-            : {
-                color: alpha(price, 0.07),
-                borderColor: alpha(price, 0.6),
-                borderWidth: 1,
-                borderType: "dashed",
-              },
-        },
-        { xAxis: block.end },
-      ]),
-    },
-  });
-  return [shading(POWER, `${prefix}-power`), ...(showSoc ? [shading(SOC, `${prefix}-soc`)] : [])];
 }
 
 // Solar and household demand: estimate line over its stepped low-high band.
@@ -268,88 +193,6 @@ function socSeries(input: ChartInput, socDevices: EnergyDevice[]) {
           ]
         : [];
     }),
-  ];
-}
-
-// Measured past: a tinted region ending at a "now" line, solid measured lines in the
-// plan's colours (no estimate bands), measured grid charging and charge levels.
-function pastSeries(input: ChartInput, showSoc: boolean, socDevices: EnergyDevice[]) {
-  const past = input.past;
-  if (!past) return [];
-  const { colors, visibility } = input;
-  const region = (axis: Axis, id: string) => ({
-    id,
-    type: "line",
-    data: [],
-    silent: true,
-    z: 0,
-    ...axis,
-    markArea: {
-      silent: true,
-      itemStyle: { color: alpha(colors.text, 0.05) },
-      data: [[{ xAxis: past.start }, { xAxis: past.end }]],
-    },
-    markLine: {
-      silent: true,
-      symbol: "none",
-      label: { show: false },
-      lineStyle: { color: colors.muted, type: "solid", width: 1 },
-      data: [{ xAxis: past.end }],
-    },
-  });
-  const color = (device: EnergyDevice) => colors.devices[device.key] ?? colors.muted;
-  const measured = past.slots;
-  return [
-    region(POWER, "past-region-power"),
-    ...(showSoc ? [region(SOC, "past-region-soc")] : []),
-    ...gridShading(
-      input,
-      showSoc,
-      visibility.layers.grid ? pastGridBlocks(measured) : [],
-      "past-grid"
-    ),
-    ...(visibility.layers.solar
-      ? [
-          lineSeries(
-            "past-solar",
-            stepPoints(measured, (s) => kw(s.solarWh, s)),
-            colors.solar,
-            POWER,
-            { area: alpha(colors.solar, 0.28) }
-          ),
-        ]
-      : []),
-    ...(visibility.layers.home
-      ? [
-          lineSeries(
-            "past-home",
-            stepPoints(measured, (s) => kw(s.homeWh, s)),
-            colors.text,
-            POWER,
-            { width: 1.5 }
-          ),
-        ]
-      : []),
-    ...input.devices
-      .filter((device) => visibility.power[device.key] && past.points[device.key])
-      .map((device) => {
-        const battery = device.kind === "battery";
-        return lineSeries(
-          `past-power-${device.key}`,
-          stepPoints(measured, (s) => pastDevicePower(past, device.key, s)),
-          color(device),
-          POWER,
-          { width: battery ? 2 : 1.5, area: battery ? undefined : alpha(color(device), 0.35) }
-        );
-      }),
-    ...(showSoc
-      ? socDevices.flatMap((device) => {
-          const points = pastSocPoints(past, device.key, device.initialSoc);
-          return points.length
-            ? [lineSeries(`past-soc-${device.key}`, points, color(device), SOC)]
-            : [];
-        })
-      : []),
   ];
 }
 

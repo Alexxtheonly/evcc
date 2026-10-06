@@ -323,7 +323,8 @@ import {
 	type EnergyInsights,
 	type PlanHistory,
 } from "./energyIntelligence";
-import { SLOT_MS, gridChargeBlocks } from "./planChartModel";
+import { gridChargeBlocks } from "./planChartModel";
+import { SLOT_MS } from "./planHistoryModel";
 import {
 	daySummaries,
 	planHeadline,
