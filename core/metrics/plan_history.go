@@ -185,11 +185,8 @@ func whOf(v *float64) *float64 {
 	if v == nil || !finite(*v) || *v < 0 {
 		return nil
 	}
-	wh := *v * 1000
-	return &wh
+	return new(*v * 1000)
 }
-
-func ptr(v float64) *float64 { return &v }
 
 // ComputePlanHistory reads the measured slots in [from,to). loadpointKeys maps a
 // loadpoint entity title to its plan key; titles missing from it are reported as
@@ -244,28 +241,28 @@ func historySlot(start time.Time, series map[string]groupSeries, prices map[int6
 	// a site without PV or loadpoints has none of that energy - a fact, not a gap
 	solar, loadpoints := slot.SolarWh, slot.LoadpointWh
 	if !series[PV].present {
-		solar = ptr(0)
+		solar = new(0.0)
 	}
 	if !series[Loadpoint].present {
-		loadpoints = ptr(0)
+		loadpoints = new(0.0)
 	}
 	if c, h, s, l, g := slot.BatteryChargeWh, slot.HomeWh, solar, loadpoints, slot.GridImportWh; c != nil && h != nil && s != nil && l != nil && g != nil {
 		surplus := max(0, *s-*h-*l)
-		slot.GridChargeWh = ptr(min(max(0, *c-surplus), *g))
+		slot.GridChargeWh = new(min(max(0, *c-surplus), *g))
 	}
 
 	p, ok := prices[ts]
 	if ok && finite(p.Grid) {
-		slot.GridPrice = ptr(p.Grid)
+		slot.GridPrice = new(p.Grid)
 		if slot.GridImportWh != nil {
-			slot.GridCost = ptr(*slot.GridImportWh / 1000 * p.Grid)
+			slot.GridCost = new(*slot.GridImportWh / 1000 * p.Grid)
 		}
 	}
 	// recorded only; the static-tariff fallback is the ledger's, not a display fact
 	if ok && p.FeedIn != nil && finite(*p.FeedIn) {
-		slot.FeedInPrice = ptr(*p.FeedIn)
+		slot.FeedInPrice = new(*p.FeedIn)
 		if slot.GridExportWh != nil {
-			slot.FeedInIncome = ptr(*slot.GridExportWh / 1000 * *p.FeedIn)
+			slot.FeedInIncome = new(*slot.GridExportWh / 1000 * *p.FeedIn)
 		}
 	}
 	return slot
@@ -320,10 +317,10 @@ func historyDevices(ctx context.Context, from, to time.Time, loadpointKeys map[s
 				if e.Group == Battery {
 					point.DischargeWh = whOf(r.ReturnEnergy)
 					if r.SocTemp != nil && finite(*r.SocTemp) && *r.SocTemp >= 0 && *r.SocTemp <= 100 {
-						point.Soc = ptr(*r.SocTemp)
+						point.Soc = new(*r.SocTemp)
 					}
 				} else if point.ChargeWh != nil {
-					point.DischargeWh = ptr(0)
+					point.DischargeWh = new(0.0)
 				}
 			}
 			device.Plan = append(device.Plan, point)
@@ -424,7 +421,7 @@ func plannedEntry(s plannedSnapshot, slot PlanHistorySlot) *PlanHistoryPlanned {
 			}
 			device := PlanHistoryPlannedDevice{Key: d.Key, Title: d.Title, Kind: d.Kind, ChargeWh: p.ChargeWh, DischargeWh: p.DischargeWh}
 			if d.CapacityKWh > 0 && finite(p.Soc) {
-				device.Soc = ptr(p.Soc)
+				device.Soc = new(p.Soc)
 			}
 			res.Devices = append(res.Devices, device)
 			break
