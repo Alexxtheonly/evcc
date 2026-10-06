@@ -15,13 +15,7 @@ import (
 	"github.com/jinzhu/now"
 )
 
-// Solar shading (ADR-016): a correction factor per sun position, learned once
-// per day from archived forecasts and measured PV energy. With the
-// SolarShading setting on and a learned map available it replaces the daily
-// solar scale for the optimizer, the scenarios, the Plan view and the
-// published forecast. Off, nothing here is consulted.
-
-// solarShadingReason explains why no map is available.
+// reasons why no solar shading map is available
 const (
 	solarShadingNoCoordinates = "coordinates"
 	solarShadingNoPV          = "noPv"
@@ -115,7 +109,9 @@ func (site *Site) learnSolarShading(cutoff time.Time) (*shading.Map, []shading.W
 }
 
 // activeSolarShading returns the map when the setting is on and a map is
-// available, nil otherwise. Off, it does not touch the database.
+// available, nil otherwise. While it returns a map, the map replaces the daily
+// solar scale for the optimizer, the scenarios, the Plan view and the
+// published forecast. Off, it does not touch the database.
 func (site *Site) activeSolarShading() *shading.Map {
 	if !site.GetEnergyIntelligenceSettings().SolarShading {
 		return nil
