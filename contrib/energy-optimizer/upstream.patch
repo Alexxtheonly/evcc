@@ -1,5 +1,5 @@
 diff --git a/openapi.yaml b/openapi.yaml
-index 43c58e7..6a6de64 100644
+index 43c58e7..8d6c872 100644
 --- a/openapi.yaml
 +++ b/openapi.yaml
 @@ -39,6 +39,25 @@ servers:
@@ -37,7 +37,7 @@ index 43c58e7..6a6de64 100644
  
    /optimize/health:
      get:
-@@ -196,6 +217,54 @@ components:
+@@ -196,6 +217,58 @@ components:
          - d_max
          - p_a
        properties:
@@ -84,6 +84,10 @@ index 43c58e7..6a6de64 100644
 +          minimum: 0
 +          maximum: 86400
 +          description: Minimum duration of a charging run that starts inside the horizon, seconds. Requires c_min > 0.
++        band_storage_feed:
++          type: boolean
++          default: true
++          description: Requires s_band and c_min > 0. False forbids every other battery to discharge in any slot where this battery charges (an inverter in normal mode would cover the charging too), so stored energy never feeds its band charging.
 +        c_run_elapsed:
 +          type: number
 +          minimum: 0
@@ -92,7 +96,7 @@ index 43c58e7..6a6de64 100644
          charge_from_grid:
            type: boolean
            description: |
-@@ -248,7 +317,6 @@ components:
+@@ -248,7 +321,6 @@ components:
            example: 5000
          p_a:
            type: number
@@ -100,7 +104,7 @@ index 43c58e7..6a6de64 100644
            description: Monetary value of the stored energy per Wh at end of time horizon
            example: 0.25
          p_demand:
-@@ -306,14 +374,12 @@ components:
+@@ -306,14 +378,12 @@ components:
            type: array
            items:
              type: number
@@ -115,7 +119,7 @@ index 43c58e7..6a6de64 100644
            description: Grid export remuneration per Wh at each time step (currency units/Wh)
            example: [0.15, 0.12, 0.10, 0.11, 0.14, 0.16]
  
-@@ -392,6 +458,9 @@ components:
+@@ -392,6 +462,9 @@ components:
      OptimizationResult:
        type: object
        properties:
@@ -125,7 +129,7 @@ index 43c58e7..6a6de64 100644
          status:
            type: string
            enum: [Optimal, Feasible, Infeasible, Unbounded, Undefined, Not Solved]
-@@ -411,8 +480,8 @@ components:
+@@ -411,8 +484,8 @@ components:
            type: number
            nullable: true
            description: |
@@ -137,7 +141,7 @@ index 43c58e7..6a6de64 100644
          limit_violations:
            type: object
 diff --git a/src/optimizer/app.py b/src/optimizer/app.py
-index a355b2d..206c791 100644
+index a355b2d..2918f7e 100644
 --- a/src/optimizer/app.py
 +++ b/src/optimizer/app.py
 @@ -10,6 +10,7 @@ from flask import Flask, jsonify, request
@@ -148,7 +152,7 @@ index a355b2d..206c791 100644
  from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
  from .settings import OptimizerSettings
  
-@@ -104,6 +105,16 @@ grid_model = api.model('GridConfig', {
+@@ -104,6 +105,17 @@ grid_model = api.model('GridConfig', {
  })
  
  battery_config_model = api.model('BatteryConfig', {
@@ -162,10 +166,11 @@ index a355b2d..206c791 100644
 +    'p_band': fields.Float(required=False, description='Value of stored energy below s_band in currency/Wh, on top of p_a'),
 +    'c_min_run': fields.Float(required=False, description='Minimum length of a charging run started inside the horizon (s)'),
 +    'c_run_elapsed': fields.Float(required=False, description='Seconds the charging run in progress has lasted, 0 if none'),
++    'band_storage_feed': fields.Boolean(required=False, description='Whether batteries may discharge into this battery while its band is active'),
      'charge_from_grid': fields.Boolean(required=False, description='Controls whether the battery can be charged from the grid.'),
      'discharge_to_grid': fields.Boolean(required=False, description='Controls whether the battery can discharge to grid.'),
      's_capacity': fields.Float(required=False, description='Capacity at 100% state of charge (Wh)'),
-@@ -149,6 +160,7 @@ limit_violation_result_model = api.model('LimitViolationResult', {
+@@ -149,6 +161,7 @@ limit_violation_result_model = api.model('LimitViolationResult', {
  })
  
  optimization_result_model = api.model('OptimizationResult', {
@@ -173,7 +178,7 @@ index a355b2d..206c791 100644
      'status': fields.String(description='Optimization status'),
      'objective_value': fields.Float(description='Optimal objective function value'),
      'limit_violations': fields.Nested(limit_violation_result_model, description='Collection of flags signalling the violation of defined limits'),
-@@ -174,6 +186,7 @@ class OptimizeCharging(Resource):
+@@ -174,6 +187,7 @@ class OptimizeCharging(Resource):
          """
          try:
              data = api.payload
@@ -181,7 +186,7 @@ index a355b2d..206c791 100644
  
              # Parse strategy items with default values
              strat_data = data.get('strategy', {})
-@@ -207,6 +220,16 @@ class OptimizeCharging(Resource):
+@@ -207,6 +221,17 @@ class OptimizeCharging(Resource):
                      d_max=bat_data['d_max'],
                      p_a=bat_data['p_a'],
                      c_priority=bat_data.get('c_priority', 0),
@@ -195,10 +200,11 @@ index a355b2d..206c791 100644
 +                    p_band=bat_data.get('p_band'),
 +                    c_min_run=bat_data.get('c_min_run'),
 +                    c_run_elapsed=bat_data.get('c_run_elapsed', 0),
++                    band_storage_feed=bat_data.get('band_storage_feed', True),
                  ))
  
              # Parse time series data
-@@ -253,11 +276,20 @@ class OptimizeCharging(Resource):
+@@ -253,11 +278,20 @@ class OptimizeCharging(Resource):
              started = time.perf_counter()
              result = optimizer.solve()
              dump_slow_request(data, time.perf_counter() - started)
@@ -223,10 +229,10 @@ index a355b2d..206c791 100644
  class Health(Resource):
 diff --git a/src/optimizer/energy_extension.py b/src/optimizer/energy_extension.py
 new file mode 100644
-index 0000000..896e5e6
+index 0000000..e28ca5b
 --- /dev/null
 +++ b/src/optimizer/energy_extension.py
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,128 @@
 +"""Validation for the local energy planning API."""
 +
 +import math
@@ -322,6 +328,11 @@ index 0000000..896e5e6
 +            raise ValueError('c_min_run requires c_min > 0')
 +    if 'c_run_elapsed' in battery:
 +        finite(battery['c_run_elapsed'], 'c_run_elapsed', 0)
++    if 'band_storage_feed' in battery:
++        if type(battery['band_storage_feed']) is not bool:
++            raise ValueError('band_storage_feed must be a boolean')
++        if 's_band' not in battery or battery['c_min'] <= 0:
++            raise ValueError('band_storage_feed requires s_band and c_min > 0')
 +    charge = battery.get('first_step_charge')
 +    discharge = battery.get('first_step_discharge')
 +    if (charge is None) != (discharge is None):
@@ -351,10 +362,10 @@ index 0000000..896e5e6
 +            discharge = math.nextafter(discharge, 0.0)
 +    raise ValueError('first step action exceeds physical storage capacity')
 diff --git a/src/optimizer/optimizer.py b/src/optimizer/optimizer.py
-index 77c2353..02408b0 100644
+index 77c2353..5c42e26 100644
 --- a/src/optimizer/optimizer.py
 +++ b/src/optimizer/optimizer.py
-@@ -136,6 +136,23 @@ class BatteryConfig:
+@@ -136,6 +136,25 @@ class BatteryConfig:
      p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
      s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
      c_priority: int = 0
@@ -372,13 +383,15 @@ index 77c2353..02408b0 100644
 +    # continues until it has lasted c_min_run; one that already has may stop any time.
 +    c_min_run: Optional[float] = None
 +    c_run_elapsed: float = 0
++    # False: no battery may discharge into this battery's charging while its band is active
++    band_storage_feed: bool = True
 +
 +    def band_active(self) -> bool:
 +        return self.s_band is not None and self.p_band is not None and self.p_band > 0 and self.s_band > 0
  
  
  @dataclass
-@@ -206,6 +223,8 @@ class Optimizer:
+@@ -206,6 +225,8 @@ class Optimizer:
              self.max_import_price,
              self.max_export_price,
              *(bat.p_a for bat in self.batteries),
@@ -387,7 +400,15 @@ index 77c2353..02408b0 100644
          ]
          if self.is_grid_demand_rate_active:
              # prc_p_exc_imp is currency/W and the charge is set by the single worst time step, so
-@@ -342,6 +361,11 @@ class Optimizer:
+@@ -249,6 +270,7 @@ class Optimizer:
+         self._setup_target_function()
+         self._add_energy_balance_constraints()
+         self._add_battery_constraints()
++        self._add_band_storage_constraints()
+ 
+     def _setup_variables(self):
+         """
+@@ -342,6 +364,11 @@ class Optimizer:
          for t in self.time_steps:
              self.variables['y'].append(pulp.LpVariable(f"y_{t}", cat='Binary'))
  
@@ -399,7 +420,7 @@ index 77c2353..02408b0 100644
          # Binary variable for charging activation
          self.variables['z_c'] = {}
          for i, bat in enumerate(self.batteries):
-@@ -396,6 +420,10 @@ class Optimizer:
+@@ -396,6 +423,10 @@ class Optimizer:
          # Final state of charge value [currency unit]
          for i, bat in enumerate(self.batteries):
              objective += self.variables['s'][i][-1] * bat.p_a
@@ -410,7 +431,7 @@ index 77c2353..02408b0 100644
  
          # charge for import power demand rate. The demand rate is applied to the maximum
          # power draw beyond the threshold within the time horizon.
-@@ -616,23 +644,44 @@ class Optimizer:
+@@ -616,23 +647,44 @@ class Optimizer:
  
          # Constraint (3): Battery dynamics
          for i, bat in enumerate(self.batteries):
@@ -452,10 +473,10 @@ index 77c2353..02408b0 100644
 +
 +            if self.variables['b'][i] is not None:
 +                self.problem += self.variables['b'][i] <= self.variables['s'][i][-1]
++
++            self._add_minimum_run_constraints(i, bat)
  
 -            # Constraint (6): Battery SOC goal constraints (for t > 0)
-+            self._add_minimum_run_constraints(i, bat)
-+
 +            # Goals refer to energy at the end of each slot, including the first.
              if bat.s_goal is not None:
 -                for t in range(1, self.T):
@@ -463,10 +484,27 @@ index 77c2353..02408b0 100644
                      if bat.s_goal[t] > 0:
                          self.problem += (self.variables['s'][i][t]
                                           + self.variables['s_goal_pen'][i][t] >= bat.s_goal[t])
-@@ -701,6 +750,34 @@ class Optimizer:
+@@ -701,6 +753,51 @@ class Optimizer:
                  self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                   * (1 - self.variables['z_cd'][i][t]))
  
++    def _add_band_storage_constraints(self):
++        """
++        No battery discharges in a slot where a band battery that refuses storage feed charges.
++        An inverter cannot tell the household from a charging car: in normal mode it covers
++        both, so the executable alternative to feeding the car is not discharging at all
++        (hold), and that is what the model gets. Uses the c_min activation binaries.
++        """
++        for i, bat in enumerate(self.batteries):
++            if not bat.band_active() or bat.band_storage_feed or self.variables['z_c'][i] is None:
++                continue
++            for j, other in enumerate(self.batteries):
++                if j == i or other.d_max <= 0:
++                    continue
++                for t in self.time_steps:
++                    self.problem += (self.variables['d'][j][t] <= other.d_max * self.time_series.dt[t] / 3600.
++                                     * (1 - self.variables['z_c'][i][t]))
++
 +    def _add_minimum_run_constraints(self, i, bat):
 +        """
 +        A charging run lasts at least c_min_run seconds, or until the horizon ends. A run
@@ -498,7 +536,7 @@ index 77c2353..02408b0 100644
      def _solver(self, tmpdir, **options):
          """CBC with the shared settings, writing its scratch files to tmpdir."""
          # COIN_CMD is the same solver taking a path, PULP_CBC_CMD is it pinned to the bundled
-@@ -922,6 +999,7 @@ class Optimizer:
+@@ -922,6 +1019,7 @@ class Optimizer:
              result = {
                  'status': status,
                  'objective_value': self.get_clean_objective_value(),
@@ -506,7 +544,7 @@ index 77c2353..02408b0 100644
                  'limit_violations': {
                      'grid_import_limit_exceeded': grid_imp_limit_violated,
                      'grid_export_limit_hit': grid_exp_limit_hit
-@@ -992,7 +1070,9 @@ class Optimizer:
+@@ -992,7 +1090,9 @@ class Optimizer:
          # Final state of charge value [currency unit]
          for i, bat in enumerate(self.batteries):
              clean_objective += (pulp.value(self.variables['s'][i][self.T-1])
@@ -517,7 +555,7 @@ index 77c2353..02408b0 100644
  
          # charge for import power demand rate. The demand rate is applied to the maximum
          # power draw beyond the threshold within the time horizon.
-@@ -1000,4 +1080,12 @@ class Optimizer:
+@@ -1000,4 +1100,12 @@ class Optimizer:
              clean_objective += - self.grid.prc_p_exc_imp \
                  * pulp.value(self.variables['p_max_imp_exc'])
  

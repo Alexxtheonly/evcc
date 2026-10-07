@@ -448,3 +448,19 @@ test("cheap band reference: out-of-range values are refused before saving", asyn
     await wrapper.get(`#energy-${field}`).setValue("");
   }
 });
+
+test("battery feeding band charging is off unless switched on", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  vi.mocked(api.put).mockResolvedValue({});
+  const wrapper = mountSettings();
+  await open(wrapper);
+  const toggle = wrapper.get("#energy-cheapBandFromBattery");
+  expect((toggle.element as HTMLInputElement).checked).toBe(false);
+  await toggle.setValue(true);
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledWith(
+    "config/energyintelligence",
+    expect.objectContaining({ cheapBandFromBattery: true })
+  );
+});

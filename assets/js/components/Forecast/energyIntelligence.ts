@@ -13,6 +13,7 @@ export interface EnergySettings {
   cheapBandDays?: number;
   cheapBandMargin?: number;
   cheapBandPrice?: number;
+  cheapBandFromBattery?: boolean;
 }
 
 export type EnergyBandStatus =

@@ -27,10 +27,11 @@ type energyBattery struct {
 	WearCost           *float64 `json:"wear_cost,omitempty"`
 	FirstStepCharge    *float64 `json:"first_step_charge,omitempty"`
 	FirstStepDischarge *float64 `json:"first_step_discharge,omitempty"`
-	SBand              *float64 `json:"s_band,omitempty"`        // ADR-017 band top, stored Wh
-	PBand              *float64 `json:"p_band,omitempty"`        // value per stored Wh below s_band, on top of p_a
-	CMinRun            *float64 `json:"c_min_run,omitempty"`     // minimum charging run started in the horizon, s
-	CRunElapsed        *float64 `json:"c_run_elapsed,omitempty"` // s the run in progress has lasted
+	SBand              *float64 `json:"s_band,omitempty"`            // ADR-017 band top, stored Wh
+	PBand              *float64 `json:"p_band,omitempty"`            // value per stored Wh below s_band, on top of p_a
+	CMinRun            *float64 `json:"c_min_run,omitempty"`         // minimum charging run started in the horizon, s
+	CRunElapsed        *float64 `json:"c_run_elapsed,omitempty"`     // s the run in progress has lasted
+	BandStorageFeed    *bool    `json:"band_storage_feed,omitempty"` // false: no battery discharges while it charges
 }
 
 type energyRequest struct {

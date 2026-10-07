@@ -47,6 +47,7 @@ fields on each battery:
 | `first_step_charge`, `first_step_discharge` | Paired exact first-slot **AC Wh** values. Both must be supplied together. |
 | `s_band`, `p_band` | Paired. Band top as **stored Wh** and its extra value in currency per **stored Wh**, on top of `p_a`. Adds `b <= s_band`, `b <= s[T-1]` and `+ b * p_band` to the money objective: stored energy up to the band top is worth `p_a + p_band`, above it only `p_a`. With charge efficiency `eta_c`, grid energy pays off only in slots priced below `eta_c * (p_a + p_band)`; solar is preferred whenever feed-in pays less. No deadline. |
 | `c_min_run` | Seconds. A charging run that starts inside the horizon lasts at least this long, or until the horizon ends. Uses the `c_min` on/off binaries; requires `c_min > 0`. |
+| `band_storage_feed` | Boolean, default true. Requires `s_band` and `c_min > 0`. False forbids every other battery to discharge in any slot where this battery charges: an inverter in normal mode covers the household and the charging car alike, so the executable alternative to feeding the band is hold. |
 | `c_run_elapsed` | Seconds the run in progress has lasted, 0 (default) if none. Below `c_min_run` the run continues until it has lasted `c_min_run` (a hard constraint: send it only when charging at `c_min` that long fits); at or above it the run may stop any time. |
 
 The response adds `wear_cost`, the total currency cost of wear. For each battery

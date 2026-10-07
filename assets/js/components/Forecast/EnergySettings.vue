@@ -109,6 +109,21 @@
 						<div class="small text-muted mt-2">
 							{{ $t("forecast.energy.cheapBand.hint") }}
 						</div>
+						<div class="form-check form-switch mt-3">
+							<input
+								id="energy-cheapBandFromBattery"
+								v-model="draft.cheapBandFromBattery"
+								class="form-check-input"
+								type="checkbox"
+								role="switch"
+							/>
+							<label for="energy-cheapBandFromBattery" class="form-check-label">{{
+								$t("forecast.energy.cheapBand.fromBattery")
+							}}</label>
+							<div class="small text-muted">
+								{{ $t("forecast.energy.cheapBand.fromBatteryHint") }}
+							</div>
+						</div>
 					</fieldset>
 					<p class="small">{{ $t("forecast.energy.arrivalPrerequisites") }}</p>
 				</section>

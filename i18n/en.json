@@ -1597,7 +1597,9 @@
         "cheapBandMargin": "Margin below median (%)",
         "cheapBandPrice": "Fixed reference ({currency}/kWh)",
         "hint": "Empty fields use the defaults: median grid price of the last 30 days minus 10 %. A fixed reference replaces the median.",
-        "invalid": "Check the cheap charging reference: window 1–365 days, margin 0–90 %, price per kWh between −10 and 10."
+        "invalid": "Check the cheap charging reference: window 1–365 days, margin 0–90 %, price per kWh between −10 and 10.",
+        "fromBattery": "Home battery may supply band charging",
+        "fromBatteryHint": "Off (default): while a car charges cheaply inside its band, the home battery holds, so the household also runs on solar or grid for those minutes. Charging below the minimum charge is never restricted."
       },
       "band": {
         "referenceMedian": "Reference {reference}: median {median} of the last {days} days minus {margin} %.",

@@ -241,6 +241,8 @@ def test_unavailable_fixed_action_is_rejected(client, request_data):
     {"s_band": 1000, "p_band": float("inf")}, {"c_min_run": 1800},
     {"c_min": 1000, "c_min_run": -1}, {"c_min": 1000, "c_min_run": 86401},
     {"c_min": 1000, "c_run_elapsed": -1}, {"c_min": 1000, "c_run_elapsed": True},
+    {"band_storage_feed": False}, {"c_min": 1000, "s_band": 1000, "p_band": 0.0001, "band_storage_feed": 0},
+    {"s_band": 1000, "p_band": 0.0001, "band_storage_feed": False},
 ])
 def test_invalid_extension_is_rejected(client, request_data, extension):
     request_data["batteries"][0].update(extension)
@@ -394,3 +396,45 @@ def test_omitted_band_preserves_dispatch(client):
     explicit = deepcopy(data)
     explicit["batteries"][0].update(c_run_elapsed=0)
     assert solve(client, explicit) == legacy
+
+
+def storage_request(**vehicle):
+    """A full home battery and a band vehicle, grid above the band reference everywhere."""
+    data = band_request([0.00040] * 4, 4000, 0.00030, **vehicle)
+    data["time_series"]["gt"] = [300] * 4
+    data["batteries"].append({
+        "s_capacity": 19320, "s_min": 966, "s_max": 19320, "s_initial": 19320,
+        "c_min": 0, "c_max": 6000, "d_max": 6000, "p_a": 0,
+        "charge_from_grid": True, "discharge_to_grid": False,
+    })
+    return data
+
+
+def test_storage_feeds_the_band_unless_refused(client):
+    # worthless stored energy (p_a 0) is worth charging into the car's band
+    fed = solve(client, storage_request())
+    assert sum(fed["batteries"][0]["charging_power"]) > 1000
+    data = storage_request(band_storage_feed=False)
+    result = solve(client, data)
+    car = result["batteries"][0]["charging_power"]
+    home = result["batteries"][1]["discharging_power"]
+    assert sum(car) == pytest.approx(0, abs=0.1)
+    assert all(d == pytest.approx(300, abs=0.1) for d in home)  # the household only
+
+
+def test_refused_storage_feed_holds_the_battery_while_the_band_charges(client):
+    data = storage_request(band_storage_feed=False)
+    data["time_series"]["p_N"] = [0.00040, 0.00020, 0.00040, 0.00040]  # cheap below the reference
+    result = solve(client, data)
+    car = result["batteries"][0]["charging_power"]
+    home = result["batteries"][1]["discharging_power"]
+    assert car[1] > 1000
+    assert home[1] == pytest.approx(0, abs=0.1)  # hold: the inverter would feed the car too
+    assert result["grid_import"][1] == pytest.approx(car[1] + 300, abs=0.1)
+
+
+def test_storage_feed_flag_true_is_the_default(client):
+    data = storage_request()
+    explicit = deepcopy(data)
+    explicit["batteries"][0]["band_storage_feed"] = True
+    assert solve(client, explicit) == solve(client, data)

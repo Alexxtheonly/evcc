@@ -29,6 +29,8 @@ type EnergyIntelligenceSettings struct {
 	CheapBandDays   *int     `json:"cheapBandDays,omitempty"`
 	CheapBandMargin *float64 `json:"cheapBandMargin,omitempty"`
 	CheapBandPrice  *float64 `json:"cheapBandPrice,omitempty"`
+	// home batteries may discharge while a car charges inside its band (default off: hold)
+	CheapBandFromBattery bool `json:"cheapBandFromBattery,omitempty"`
 }
 
 type EnergyEfficiencySetting struct {

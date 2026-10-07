@@ -69,6 +69,8 @@ type energyBand struct {
 	pBand   float64 // currency per stored Wh, on top of p_a
 	minRun  float64 // s, 0 = none
 	elapsed float64 // s the charging run in progress has lasted, 0 = none; below minRun it is held
+	// home batteries must hold while the car charges in its band; never for the floor
+	refuseStorage bool
 }
 
 // cheapBandRun is a vehicle's charging run as observed by the optimizer.
@@ -122,6 +124,7 @@ type cheapBandInput struct {
 	minSoc, limitSoc int     // percent
 	bandSoc, minRun  int     // percent, minutes
 	mode             api.ChargeMode
+	fromBattery      bool // energy intelligence setting cheapBandFromBattery
 	ref              cheapBandReference
 	pa               float32 // the vehicle's terminal value, currency per stored Wh
 	etaC             float64
@@ -164,6 +167,7 @@ func cheapBand(in cheapBandInput) *energyBand {
 	band.sBand = in.capacity * float64(top) * 10
 	band.pBand = pBand
 	band.minRun = float64(in.minRun) * 60
+	band.refuseStorage = !in.fromBattery && in.soc >= float64(in.minSoc)
 	return band
 }
 
@@ -213,9 +217,9 @@ func (site *Site) vehicleCheapBand(lp loadpoint.API, name string, capacity float
 		capacity: capacity, soc: lp.GetSoc(),
 		minSoc: lp.EffectiveMinSoc(), limitSoc: lp.EffectiveLimitSoc(),
 		bandSoc: v.GetCheapBandSoc(), minRun: v.GetCheapBandMinRun(),
-		mode: lp.GetMode(),
-		ref:  site.cheapBandReference(site.energyInsights.Settings, time.Now()),
-		pa:   terminalStorageValue(minImportPrice), etaC: eta,
+		mode: lp.GetMode(), fromBattery: site.energyInsights.Settings.CheapBandFromBattery,
+		ref: site.cheapBandReference(site.energyInsights.Settings, time.Now()),
+		pa:  terminalStorageValue(minImportPrice), etaC: eta,
 	})
 }
 
@@ -232,6 +236,11 @@ func applyCheapBand(bat *energyBattery, band *energyBand) {
 	}
 	sBand = min(sBand, float64(ceiling))
 	bat.SBand, bat.PBand = &sBand, &pBand
+	// the companion uses the c_min on/off binaries to know when the car charges
+	if band.refuseStorage && bat.CMin > 0 {
+		feed := false
+		bat.BandStorageFeed = &feed
+	}
 	if band.minRun > 0 && bat.CMin > 0 {
 		minRun := band.minRun
 		bat.CMinRun = &minRun

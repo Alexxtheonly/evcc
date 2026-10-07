@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/config"
 	optimizer "github.com/evcc-io/optimizer/client"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -342,6 +344,27 @@ func TestCheapBandSolverIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, float64(res.Batteries[0].ChargingPower[0]), 1380.0/4-.1)
 	assert.GreaterOrEqual(t, float64(res.Batteries[0].ChargingPower[1]), 1380.0/4-.1)
+
+	// a full home battery holds while the car charges in its band, unless allowed
+	home := energyBattery{BatteryConfig: optimizer.BatteryConfig{ChargeFromGrid: true, CMax: 6000, DMax: 6000, PA: in.pa, SCapacity: 19320, SInitial: 18000, SMax: 19320, SMin: 966}}
+	for _, fromBattery := range []bool{false, true} {
+		in.fromBattery = fromBattery
+		req.Batteries = []energyBattery{vehicle, home}
+		applyCheapBand(&req.Batteries[0], cheapBand(in))
+		res, err := site.solveEnergy(ctx, req)
+		require.NoError(t, err)
+		var fed float64
+		for t2, charge := range res.Batteries[0].ChargingPower {
+			if charge > .1 {
+				fed += float64(res.Batteries[1].DischargingPower[t2])
+			}
+		}
+		if fromBattery {
+			assert.Greater(t, fed, 100.0, "allowed: the battery covers slots the car charges in")
+		} else {
+			assert.InDelta(t, 0, fed, .1, "default: the battery holds while the car charges")
+		}
+	}
 }
 
 func sum(v []float32) float64 {
@@ -473,4 +496,31 @@ func TestTrackCheapBandRun(t *testing.T) {
 	run = cycle(start.Add(12 * time.Minute))
 	assert.Equal(t, start.Add(12*time.Minute), run.start, "a new run starts fresh")
 	assert.True(t, run.fromFloor)
+}
+
+// TestCheapBandStorageFeed: by default home batteries hold while the car charges in its
+// band; the setting allows feeding, and the floor's charging is never restricted.
+func TestCheapBandStorageFeed(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		fromBattery bool
+		soc         float64
+		want        *bool
+	}{
+		{"default refuses", false, 36, lo.ToPtr(false)},
+		{"setting allows", true, 36, nil},
+		{"floor charging is not band charging", false, 25, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := liveBandInput()
+			in.fromBattery, in.soc = tc.fromBattery, tc.soc
+			req := liveRequest()
+			applyCheapBand(&req.Batteries[0], cheapBand(in))
+			assert.Equal(t, tc.want, req.Batteries[0].BandStorageFeed)
+			assert.Nil(t, req.Batteries[1].BandStorageFeed)
+			encoded, err := json.Marshal(req.Batteries[0])
+			require.NoError(t, err)
+			assert.Equal(t, tc.want != nil, strings.Contains(string(encoded), `"band_storage_feed":false`))
+		})
+	}
 }
