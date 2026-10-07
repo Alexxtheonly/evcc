@@ -338,8 +338,8 @@ func TestCheapBandSolverIntegration(t *testing.T) {
 	assert.InDelta(t, 5520, sum(res.Batteries[0].ChargingPower), .5)
 	assert.LessOrEqual(t, res.Batteries[0].StateOfCharge[7], float32(27500.5))
 
-	// a run 10 minutes into its 30-minute minimum continues through the expensive first
-	// slots at minimum power instead of stopping
+	// a run 10 minutes into its 30-minute minimum yields in the expensive first slots
+	// rather than import above the reference; with surplus covering its minimum it continues
 	band := cheapBand(in)
 	start := time.Now().Add(-10 * time.Minute)
 	setCheapBandRun(band, &cheapBandRun{start: start}, vehicle.BatteryConfig, start.Add(10*time.Minute))
@@ -348,8 +348,15 @@ func TestCheapBandSolverIntegration(t *testing.T) {
 	require.NotNil(t, req.Batteries[0].CRunElapsed)
 	res, err = site.solveEnergy(ctx, req)
 	require.NoError(t, err)
+	assert.InDelta(t, 0, res.Batteries[0].ChargingPower[0], .1)
+	assert.InDelta(t, 0, res.Batteries[0].ChargingPower[1], .1)
+	req.TimeSeries.Ft[0], req.TimeSeries.Ft[1] = 800, 800 // 500 Wh surplus per slot
+	res, err = site.solveEnergy(ctx, req)
+	require.NoError(t, err)
 	assert.GreaterOrEqual(t, float64(res.Batteries[0].ChargingPower[0]), 1380.0/4-.1)
 	assert.GreaterOrEqual(t, float64(res.Batteries[0].ChargingPower[1]), 1380.0/4-.1)
+	assert.InDelta(t, 0, res.GridImport[0]+res.GridImport[1], .1, "held on surplus, not on expensive grid")
+	req.TimeSeries.Ft[0], req.TimeSeries.Ft[1] = 0, 0
 
 	// a full home battery holds while the car charges in its band, unless allowed
 	home := energyBattery{BatteryConfig: optimizer.BatteryConfig{ChargeFromGrid: true, CMax: 6000, DMax: 6000, PA: in.pa, SCapacity: 19320, SInitial: 18000, SMax: 19320, SMin: 966}}

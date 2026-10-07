@@ -137,9 +137,10 @@ func TestRobustBandHoldIntegration(t *testing.T) {
 	require.NoError(t, err)
 	site := &Site{log: util.NewLogger("band-hold-test"), optimizerClient: client}
 	req := floorRequest()
-	req.TimeSeries.PN[0], req.TimeSeries.PN[1] = .0003, .0003 // below the band reference
-	req.Batteries[0].SInitial = 22550                         // 41 %, inside the band
-	req.Batteries[1].SInitial = 15456                         // home battery 80 %
+	// below the band reference long enough for a 30-minute run (first slot is 8m57s)
+	req.TimeSeries.PN[0], req.TimeSeries.PN[1], req.TimeSeries.PN[2] = .0003, .0003, .0003
+	req.Batteries[0].SInitial = 22550 // 41 %, inside the band
+	req.Batteries[1].SInitial = 15456 // home battery 80 %
 	for i := range req.Batteries {
 		req.Batteries[i].PA = terminalStorageValue(.0003) // the horizon minimum
 	}
