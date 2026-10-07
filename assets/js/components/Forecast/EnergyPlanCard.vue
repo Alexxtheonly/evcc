@@ -38,6 +38,16 @@
 				{{ $t("forecast.energy.previewNote") }}
 			</p>
 		</div>
+		<ul
+			v-if="bandLines.length"
+			class="band-status list-unstyled small mb-3"
+			data-testid="energy-plan-band"
+		>
+			<li v-for="line in bandLines" :key="line.key">
+				{{ line.text }}
+				<span class="d-block text-muted">{{ line.reference }}</span>
+			</li>
+		</ul>
 		<template v-if="slots.length">
 			<EnergyPlanChart
 				:devices="devices"
@@ -337,6 +347,7 @@ import { is12hFormat } from "@/units";
 import {
 	forecastTotals,
 	planWindows,
+	type EnergyBand,
 	type EnergyDevice,
 	type EnergyInsights,
 	type PlanHistory,
@@ -439,6 +450,11 @@ export default defineComponent({
 		},
 		headline(): HeadlineItem[] {
 			return planHeadline(this.insights);
+		},
+		bandLines(): { key: string; text: string; reference: string }[] {
+			return this.devices.flatMap((device) =>
+				device.band ? [{ key: device.key, ...this.bandText(device, device.band) }] : []
+			);
 		},
 		headlineSentences(): string[] {
 			return this.headline.map((item) => this.sentence(item));
@@ -633,6 +649,37 @@ export default defineComponent({
 						: t("gridCharge", args);
 				}
 			}
+		},
+		bandText(device: EnergyDevice, band: EnergyBand) {
+			const reference = band.reference.price;
+			const args = {
+				device: device.title,
+				top: this.percent(band.topSoc),
+				soc: this.levelText(device.initialSoc),
+				reference: reference != null ? this.unitPrice(reference) : "",
+				time: band.nextStart ? this.point(band.nextStart) : "",
+				price: band.nextPrice != null ? this.unitPrice(band.nextPrice) : "",
+			};
+			let source = this.$t("forecast.energy.band.referenceMissing", {
+				days: band.reference.days,
+			});
+			if (reference != null)
+				source =
+					band.reference.source === "fixed"
+						? this.$t("forecast.energy.band.referenceFixed", args)
+						: this.$t("forecast.energy.band.referenceMedian", {
+								...args,
+								median:
+									band.reference.median != null
+										? this.unitPrice(band.reference.median)
+										: "",
+								days: band.reference.days,
+								margin: this.number(band.reference.margin, 0),
+							});
+			return {
+				text: this.$t(`forecast.energy.band.status.${band.status}`, args),
+				reference: source,
+			};
 		},
 		dayLabel(day: DaySummary) {
 			const date = new Date(day.start);

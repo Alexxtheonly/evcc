@@ -1589,6 +1589,30 @@
           "plannedLevel": "{planned} um {time} · gemessen {measured}",
           "plannedLevelOnly": "{planned} um {time}"
         }
+      },
+      "cheapBand": {
+        "title": "Günstiges Laden von Fahrzeugen",
+        "note": "Fahrzeuge mit „Günstig laden bis“ warten auf Sonnenstrom oder einen Netzpreis unter diesem Referenzpreis. Erfordert den automatischen Modus; ohne aktuellen Plan nutzen sie nur PV-Überschuss.",
+        "cheapBandDays": "Referenzzeitraum (Tage)",
+        "cheapBandMargin": "Abschlag zum Median (%)",
+        "cheapBandPrice": "Fester Referenzpreis ({currency}/kWh)",
+        "hint": "Leere Felder nutzen die Standardwerte: Median des Netzpreises der letzten 30 Tage abzüglich 10 %. Ein fester Referenzpreis ersetzt den Median.",
+        "invalid": "Referenz für günstiges Laden prüfen: Zeitraum 1–365 Tage, Abschlag 0–90 %, Preis pro kWh zwischen −10 und 10."
+      },
+      "band": {
+        "referenceMedian": "Referenzpreis {reference}: Median {median} der letzten {days} Tage abzüglich {margin} %.",
+        "referenceFixed": "Fester Referenzpreis {reference}.",
+        "referenceMissing": "Noch kein Referenzpreis: benötigt mindestens einen Tag Netzpreise aus den letzten {days} Tagen.",
+        "status": {
+          "inactive": "{device}: günstiges Laden bis {top} ist inaktiv (benötigt PV-Modus, bekannten Ladestand und einen Ladestand über der Mindestladung).",
+          "reached": "{device}: Ladestand {top} für günstiges Laden erreicht.",
+          "noReference": "{device}: günstiges Laden bis {top} wartet auf genügend Preisverlauf.",
+          "belowMinimum": "{device}: unter der Mindestladung, lädt jetzt; danach günstig bis {top}.",
+          "charging": "{device}: lädt günstig in Richtung {top}.",
+          "waitingSolar": "{device}: wartet auf Sonnenstrom um {time}, um in Richtung {top} zu laden.",
+          "waitingCheap": "{device}: wartet auf ein günstiges Zeitfenster um {time} ({price}), um in Richtung {top} zu laden.",
+          "nothingCheap": "{device}: im Plan ist nichts günstig genug, bleibt vorerst bei {soc} (günstig laden bis {top})."
+        }
       }
     },
     "co2": {
@@ -2151,7 +2175,13 @@
       "minSocDescription": "Wird im PV-Modus schnell bis zu diesem Wert geladen.",
       "mode": "Standardmodus",
       "notConnected": "nicht verbunden",
-      "title": "Fahrzeugeinstellungen"
+      "title": "Fahrzeugeinstellungen",
+      "cheapBandSoc": "Günstig laden bis",
+      "cheapBandSocDescription": "Oberhalb der Mindestladung und unterhalb dieses Ladestands nur mit Sonnenstrom oder zu einem Netzpreis unter dem Referenzpreis laden. Ohne Zieltermin: Laden darf unterwegs anhalten und später weitergehen.",
+      "cheapBandMinRun": "Mindestladedauer",
+      "cheapBandMinRunDescription": "Günstiges Laden im Band läuft mindestens so lange, damit vereinzelte günstige Zeitfenster nicht viele kurze Ladevorgänge starten.",
+      "off": "Aus",
+      "minutes": "{value} min"
     },
     "vehicleStatus": {
       "awaitingAuthorization": "Warte auf Autorisierung.",

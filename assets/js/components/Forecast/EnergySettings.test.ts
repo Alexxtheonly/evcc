@@ -412,3 +412,39 @@ test("heating degree: three options with explanations, auto when absent, saved a
     expect.objectContaining({ heatingDegree: "off" })
   );
 });
+
+test("cheap band reference: entered values are saved as numbers, empty ones stay absent", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: { ...defaults(), cheapBandDays: 14 } });
+  vi.mocked(api.put).mockResolvedValue({});
+  const wrapper = mountSettings();
+  await open(wrapper);
+  expect(wrapper.get("#energy-cheapBandDays").element).toHaveProperty("value", "14");
+  await wrapper.get("#energy-cheapBandDays").setValue("");
+  await wrapper.get("#energy-cheapBandMargin").setValue("0");
+  await wrapper.get("#energy-cheapBandPrice").setValue("0.28");
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  const payload = vi.mocked(api.put).mock.calls[0]![1] as Settings;
+  expect(payload).not.toHaveProperty("cheapBandDays");
+  expect(payload.cheapBandMargin).toBe(0);
+  expect(payload.cheapBandPrice).toBe(0.28);
+});
+
+test("cheap band reference: out-of-range values are refused before saving", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  const wrapper = mountSettings();
+  await open(wrapper);
+  for (const [field, value] of [
+    ["cheapBandDays", "0"],
+    ["cheapBandDays", "1.5"],
+    ["cheapBandMargin", "95"],
+    ["cheapBandPrice", "50"],
+  ] as const) {
+    await wrapper.get(`#energy-${field}`).setValue(value);
+    await wrapper.get("form").trigger("submit");
+    await flushPromises();
+    expect(api.put).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("forecast.energy.cheapBand.invalid");
+    await wrapper.get(`#energy-${field}`).setValue("");
+  }
+});

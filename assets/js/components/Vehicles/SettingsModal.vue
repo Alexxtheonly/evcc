@@ -94,6 +94,49 @@
 							</option>
 						</select>
 					</SettingsFormRow>
+					<SettingsFormRow
+						:id="fieldId(vehicle, 'cheapBandSoc')"
+						:label="$t('main.vehicleSettings.cheapBandSoc')"
+						:description="$t('main.vehicleSettings.cheapBandSocDescription')"
+					>
+						<select
+							:id="fieldId(vehicle, 'cheapBandSoc')"
+							class="form-select form-select-sm"
+							:value="vehicle.cheapBandSoc ?? 0"
+							data-testid="cheap-band-soc"
+							@change="changeCheapBandSoc(vehicle, $event)"
+						>
+							<option
+								v-for="opt in cheapBandOptions(vehicle)"
+								:key="opt.value"
+								:value="opt.value"
+							>
+								{{ opt.name }}
+							</option>
+						</select>
+					</SettingsFormRow>
+					<SettingsFormRow
+						v-if="(vehicle.cheapBandSoc ?? 0) > 0"
+						:id="fieldId(vehicle, 'cheapBandMinRun')"
+						:label="$t('main.vehicleSettings.cheapBandMinRun')"
+						:description="$t('main.vehicleSettings.cheapBandMinRunDescription')"
+					>
+						<select
+							:id="fieldId(vehicle, 'cheapBandMinRun')"
+							class="form-select form-select-sm"
+							:value="vehicle.cheapBandMinRun ?? 30"
+							data-testid="cheap-band-min-run"
+							@change="changeCheapBandMinRun(vehicle, $event)"
+						>
+							<option
+								v-for="opt in minRunOptions(vehicle)"
+								:key="opt.value"
+								:value="opt.value"
+							>
+								{{ opt.name }}
+							</option>
+						</select>
+					</SettingsFormRow>
 				</template>
 				<SettingsFormRow
 					:id="fieldId(vehicle, 'adaptivePlanLearning')"
@@ -210,6 +253,36 @@ export default defineComponent({
 								: this.fmtSocOption(soc, rangePerSoc, distanceUnit()),
 					};
 				});
+		},
+		cheapBandOptions(vehicle: Vehicle): SelectOption<number>[] {
+			// off, then levels above the minimum charge; keep a stored level that no longer is
+			const minSoc = vehicle.minSoc ?? 0;
+			const current = vehicle.cheapBandSoc ?? 0;
+			return this.socOptions(vehicle, true)
+				.filter((opt) => opt.value === 0 || opt.value > minSoc || opt.value === current)
+				.map((opt) =>
+					opt.value === 0 ? { ...opt, name: this.$t("main.vehicleSettings.off") } : opt
+				);
+		},
+		minRunOptions(vehicle: Vehicle): SelectOption<number>[] {
+			const values = [0, 15, 30, 45, 60, 90, 120];
+			const current = vehicle.cheapBandMinRun;
+			if (current != null && !values.includes(current)) values.push(current);
+			return values
+				.sort((a, b) => a - b)
+				.map((value) => ({
+					value,
+					name:
+						value === 0
+							? this.$t("general.none")
+							: this.$t("main.vehicleSettings.minutes", { value }),
+				}));
+		},
+		changeCheapBandSoc(vehicle: Vehicle, event: Event): void {
+			api.post(`vehicles/${vehicle.name}/cheapbandsoc/${this.selectValue(event)}`);
+		},
+		changeCheapBandMinRun(vehicle: Vehicle, event: Event): void {
+			api.post(`vehicles/${vehicle.name}/cheapbandminrun/${this.selectValue(event)}`);
 		},
 		selectValue(event: Event): string {
 			return (event.target as HTMLSelectElement).value;

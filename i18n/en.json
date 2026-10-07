@@ -1589,6 +1589,30 @@
           "plannedLevel": "{planned} at {time} · measured {measured}",
           "plannedLevelOnly": "{planned} at {time}"
         }
+      },
+      "cheapBand": {
+        "title": "Cheap vehicle charging",
+        "note": "Vehicles with “Charge cheaply up to” wait for solar or for a grid price below this reference. Needs automatic mode; without a current plan they only use solar surplus.",
+        "cheapBandDays": "Reference window (days)",
+        "cheapBandMargin": "Margin below median (%)",
+        "cheapBandPrice": "Fixed reference ({currency}/kWh)",
+        "hint": "Empty fields use the defaults: median grid price of the last 30 days minus 10 %. A fixed reference replaces the median.",
+        "invalid": "Check the cheap charging reference: window 1–365 days, margin 0–90 %, price per kWh between −10 and 10."
+      },
+      "band": {
+        "referenceMedian": "Reference {reference}: median {median} of the last {days} days minus {margin} %.",
+        "referenceFixed": "Fixed reference {reference}.",
+        "referenceMissing": "No reference yet: needs at least one day of grid prices from the last {days} days.",
+        "status": {
+          "inactive": "{device}: cheap charging up to {top} is inactive (needs solar mode, a known charge level and a level above the minimum charge).",
+          "reached": "{device}: cheap charging level {top} reached.",
+          "noReference": "{device}: cheap charging up to {top} waits for enough price history.",
+          "belowMinimum": "{device}: below the minimum charge, charging now; afterwards cheaply up to {top}.",
+          "charging": "{device}: charging cheaply toward {top}.",
+          "waitingSolar": "{device}: waiting for solar at {time} to charge toward {top}.",
+          "waitingCheap": "{device}: waiting for a cheap slot at {time} ({price}) to charge toward {top}.",
+          "nothingCheap": "{device}: nothing in the plan is cheap enough, stays at {soc} for now (cheap charging up to {top})."
+        }
       }
     },
     "co2": {
@@ -2151,7 +2175,13 @@
       "minSocDescription": "Fast charge to this level in solar mode.",
       "mode": "Default mode",
       "notConnected": "not connected",
-      "title": "Vehicle Settings"
+      "title": "Vehicle Settings",
+      "cheapBandSoc": "Charge cheaply up to",
+      "cheapBandSocDescription": "Above the minimum charge and below this level, charge only from solar or at a grid price below the reference. No deadline: charging may stop partway and continue later.",
+      "cheapBandMinRun": "Minimum charging block",
+      "cheapBandMinRunDescription": "Cheap charging inside the band runs at least this long, so scattered cheap slots do not start many short sessions.",
+      "off": "Off",
+      "minutes": "{value} min"
     },
     "vehicleStatus": {
       "awaitingAuthorization": "Waiting for authorization.",

@@ -79,6 +79,37 @@
 							{{ $t("forecast.energy.heatingDegreeNote") }}
 						</div>
 					</fieldset>
+					<fieldset class="mb-3" data-testid="energy-cheapBand">
+						<legend class="form-label fs-6 mb-1">
+							{{ $t("forecast.energy.cheapBand.title") }}
+						</legend>
+						<div class="small text-muted mb-2">
+							{{ $t("forecast.energy.cheapBand.note") }}
+						</div>
+						<div class="row g-2">
+							<div v-for="field in bandFields" :key="field.key" class="col-sm-4">
+								<label :for="`energy-${field.key}`" class="form-label small">{{
+									$t(`forecast.energy.cheapBand.${field.key}`, {
+										currency: fmtCurrencySymbol(currency),
+									})
+								}}</label>
+								<input
+									:id="`energy-${field.key}`"
+									v-model="band[field.key]"
+									@input="recordInputValidity"
+									class="form-control"
+									type="number"
+									:min="field.min"
+									:max="field.max"
+									:step="field.step"
+									:placeholder="field.placeholder"
+								/>
+							</div>
+						</div>
+						<div class="small text-muted mt-2">
+							{{ $t("forecast.energy.cheapBand.hint") }}
+						</div>
+					</fieldset>
 					<p class="small">{{ $t("forecast.energy.arrivalPrerequisites") }}</p>
 				</section>
 				<section v-show="activeSection === 'billing'">
@@ -246,6 +277,8 @@ import formatter from "@/mixins/formatter";
 import { CURRENCY } from "@/types/evcc";
 import type { EnergyDevice, EnergyInsights, EnergySettings } from "./energyIntelligence";
 
+type BandKey = "cheapBandDays" | "cheapBandMargin" | "cheapBandPrice";
+
 const defaults = (): EnergySettings => ({
 	robust: false,
 	arrivals: false,
@@ -289,6 +322,37 @@ export default defineComponent({
 		invoker: null as HTMLElement | null,
 		badInputs: {} as Record<string, boolean>,
 		activeSection: "planning",
+		// band reference inputs; empty means the default
+		band: { cheapBandDays: "", cheapBandMargin: "", cheapBandPrice: "" } as Record<
+			BandKey,
+			string
+		>,
+		bandFields: [
+			{
+				key: "cheapBandDays" as const,
+				min: 1,
+				max: 365,
+				step: 1,
+				placeholder: "30",
+				integer: true,
+			},
+			{
+				key: "cheapBandMargin" as const,
+				min: 0,
+				max: 90,
+				step: "any",
+				placeholder: "10",
+				integer: false,
+			},
+			{
+				key: "cheapBandPrice" as const,
+				min: -10,
+				max: 10,
+				step: "any",
+				placeholder: "",
+				integer: false,
+			},
+		],
 		heatingDegreeModes: ["auto", "on", "off"] as const,
 		sections: ["planning", "billing", "batteries"],
 		toggles: [
@@ -429,6 +493,14 @@ export default defineComponent({
 					heatingDegree: settings.heatingDegree || "auto",
 				};
 				this.planes = { ...settings.batteryEnergyPlane };
+				this.band = {
+					cheapBandDays:
+						settings.cheapBandDays != null ? String(settings.cheapBandDays) : "",
+					cheapBandMargin:
+						settings.cheapBandMargin != null ? String(settings.cheapBandMargin) : "",
+					cheapBandPrice:
+						settings.cheapBandPrice != null ? String(settings.cheapBandPrice) : "",
+				};
 				this.efficiencies = Object.fromEntries(
 					Object.entries(settings.batteryEfficiency || {}).map(([name, value]) => [
 						name,
@@ -520,6 +592,27 @@ export default defineComponent({
 						value !== "unknown" || this.draft.batteryEnergyPlane?.[name] != null
 				)
 			);
+			const bandSettings: Partial<Record<BandKey, number>> = {};
+			for (const field of this.bandFields) {
+				const text = this.band[field.key];
+				const value = Number(text);
+				if (
+					this.hasBadInput(`energy-${field.key}`) ||
+					(text !== "" &&
+						(!Number.isFinite(value) ||
+							value < field.min ||
+							value > field.max ||
+							(field.integer && !Number.isInteger(value))))
+				) {
+					this.error = this.$t("forecast.energy.cheapBand.invalid");
+					this.activeSection = "planning";
+					this.$nextTick(() => document.getElementById(`energy-${field.key}`)?.focus());
+					return;
+				}
+				if (text !== "") bandSettings[field.key] = value;
+			}
+			const draft: EnergySettings = { ...this.draft };
+			for (const field of this.bandFields) delete draft[field.key];
 			if (
 				this.draft.settlementMode === "interval" &&
 				(!this.settlementDate || this.hasBadInput("energy-settlement-from"))
@@ -532,7 +625,8 @@ export default defineComponent({
 			this.saving = true;
 			try {
 				await api.put("config/energyintelligence", {
-					...this.draft,
+					...draft,
+					...bandSettings,
 					batteryWear,
 					batteryEnergyPlane,
 					batteryEfficiency,

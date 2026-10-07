@@ -9,6 +9,37 @@ export interface EnergySettings {
   settlementFrom?: string | null;
   solarShading?: boolean;
   heatingDegree?: "auto" | "on" | "off";
+  // cheap-charge band reference (ADR-017); absent means the default
+  cheapBandDays?: number;
+  cheapBandMargin?: number;
+  cheapBandPrice?: number;
+}
+
+export type EnergyBandStatus =
+  | "inactive"
+  | "reached"
+  | "noReference"
+  | "belowMinimum"
+  | "charging"
+  | "waitingSolar"
+  | "waitingCheap"
+  | "nothingCheap";
+
+// A vehicle's cheap-charge band for the current plan (ADR-017).
+export interface EnergyBand {
+  status: EnergyBandStatus;
+  topSoc: number;
+  minRunMinutes: number;
+  reference: {
+    price?: number; // currency/kWh; absent without enough price history
+    median?: number;
+    source: "median" | "fixed";
+    days: number;
+    margin: number;
+    samples: number;
+  };
+  nextStart?: string;
+  nextPrice?: number;
 }
 
 export interface EnergyForecastSlot {
@@ -36,6 +67,7 @@ export interface EnergyDevice {
   arrival?: string;
   departure?: string;
   plan: { start: string; chargeWh: number; dischargeWh: number; soc?: number }[];
+  band?: EnergyBand;
 }
 
 export interface EnergyInsights {

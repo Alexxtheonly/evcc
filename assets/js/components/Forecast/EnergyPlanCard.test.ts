@@ -232,4 +232,67 @@ describe("energy plan card", () => {
     await details.trigger("toggle");
     expect(wrapper.findComponent(HeatingDegreeDetails).exists()).toBe(true);
   });
+
+  test("explains each vehicle's cheap-charge band with its reference", () => {
+    const vehicle = (
+      key: string,
+      band: NonNullable<EnergyInsights["devices"]>[number]["band"]
+    ) => ({
+      key,
+      name: key,
+      title: key,
+      kind: "vehicle" as const,
+      capacityKWh: 55,
+      initialSoc: 36,
+      plan: [{ start: slot.start, chargeWh: 0, dischargeWh: 0, soc: 36 }],
+      band,
+    });
+    const reference = {
+      price: 0.3606,
+      median: 0.4007,
+      source: "median" as const,
+      days: 30,
+      margin: 10,
+      samples: 2861,
+    };
+    const wrapper = shallowMount(EnergyPlanCard, {
+      props: {
+        insights: plan({
+          devices: [
+            vehicle("calypso", {
+              status: "waitingCheap",
+              topSoc: 50,
+              minRunMinutes: 30,
+              reference,
+              nextStart: slot.start,
+              nextPrice: 0.3136,
+            }),
+            vehicle("luna", {
+              status: "noReference",
+              topSoc: 60,
+              minRunMinutes: 30,
+              reference: { source: "median", days: 30, margin: 10, samples: 12 },
+            }),
+            { ...vehicle("battery", undefined), kind: "battery" as const },
+          ],
+        }),
+      },
+      global,
+    });
+    const lines = wrapper.get('[data-testid="energy-plan-band"]').findAll("li");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.text()).toContain("forecast.energy.band.status.waitingCheap");
+    expect(lines[0]!.text()).toContain('"device":"calypso"');
+    expect(lines[0]!.text()).toContain('"top":"50\u00a0%"');
+    expect(lines[0]!.text()).toContain("forecast.energy.band.referenceMedian");
+    expect(lines[0]!.text()).toContain('"days":30');
+    expect(lines[1]!.text()).toContain("forecast.energy.band.status.noReference");
+    expect(lines[1]!.text()).toContain("forecast.energy.band.referenceMissing");
+    expect(wrapper.text()).not.toMatch(/NaN|undefined/);
+  });
+
+  test("no band line without a configured band", () => {
+    const wrapper = shallowMount(EnergyPlanCard, { props: { insights: plan({}) }, global });
+    expect(wrapper.find('[data-testid="energy-plan-band"]').exists()).toBe(false);
+  });
 });

@@ -1249,6 +1249,10 @@ export interface Vehicle {
   minSoc?: number;
   /** SoC limit in %. Charging stops when reached. */
   limitSoc?: number;
+  /** Cheap-charge band top in %; between minSoc and this level charging waits for cheap energy. Absent = off. */
+  cheapBandSoc?: number;
+  /** Minimum charging run inside the cheap-charge band in minutes, 0 = none. */
+  cheapBandMinRun?: number;
   /** Charging plan with a fixed target time and SoC or energy goal. */
   plan?: StaticPlan;
   /** Repeating charging plans. */
