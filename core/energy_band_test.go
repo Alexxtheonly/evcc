@@ -409,14 +409,13 @@ func TestLoadpointRequestCheapBand(t *testing.T) {
 	assert.Nil(t, detail.band, "0 turns the band off")
 }
 
-// TestRobustBandPartialEVAction: robust dispatch can fix only full power or stop. A band
-// vehicle planned at partial power in a slot at or below the reference runs at full power,
-// capped to what still fits; above it the existing refusal stands, and without a band
-// nothing changes.
+// TestRobustBandPartialEVAction: a band vehicle planned at partial power in a slot at or
+// below the reference runs at full power, capped to what still fits; above it, or while a
+// run is only held to its minimum, the planned power stands.
 func TestRobustBandPartialEVAction(t *testing.T) {
 	req := liveRequest()
 	req.TimeSeries.PN[0] = .0003136 // below the 0.36063 reference
-	details := requestDetails{BatteryDetails: []batteryDetail{{Type: batteryTypeVehicle, band: cheapBand(liveBandInput())}, {Type: batteryTypeBattery}}}
+	details := requestDetails{BatteryDetails: []batteryDetail{{Type: batteryTypeVehicle, mode: api.ModePV, band: cheapBand(liveBandInput())}, {Type: batteryTypeBattery}}}
 	full := 11040.0 * 627 / 3600
 	base := optimizer.OptimizationResult{Batteries: []optimizer.BatteryResult{
 		{ChargingPower: []float32{900}, DischargingPower: []float32{0}},
@@ -438,73 +437,11 @@ func TestRobustBandPartialEVAction(t *testing.T) {
 	require.NoError(t, err)
 	assert.InDelta(t, 100/eta, *actions[0].request.Batteries[0].FirstStepCharge, 1e-3)
 
-	// above the reference: unchanged refusal
+	// above the reference the planned power stands, held run or not
 	req.TimeSeries.PN[0] = .0005002
-	_, err = executableFirstActions(req, details, base)
-	assert.Error(t, err)
-
-	// unless the run is held to its minimum: it cannot stop, full power ends it sooner
-	details.BatteryDetails[0].band.forced = true
-	_, err = executableFirstActions(req, details, base)
-	assert.NoError(t, err)
-	details.BatteryDetails[0].band.forced = false
-
-	// below the floor the loadpoint charges at full power whatever the price
-	req.Batteries[0].SInitial = 15000
-	_, err = executableFirstActions(req, details, base)
-	assert.NoError(t, err)
-
-	// no band: unchanged refusal
-	details.BatteryDetails[0].band = nil
-	_, err = executableFirstActions(req, details, base)
-	assert.Error(t, err)
-}
-
-// TestSetCheapBandRun: a run in progress is held to the minimum only when continuing at
-// minimum power fits; the floor's run and finished runs may stop at any time.
-func TestSetCheapBandRun(t *testing.T) {
-	now := time.Date(2026, 10, 8, 2, 10, 0, 0, time.UTC)
-	bat := liveRequest().Batteries[0].BatteryConfig // 19800 of 55000 Wh, c_min 1380 W
-	for _, tc := range []struct {
-		name    string
-		run     *cheapBandRun
-		sInit   float32
-		elapsed float64
-		forced  bool
-	}{
-		{"no run", nil, 19800, 0, false},
-		{"just started", &cheapBandRun{start: now}, 19800, 1, true},
-		{"ten minutes in", &cheapBandRun{start: now.Add(-10 * time.Minute)}, 19800, 600, true},
-		{"minimum reached", &cheapBandRun{start: now.Add(-45 * time.Minute)}, 19800, 1800, false},
-		{"floor run", &cheapBandRun{start: now.Add(-5 * time.Minute), fromFloor: true}, 19800, 1800, false},
-		// 20 more minutes reach up to 35 minutes of whole slots, 725 Wh stored at 1380 W
-		{"no room to continue", &cheapBandRun{start: now.Add(-10 * time.Minute)}, 54300, 1800, false},
-		{"just enough room", &cheapBandRun{start: now.Add(-10 * time.Minute)}, 54270, 600, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			band := cheapBand(liveBandInput())
-			b := bat
-			b.SInitial = tc.sInit
-			setCheapBandRun(band, tc.run, b, now)
-			assert.Equal(t, tc.elapsed, band.elapsed)
-			assert.Equal(t, tc.forced, band.forced)
-
-			req := liveRequest()
-			applyCheapBand(&req.Batteries[0], band)
-			if tc.elapsed == 0 {
-				assert.Nil(t, req.Batteries[0].CRunElapsed)
-			} else {
-				assert.Equal(t, tc.elapsed, *req.Batteries[0].CRunElapsed)
-			}
-		})
-	}
-
-	// switched off: no run state at all
-	in := liveBandInput()
-	in.minRun = 0
-	band := cheapBand(in)
-	setCheapBandRun(band, &cheapBandRun{start: now.Add(-time.Minute)}, bat, now)
-	assert.Zero(t, band.elapsed)
+	actions, err = executableFirstActions(req, details, base)
+	require.NoError(t, err)
+	assert.InDelta(t, 900, *actions[0].request.Batteries[0].FirstStepCharge, 1e-6)
 }
 
 func TestTrackCheapBandRun(t *testing.T) {

@@ -68,8 +68,7 @@ type energyBand struct {
 	sBand   float64 // Wh stored
 	pBand   float64 // currency per stored Wh, on top of p_a
 	minRun  float64 // s, 0 = none
-	elapsed float64 // s the charging run in progress has lasted, 0 = none
-	forced  bool    // the run in progress must continue to reach minRun
+	elapsed float64 // s the charging run in progress has lasted, 0 = none; below minRun it is held
 }
 
 // cheapBandRun is a vehicle's charging run as observed by the optimizer.
@@ -195,7 +194,7 @@ func setCheapBandRun(band *energyBand, run *cheapBandRun, bat optimizer.BatteryC
 	// the companion holds whole slots: the rest can reach one slot further than its seconds
 	if remaining := band.minRun - elapsed; remaining > 0 && !run.fromFloor &&
 		float64(bat.SMax-bat.SInitial) >= eta*float64(bat.CMin)*(remaining+tariff.SlotDuration.Seconds())/3600+1 {
-		band.elapsed, band.forced = elapsed, true
+		band.elapsed = elapsed
 		return
 	}
 	band.elapsed = band.minRun
@@ -277,30 +276,16 @@ func explainCheapBand(band *energyBand, req energyRequest, res optimizer.Optimiz
 	band.Status = bandStatusNothingCheap
 }
 
-// cheapBandFullPower reports whether a partial first-slot charge of a band vehicle is
-// executed at full power by robust dispatch, which can only fix full power or stop.
-// Below minSoc the loadpoint floor charges at full power anyway. Inside the band, a
-// slot priced at or below the reference is worth charging at any power: the band top
-// ends it on the next control cycle. A run held to its minimum cannot stop, and full
-// power is the command robust dispatch can execute for it.
-func cheapBandFullPower(band *energyBand, bat energyBattery, price float32) bool {
+// cheapBandFullPower reports whether a band vehicle's partial first-slot charge runs at
+// full power under robust dispatch: in a slot priced at or below the reference any
+// power is worth it, and the band top ends it on the next control cycle. A run held to
+// its minimum keeps its planned (minimum) power instead: the hold is not price-bounded,
+// so it must not be widened to full power.
+func cheapBandFullPower(band *energyBand, price float32) bool {
 	if band == nil || !band.active || band.Reference.Price == nil {
 		return false
 	}
-	return bat.SInitial < bat.SMin || band.forced || float64(price)*1e3 <= *band.Reference.Price
-}
-
-// storableCharge caps a full-power first-slot charge (AC Wh) to the room left below the
-// ceiling: executed at full power, the loadpoint stops at its limit, the model must too.
-func storableCharge(full float64, bat energyBattery, etaC float64, wire func(float32) float64) float64 {
-	if bat.EtaC != nil {
-		etaC = *bat.EtaC
-	}
-	ceiling := wire(bat.SMax)
-	if bat.SCapacity > 0 {
-		ceiling = wire(bat.SCapacity)
-	}
-	return max(0, min(full, (ceiling-wire(bat.SInitial))/etaC))
+	return float64(price)*1e3 <= *band.Reference.Price
 }
 
 // cheapBandValue is the band's contribution to the solver objective between initial

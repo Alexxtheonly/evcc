@@ -295,26 +295,10 @@ func executableFirstActions(req energyRequest, details requestDetails, base opti
 			index = i
 			continue
 		}
-		charge := float64(base.Batteries[i].ChargingPower[0])
-		full := wire(req.Batteries[i].CMax) * seconds / 3600
-		// Full power and stop have a stable EV command. A partial command can
-		// instead invoke PV tracking, phase switching or minimum-current gates.
-		if charge > .1 && base.Batteries[i].ChargingPower[0] != float32(full) {
-			if !cheapBandFullPower(detail.band, req.Batteries[i], req.TimeSeries.PN[0]) {
-				return nil, errors.New("robust dispatch cannot fix a partial EV first action: PV tracking and current gates remain authoritative")
-			}
-			full = storableCharge(full, req.Batteries[i], wire(req.EtaC), wire)
-		}
 		if base.Batteries[i].DischargingPower[0] > .1 {
 			return nil, errors.New("robust dispatch cannot command EV discharge")
 		}
-		// Reconstruct the command from its request limit, not rounded float32
-		// response energy, which can exceed the exact physical power boundary.
-		if charge > .1 {
-			charge = full
-		} else {
-			charge = 0
-		}
+		charge := executedEVCharge(detail, req, i, base.Batteries[i].ChargingPower[0], seconds, wire)
 		discharge := 0.0
 		first.Batteries[i].FirstStepCharge, first.Batteries[i].FirstStepDischarge = &charge, &discharge
 		net += charge

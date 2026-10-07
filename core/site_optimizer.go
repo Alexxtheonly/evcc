@@ -123,7 +123,8 @@ type batteryDetail struct {
 	departure    *time.Time
 	etaC, etaD   float64
 	wearPerKWh   *float64
-	band         *energyBand // vehicle cheap-charge band, nil if not configured
+	band         *energyBand    // vehicle cheap-charge band, nil if not configured
+	mode         api.ChargeMode // vehicle loadpoint mode, for the action robust dispatch fixes
 }
 
 // batteryKey and loadpointKey build the canonical device keys used for
@@ -1805,6 +1806,7 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 
 	detail.Type = batteryTypeVehicle
 	detail.Capacity = capacity
+	detail.mode = lp.GetMode()
 
 	if vt := v.GetTitle(); vt != "" {
 		if detail.Title != "" {
