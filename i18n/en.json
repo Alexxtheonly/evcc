@@ -1593,16 +1593,18 @@
       "cheapBand": {
         "title": "Cheap vehicle charging",
         "note": "Vehicles with “Charge cheaply up to” wait for solar or for a grid price below this reference. Needs automatic mode; without a current plan they only use solar surplus.",
-        "cheapBandDays": "Reference window (days)",
+        "cheapBandDays": "Reference window",
         "cheapBandMargin": "Margin below median (%)",
         "cheapBandPrice": "Fixed reference ({currency}/kWh)",
-        "hint": "Empty fields use the defaults: median grid price of the last 30 days minus 10 %. A fixed reference replaces the median.",
-        "invalid": "Check the cheap charging reference: window 1–365 days, margin 0–90 %, price per kWh between −10 and 10.",
+        "hint": "Defaults: median grid price of the last 30 days minus 10 %. With less history than the window, the median uses what exists. A fixed reference replaces the median.",
+        "invalid": "Check the cheap charging reference: margin 0–90 %, price per kWh between −10 and 10.",
         "fromBattery": "Home battery may supply band charging",
-        "fromBatteryHint": "Off (default): while a car charges cheaply inside its band, the home battery holds, so the household also runs on solar or grid for those minutes. Charging below the minimum charge is never restricted."
+        "fromBatteryHint": "Off (default): while a car charges cheaply inside its band, the home battery holds, so the household also runs on solar or grid for those minutes. Charging below the minimum charge is never restricted.",
+        "window30Default": "30 days (default)",
+        "window90": "90 days"
       },
       "band": {
-        "referenceMedian": "Reference {reference}: median {median} of the last {days} days minus {margin} %.",
+        "referenceMedian": "Reference {reference}: median {median} of {covered} days of prices (window {days} days) minus {margin} %.",
         "referenceFixed": "Fixed reference {reference}.",
         "referenceMissing": "No reference yet: needs at least one day of grid prices from the last {days} days.",
         "status": {

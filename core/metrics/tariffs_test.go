@@ -91,9 +91,9 @@ func TestGridPriceMedian(t *testing.T) {
 	from := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Hour)
 
-	_, n, err := GridPriceMedian(from, to)
+	stats, err := GridPriceMedian(from, to)
 	require.NoError(t, err)
-	require.Zero(t, n, "no history is absence, not a zero price")
+	require.Zero(t, stats.Samples, "no history is absence, not a zero price")
 
 	feedin := 0.08
 	for i, price := range []float64{0.40, 0.20, 0.50} {
@@ -105,15 +105,16 @@ func TestGridPriceMedian(t *testing.T) {
 	late := 0.10
 	require.NoError(t, PersistTariffs(to, &late, nil, nil, nil))
 
-	median, n, err := GridPriceMedian(from, to)
+	stats, err = GridPriceMedian(from, to)
 	require.NoError(t, err)
-	require.Equal(t, 3, n)
-	require.InDelta(t, 0.40, median, 1e-9)
+	require.Equal(t, 3, stats.Samples)
+	require.InDelta(t, 0.40, stats.Median, 1e-9)
+	require.Equal(t, from, stats.Oldest.UTC())
 
 	even := 0.30
 	require.NoError(t, PersistTariffs(from.Add(45*time.Minute), &even, nil, nil, nil))
-	median, n, err = GridPriceMedian(from, to)
+	stats, err = GridPriceMedian(from, to)
 	require.NoError(t, err)
-	require.Equal(t, 4, n)
-	require.InDelta(t, 0.35, median, 1e-9)
+	require.Equal(t, 4, stats.Samples)
+	require.InDelta(t, 0.35, stats.Median, 1e-9)
 }

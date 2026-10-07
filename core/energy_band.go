@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/evcc-io/evcc/api"
@@ -41,11 +42,12 @@ const (
 
 // cheapBandReference is the price below which grid energy is worth storing in the band.
 type cheapBandReference struct {
-	Price   *float64 `json:"price,omitempty"`  // currency/kWh, AC side; nil when unavailable
-	Median  *float64 `json:"median,omitempty"` // currency/kWh over Days
-	Source  string   `json:"source"`           // median or fixed
-	Days    int      `json:"days"`
-	Margin  float64  `json:"margin"` // percent
+	Price   *float64 `json:"price,omitempty"`   // currency/kWh, AC side; nil when unavailable
+	Median  *float64 `json:"median,omitempty"`  // currency/kWh over Days
+	Source  string   `json:"source"`            // median or fixed
+	Days    int      `json:"days"`              // window setting, 30 or 90
+	Covered float64  `json:"covered,omitempty"` // days of price history actually in the window
+	Margin  float64  `json:"margin"`            // percent
 	Samples int      `json:"samples"`
 }
 
@@ -103,13 +105,18 @@ func (site *Site) cheapBandReference(cfg EnergyIntelligenceSettings, now time.Ti
 	if db.Instance == nil {
 		return ref
 	}
-	median, n, err := metrics.GridPriceMedian(now.AddDate(0, 0, -days), now)
+	stats, err := metrics.GridPriceMedian(now.AddDate(0, 0, -days), now)
 	if err != nil {
 		site.log.ERROR.Printf("cheap band reference: %v", err)
 		return ref
 	}
-	ref.Samples = n
-	if n >= cheapBandMinSamples {
+	ref.Samples = stats.Samples
+	if stats.Samples > 0 {
+		// fewer days than the window: the median uses what exists and says so
+		ref.Covered = math.Round(now.Sub(stats.Oldest).Hours()/24*10) / 10
+	}
+	if stats.Samples >= cheapBandMinSamples {
+		median := stats.Median
 		price := median * (1 - margin/100)
 		ref.Median, ref.Price = &median, &price
 	}

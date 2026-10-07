@@ -139,17 +139,17 @@ func TestCheapBandReferenceSettings(t *testing.T) {
 	assert.Nil(t, cfg.CheapBandPrice)
 	assert.False(t, cfg.CheapBandFromBattery, "home batteries hold during band charging by default")
 
-	w := put(`{"settlementMode":"interval","cheapBandDays":14,"cheapBandMargin":0,"cheapBandPrice":0.28,"cheapBandFromBattery":true}`)
+	w := put(`{"settlementMode":"interval","cheapBandDays":90,"cheapBandMargin":0,"cheapBandPrice":0.28,"cheapBandFromBattery":true}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	cfg = site.GetEnergyIntelligenceSettings()
 	require.NotNil(t, cfg.CheapBandMargin)
-	assert.Equal(t, 14, *cfg.CheapBandDays)
+	assert.Equal(t, 90, *cfg.CheapBandDays)
 	assert.Equal(t, 0.0, *cfg.CheapBandMargin, "zero margin is kept, not replaced by the default")
 	assert.Equal(t, 0.28, *cfg.CheapBandPrice)
 	assert.True(t, cfg.CheapBandFromBattery)
 
-	for _, bad := range []string{`"cheapBandDays":0`, `"cheapBandDays":400`, `"cheapBandMargin":-1`, `"cheapBandMargin":95`, `"cheapBandPrice":50`} {
+	for _, bad := range []string{`"cheapBandDays":0`, `"cheapBandDays":60`, `"cheapBandDays":400`, `"cheapBandMargin":-1`, `"cheapBandMargin":95`, `"cheapBandPrice":50`} {
 		assert.Equal(t, http.StatusBadRequest, put(`{"settlementMode":"interval",`+bad+`}`).Code, bad)
 	}
-	assert.Equal(t, 14, *site.GetEnergyIntelligenceSettings().CheapBandDays)
+	assert.Equal(t, 90, *site.GetEnergyIntelligenceSettings().CheapBandDays)
 }

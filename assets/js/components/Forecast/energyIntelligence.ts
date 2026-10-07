@@ -36,6 +36,7 @@ export interface EnergyBand {
     median?: number;
     source: "median" | "fixed";
     days: number;
+    covered?: number; // days of price history actually in the window
     margin: number;
     samples: number;
   };

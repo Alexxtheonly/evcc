@@ -247,18 +247,24 @@ func TestCheapBandReference(t *testing.T) {
 	assert.Equal(t, 96, ref.Samples)
 	assert.InDelta(t, 0.35, *ref.Median, 1e-9)
 	assert.InDelta(t, 0.315, *ref.Price, 1e-9, "10 % below the median")
+	assert.Equal(t, 1.0, ref.Covered, "a 30-day window with one day of history says so")
 
 	// cached for the day
 	late := 0.10
 	require.NoError(t, metrics.PersistTariffs(now.Add(-97*15*time.Minute), &late, nil, nil, nil))
 	assert.Equal(t, 96, site.cheapBandReference(cfg, now.Add(time.Hour)).Samples)
 
-	margin, days := 0.0, 1
+	// 89 days back: inside 90 days, outside 30
+	old := 0.90
+	require.NoError(t, metrics.PersistTariffs(now.AddDate(0, 0, -89), &old, nil, nil, nil))
+	margin, days := 0.0, 90
 	cfg.CheapBandMargin, cfg.CheapBandDays = &margin, &days
 	ref = site.cheapBandReference(cfg, now)
 	require.NotNil(t, ref.Price)
 	assert.InDelta(t, 0.35, *ref.Price, 1e-9, "margin 0 is a value, not the default")
-	assert.Equal(t, 96, ref.Samples, "one day window")
+	assert.Equal(t, 98, ref.Samples, "the 90-day window reaches the old slot")
+	assert.Equal(t, 89.0, ref.Covered)
+	assert.Equal(t, 90, ref.Days)
 
 	fixed := 0.28
 	cfg.CheapBandPrice = &fixed
@@ -270,18 +276,18 @@ func TestCheapBandReference(t *testing.T) {
 func TestEnergyIntelligenceCheapBandValidation(t *testing.T) {
 	base := EnergyIntelligenceSettings{SettlementMode: "simulation"}
 	require.NoError(t, base.validate())
-	zero, year, tooLong := 0, 365, 366
+	zero, ninety, sixty := 0, 90, 60
 	negative, high, ok := -1.0, 91.0, 10.0
 	for name, cfg := range map[string]EnergyIntelligenceSettings{
 		"days 0":       {SettlementMode: "simulation", CheapBandDays: &zero},
-		"days 366":     {SettlementMode: "simulation", CheapBandDays: &tooLong},
+		"days 60":      {SettlementMode: "simulation", CheapBandDays: &sixty},
 		"margin < 0":   {SettlementMode: "simulation", CheapBandMargin: &negative},
 		"margin > 90":  {SettlementMode: "simulation", CheapBandMargin: &high},
 		"price absurd": {SettlementMode: "simulation", CheapBandPrice: &high},
 	} {
 		assert.Error(t, cfg.validate(), name)
 	}
-	valid := EnergyIntelligenceSettings{SettlementMode: "simulation", CheapBandDays: &year, CheapBandMargin: &ok, CheapBandPrice: &negative}
+	valid := EnergyIntelligenceSettings{SettlementMode: "simulation", CheapBandDays: &ninety, CheapBandMargin: &ok, CheapBandPrice: &negative}
 	assert.NoError(t, valid.validate())
 }
 

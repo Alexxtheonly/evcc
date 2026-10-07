@@ -110,23 +110,38 @@ func PersistTariffs(ts time.Time, grid, feedin, co2, temperature *float64) error
 	}).Error
 }
 
-// GridPriceMedian returns the median persisted grid import price (currency/kWh) of the
-// slots in [from,to) and how many slots it was taken from. Slots without a grid price
-// are absent, never zero. Zero samples returns zero and no error: callers must check n.
-func GridPriceMedian(from, to time.Time) (median float64, n int, err error) {
-	var prices []float64
-	if err := db.Instance.Model(new(tariffValue)).
-		Where("ts >= ? AND ts < ? AND grid IS NOT NULL", from.Unix(), to.Unix()).
-		Pluck("grid", &prices).Error; err != nil {
-		return 0, 0, err
+// GridPriceStats is the median persisted grid import price (currency/kWh) of a window,
+// how many slots it was taken from and the earliest of them.
+type GridPriceStats struct {
+	Median  float64
+	Samples int
+	Oldest  time.Time
+}
+
+// GridPriceMedian returns the median grid price of the slots in [from,to). Slots without
+// a grid price are absent, never zero. No samples returns zero stats and no error:
+// callers must check Samples.
+func GridPriceMedian(from, to time.Time) (GridPriceStats, error) {
+	var rows []struct {
+		Ts   int64
+		Grid float64
 	}
-	if len(prices) == 0 {
-		return 0, 0, nil
+	if err := db.Instance.Model(new(tariffValue)).Select("ts, grid").
+		Where("ts >= ? AND ts < ? AND grid IS NOT NULL", from.Unix(), to.Unix()).
+		Order("ts").Scan(&rows).Error; err != nil {
+		return GridPriceStats{}, err
+	}
+	if len(rows) == 0 {
+		return GridPriceStats{}, nil
+	}
+	prices := make([]float64, len(rows))
+	for i, r := range rows {
+		prices[i] = r.Grid
 	}
 	slices.Sort(prices)
-	mid := len(prices) / 2
-	if len(prices)%2 == 1 {
-		return prices[mid], len(prices), nil
+	res := GridPriceStats{Samples: len(prices), Oldest: time.Unix(rows[0].Ts, 0), Median: prices[len(prices)/2]}
+	if mid := len(prices) / 2; len(prices)%2 == 0 {
+		res.Median = (prices[mid-1] + prices[mid]) / 2
 	}
-	return (prices[mid-1] + prices[mid]) / 2, len(prices), nil
+	return res, nil
 }

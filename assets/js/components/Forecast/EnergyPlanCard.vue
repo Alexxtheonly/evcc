@@ -674,6 +674,7 @@ export default defineComponent({
 										? this.unitPrice(band.reference.median)
 										: "",
 								days: band.reference.days,
+								covered: this.number(band.reference.covered ?? 0, 0),
 								margin: this.number(band.reference.margin, 0),
 							});
 			return {

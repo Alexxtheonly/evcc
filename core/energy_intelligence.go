@@ -45,8 +45,8 @@ func (cfg EnergyIntelligenceSettings) validate() error {
 	if !slices.Contains([]string{"", heatingDegreeAuto, heatingDegreeOn, heatingDegreeOff}, cfg.HeatingDegree) {
 		return errors.New("heatingDegree must be auto, on or off")
 	}
-	if d := cfg.CheapBandDays; d != nil && (*d < 1 || *d > 365) {
-		return errors.New("cheapBandDays must be 1..365")
+	if d := cfg.CheapBandDays; d != nil && *d != 30 && *d != 90 {
+		return errors.New("cheapBandDays must be 30 or 90")
 	}
 	if m := cfg.CheapBandMargin; m != nil && (math.IsNaN(*m) || *m < 0 || *m > 90) {
 		return errors.New("cheapBandMargin must be 0..90 percent")

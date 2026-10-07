@@ -251,7 +251,8 @@ describe("energy plan card", () => {
       price: 0.3606,
       median: 0.4007,
       source: "median" as const,
-      days: 30,
+      days: 90,
+      covered: 51,
       margin: 10,
       samples: 2861,
     };
@@ -285,7 +286,8 @@ describe("energy plan card", () => {
     expect(lines[0]!.text()).toContain('"device":"calypso"');
     expect(lines[0]!.text()).toContain('"top":"50\u00a0%"');
     expect(lines[0]!.text()).toContain("forecast.energy.band.referenceMedian");
-    expect(lines[0]!.text()).toContain('"days":30');
+    expect(lines[0]!.text()).toContain('"days":90');
+    expect(lines[0]!.text()).toContain('"covered":"51"');
     expect(lines[1]!.text()).toContain("forecast.energy.band.status.noReference");
     expect(lines[1]!.text()).toContain("forecast.energy.band.referenceMissing");
     expect(wrapper.text()).not.toMatch(/NaN|undefined/);

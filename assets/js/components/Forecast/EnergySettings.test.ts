@@ -414,12 +414,12 @@ test("heating degree: three options with explanations, auto when absent, saved a
 });
 
 test("cheap band reference: entered values are saved as numbers, empty ones stay absent", async () => {
-  vi.mocked(api.get).mockResolvedValue({ data: { ...defaults(), cheapBandDays: 14 } });
+  vi.mocked(api.get).mockResolvedValue({ data: { ...defaults(), cheapBandDays: 90 } });
   vi.mocked(api.put).mockResolvedValue({});
   const wrapper = mountSettings();
   await open(wrapper);
-  expect(wrapper.get("#energy-cheapBandDays").element).toHaveProperty("value", "14");
-  await wrapper.get("#energy-cheapBandDays").setValue("");
+  expect(wrapper.get("#energy-cheapBandDays").element).toHaveProperty("value", "90");
+  await wrapper.get("#energy-cheapBandDays").setValue(""); // back to the 30-day default
   await wrapper.get("#energy-cheapBandMargin").setValue("0");
   await wrapper.get("#energy-cheapBandPrice").setValue("0.28");
   await wrapper.get("form").trigger("submit");
@@ -435,8 +435,6 @@ test("cheap band reference: out-of-range values are refused before saving", asyn
   const wrapper = mountSettings();
   await open(wrapper);
   for (const [field, value] of [
-    ["cheapBandDays", "0"],
-    ["cheapBandDays", "1.5"],
     ["cheapBandMargin", "95"],
     ["cheapBandPrice", "50"],
   ] as const) {
@@ -462,5 +460,21 @@ test("battery feeding band charging is off unless switched on", async () => {
   expect(api.put).toHaveBeenCalledWith(
     "config/energyintelligence",
     expect.objectContaining({ cheapBandFromBattery: true })
+  );
+});
+
+test("reference window offers 30 days (default) and 90 days", async () => {
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  vi.mocked(api.put).mockResolvedValue({});
+  const wrapper = mountSettings();
+  await open(wrapper);
+  const select = wrapper.get("#energy-cheapBandDays");
+  expect(select.findAll("option").map((o) => o.element.value)).toEqual(["", "90"]);
+  await select.setValue("90");
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledWith(
+    "config/energyintelligence",
+    expect.objectContaining({ cheapBandDays: 90 })
   );
 });

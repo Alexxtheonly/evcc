@@ -87,6 +87,23 @@
 							{{ $t("forecast.energy.cheapBand.note") }}
 						</div>
 						<div class="row g-2">
+							<div class="col-sm-4">
+								<label for="energy-cheapBandDays" class="form-label small">{{
+									$t("forecast.energy.cheapBand.cheapBandDays")
+								}}</label>
+								<select
+									id="energy-cheapBandDays"
+									v-model="band.cheapBandDays"
+									class="form-select"
+								>
+									<option value="">
+										{{ $t("forecast.energy.cheapBand.window30Default") }}
+									</option>
+									<option value="90">
+										{{ $t("forecast.energy.cheapBand.window90") }}
+									</option>
+								</select>
+							</div>
 							<div v-for="field in bandFields" :key="field.key" class="col-sm-4">
 								<label :for="`energy-${field.key}`" class="form-label small">{{
 									$t(`forecast.energy.cheapBand.${field.key}`, {
@@ -344,20 +361,11 @@ export default defineComponent({
 		>,
 		bandFields: [
 			{
-				key: "cheapBandDays" as const,
-				min: 1,
-				max: 365,
-				step: 1,
-				placeholder: "30",
-				integer: true,
-			},
-			{
 				key: "cheapBandMargin" as const,
 				min: 0,
 				max: 90,
 				step: "any",
 				placeholder: "10",
-				integer: false,
 			},
 			{
 				key: "cheapBandPrice" as const,
@@ -365,7 +373,6 @@ export default defineComponent({
 				max: 10,
 				step: "any",
 				placeholder: "",
-				integer: false,
 			},
 		],
 		heatingDegreeModes: ["auto", "on", "off"] as const,
@@ -509,8 +516,8 @@ export default defineComponent({
 				};
 				this.planes = { ...settings.batteryEnergyPlane };
 				this.band = {
-					cheapBandDays:
-						settings.cheapBandDays != null ? String(settings.cheapBandDays) : "",
+					// 30 is the default: shown as the default choice, saved as absent
+					cheapBandDays: settings.cheapBandDays === 90 ? "90" : "",
 					cheapBandMargin:
 						settings.cheapBandMargin != null ? String(settings.cheapBandMargin) : "",
 					cheapBandPrice:
@@ -614,10 +621,7 @@ export default defineComponent({
 				if (
 					this.hasBadInput(`energy-${field.key}`) ||
 					(text !== "" &&
-						(!Number.isFinite(value) ||
-							value < field.min ||
-							value > field.max ||
-							(field.integer && !Number.isInteger(value))))
+						(!Number.isFinite(value) || value < field.min || value > field.max))
 				) {
 					this.error = this.$t("forecast.energy.cheapBand.invalid");
 					this.activeSection = "planning";
@@ -628,6 +632,8 @@ export default defineComponent({
 			}
 			const draft: EnergySettings = { ...this.draft };
 			for (const field of this.bandFields) delete draft[field.key];
+			delete draft.cheapBandDays;
+			if (this.band.cheapBandDays === "90") bandSettings.cheapBandDays = 90;
 			if (
 				this.draft.settlementMode === "interval" &&
 				(!this.settlementDate || this.hasBadInput("energy-settlement-from"))
