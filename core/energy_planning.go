@@ -24,6 +24,9 @@ func (site *Site) prepareEnergy(req optimizer.OptimizationInput, details *reques
 	if err := site.energyForecast(req, *details); err != nil {
 		return res, err
 	}
+	for i, detail := range details.BatteryDetails {
+		applyCheapBand(&res.Batteries[i], detail.band)
+	}
 	cfg := site.energyInsights.Settings
 	for _, detail := range details.BatteryDetails {
 		if detail.Type != batteryTypeBattery {
@@ -190,8 +193,9 @@ func (site *Site) optimizeEnergy(req optimizer.OptimizationInput, details reques
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	cfg := site.energyInsights.Settings
-	if optimizerURI() != OPTIMIZER_URI || cfg.Robust || cfg.Arrivals || cfg.UseLearnedEfficiency || len(cfg.BatteryWear) > 0 || len(cfg.BatteryEfficiency) > 0 {
-		if err := site.requireEnergyCapabilities(ctx); err != nil {
+	features := energyRequestFeatures(extended)
+	if optimizerURI() != OPTIMIZER_URI || cfg.Robust || cfg.Arrivals || cfg.UseLearnedEfficiency || len(cfg.BatteryWear) > 0 || len(cfg.BatteryEfficiency) > 0 || len(features) > 0 {
+		if err := site.requireEnergyCapabilities(ctx, features...); err != nil {
 			return err
 		}
 	}
@@ -299,6 +303,15 @@ func (site *Site) populateEnergyDevices(req energyRequest, details requestDetail
 			soc := float64(bat.SInitial) / (detail.Capacity * 10)
 			device.InitialSoc = &soc
 		}
+		if detail.band != nil {
+			band := *detail.band
+			soc := 0.0
+			if detail.Capacity > 0 {
+				soc = float64(bat.SInitial) / (detail.Capacity * 10)
+			}
+			explainCheapBand(&band, req, res, details.Timestamps, i, soc, detail.minSoc)
+			device.Band = &band
+		}
 		for t, start := range details.Timestamps {
 			b := res.Batteries[i]
 			soc := 0.0
@@ -381,6 +394,7 @@ func (site *Site) archiveEnergyRun(req energyRequest, details requestDetails, re
 		identityReq.Batteries[i].PDemand = nil
 		identityReq.Batteries[i].FirstStepCharge = nil
 		identityReq.Batteries[i].FirstStepDischarge = nil
+		identityReq.Batteries[i].CRunElapsed = nil // run state, like the inventory
 		d := details.BatteryDetails[i]
 		identities = append(identities, []any{d.Type, d.Name, d.loadpoint, d.controllable, d.arrival, d.departure})
 	}

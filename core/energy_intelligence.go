@@ -24,6 +24,11 @@ type EnergyIntelligenceSettings struct {
 	SettlementFrom       *time.Time                         `json:"settlementFrom"`
 	SolarShading         bool                               `json:"solarShading"`  // ADR-016 sun-position correction replaces the daily solar scale
 	HeatingDegree        string                             `json:"heatingDegree"` // household demand temperature correction: auto (default), on or off
+	// cheap-charge band reference price (ADR-017): median grid price over CheapBandDays
+	// minus CheapBandMargin percent, or CheapBandPrice (currency/kWh) when set. Nil = default.
+	CheapBandDays   *int     `json:"cheapBandDays,omitempty"`
+	CheapBandMargin *float64 `json:"cheapBandMargin,omitempty"`
+	CheapBandPrice  *float64 `json:"cheapBandPrice,omitempty"`
 }
 
 type EnergyEfficiencySetting struct {
@@ -37,6 +42,15 @@ func (cfg EnergyIntelligenceSettings) validate() error {
 	}
 	if !slices.Contains([]string{"", heatingDegreeAuto, heatingDegreeOn, heatingDegreeOff}, cfg.HeatingDegree) {
 		return errors.New("heatingDegree must be auto, on or off")
+	}
+	if d := cfg.CheapBandDays; d != nil && (*d < 1 || *d > 365) {
+		return errors.New("cheapBandDays must be 1..365")
+	}
+	if m := cfg.CheapBandMargin; m != nil && (math.IsNaN(*m) || *m < 0 || *m > 90) {
+		return errors.New("cheapBandMargin must be 0..90 percent")
+	}
+	if p := cfg.CheapBandPrice; p != nil && (math.IsNaN(*p) || math.IsInf(*p, 0) || math.Abs(*p) > 10) {
+		return errors.New("cheapBandPrice must be a finite price per kWh")
 	}
 	if len(cfg.BatteryWear) > 64 {
 		return errors.New("too many battery wear entries")
@@ -142,6 +156,7 @@ type energyDevice struct {
 	Arrival     *time.Time       `json:"arrival,omitempty"`
 	Departure   *time.Time       `json:"departure,omitempty"`
 	Plan        []energyPlanSlot `json:"plan"`
+	Band        *energyBand      `json:"band,omitempty"` // ADR-017 cheap-charge band
 }
 
 type energyEconomics struct {

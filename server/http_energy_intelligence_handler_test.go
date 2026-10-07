@@ -118,3 +118,36 @@ func TestHeatingDegreeSettingToggle(t *testing.T) {
 	}
 	assert.Equal(t, "auto", site.GetEnergyIntelligenceSettings().HeatingDegree)
 }
+
+// TestCheapBandReferenceSettings: the band reference settings persist through the energy
+// settings endpoint, stay absent (defaults) when not sent and reject nonsense.
+func TestCheapBandReferenceSettings(t *testing.T) {
+	site := core.NewSite()
+	t.Cleanup(func() { _ = settings.SetJson("energyIntelligence", map[string]any{"settlementMode": "simulation"}) })
+
+	put := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPut, "/api/config/energyintelligence", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		energyIntelligenceHandler(site)(w, r)
+		return w
+	}
+
+	require.Equal(t, http.StatusOK, put(`{"settlementMode":"interval"}`).Code)
+	cfg := site.GetEnergyIntelligenceSettings()
+	assert.Nil(t, cfg.CheapBandDays)
+	assert.Nil(t, cfg.CheapBandMargin)
+	assert.Nil(t, cfg.CheapBandPrice)
+
+	w := put(`{"settlementMode":"interval","cheapBandDays":14,"cheapBandMargin":0,"cheapBandPrice":0.28}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	cfg = site.GetEnergyIntelligenceSettings()
+	require.NotNil(t, cfg.CheapBandMargin)
+	assert.Equal(t, 14, *cfg.CheapBandDays)
+	assert.Equal(t, 0.0, *cfg.CheapBandMargin, "zero margin is kept, not replaced by the default")
+	assert.Equal(t, 0.28, *cfg.CheapBandPrice)
+
+	for _, bad := range []string{`"cheapBandDays":0`, `"cheapBandDays":400`, `"cheapBandMargin":-1`, `"cheapBandMargin":95`, `"cheapBandPrice":50`} {
+		assert.Equal(t, http.StatusBadRequest, put(`{"settlementMode":"interval",`+bad+`}`).Code, bad)
+	}
+	assert.Equal(t, 14, *site.GetEnergyIntelligenceSettings().CheapBandDays)
+}

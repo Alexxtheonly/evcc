@@ -109,3 +109,24 @@ func PersistTariffs(ts time.Time, grid, feedin, co2, temperature *float64) error
 		Temperature: temperature,
 	}).Error
 }
+
+// GridPriceMedian returns the median persisted grid import price (currency/kWh) of the
+// slots in [from,to) and how many slots it was taken from. Slots without a grid price
+// are absent, never zero. Zero samples returns zero and no error: callers must check n.
+func GridPriceMedian(from, to time.Time) (median float64, n int, err error) {
+	var prices []float64
+	if err := db.Instance.Model(new(tariffValue)).
+		Where("ts >= ? AND ts < ? AND grid IS NOT NULL", from.Unix(), to.Unix()).
+		Pluck("grid", &prices).Error; err != nil {
+		return 0, 0, err
+	}
+	if len(prices) == 0 {
+		return 0, 0, nil
+	}
+	slices.Sort(prices)
+	mid := len(prices) / 2
+	if len(prices)%2 == 1 {
+		return prices[mid], len(prices), nil
+	}
+	return (prices[mid-1] + prices[mid]) / 2, len(prices), nil
+}

@@ -83,3 +83,37 @@ func TestPersistTariffsFillsMissingUsageLater(t *testing.T) {
 	require.NotNil(t, res.FeedIn, "a NULL left by an unavailable tariff must be fillable later")
 	require.InDelta(t, 0.0786, *res.FeedIn, 1e-9)
 }
+
+func TestGridPriceMedian(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.AutoMigrate(new(tariffValue)))
+
+	from := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+
+	_, n, err := GridPriceMedian(from, to)
+	require.NoError(t, err)
+	require.Zero(t, n, "no history is absence, not a zero price")
+
+	feedin := 0.08
+	for i, price := range []float64{0.40, 0.20, 0.50} {
+		require.NoError(t, PersistTariffs(from.Add(time.Duration(i)*15*time.Minute), &price, &feedin, nil, nil))
+	}
+	// a slot without grid price must not count as zero
+	require.NoError(t, PersistTariffs(from.Add(45*time.Minute), nil, &feedin, nil, nil))
+	// outside [from,to)
+	late := 0.10
+	require.NoError(t, PersistTariffs(to, &late, nil, nil, nil))
+
+	median, n, err := GridPriceMedian(from, to)
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+	require.InDelta(t, 0.40, median, 1e-9)
+
+	even := 0.30
+	require.NoError(t, PersistTariffs(from.Add(45*time.Minute), &even, nil, nil, nil))
+	median, n, err = GridPriceMedian(from, to)
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
+	require.InDelta(t, 0.35, median, 1e-9)
+}

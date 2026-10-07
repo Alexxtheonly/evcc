@@ -27,6 +27,10 @@ type energyBattery struct {
 	WearCost           *float64 `json:"wear_cost,omitempty"`
 	FirstStepCharge    *float64 `json:"first_step_charge,omitempty"`
 	FirstStepDischarge *float64 `json:"first_step_discharge,omitempty"`
+	SBand              *float64 `json:"s_band,omitempty"`        // ADR-017 band top, stored Wh
+	PBand              *float64 `json:"p_band,omitempty"`        // value per stored Wh below s_band, on top of p_a
+	CMinRun            *float64 `json:"c_min_run,omitempty"`     // minimum charging run started in the horizon, s
+	CRunElapsed        *float64 `json:"c_run_elapsed,omitempty"` // s the run in progress has lasted
 }
 
 type energyRequest struct {
@@ -45,20 +49,58 @@ func (req energyRequest) ordinary() optimizer.OptimizationInput {
 	return res
 }
 
-func (site *Site) requireEnergyCapabilities(ctx context.Context) error {
-	uri := optimizerURI()
-	if site.energyCapabilitiesURI == uri && time.Now().Before(site.energyCapabilitiesUntil) {
-		return nil
+// energyBaseFeatures are required whenever the local companion is used. Band and
+// minimum-run features are required only by requests that carry them, so an older
+// companion keeps working until a band is configured.
+var energyBaseFeatures = []string{"battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step"}
+
+// energyRequestFeatures returns the optional companion features req depends on.
+func energyRequestFeatures(req energyRequest) []string {
+	var band, run bool
+	for _, b := range req.Batteries {
+		band = band || b.SBand != nil
+		run = run || b.CMinRun != nil
 	}
+	var res []string
+	if band {
+		res = append(res, "battery_band")
+	}
+	if run {
+		res = append(res, "minimum_run")
+	}
+	return res
+}
+
+func (site *Site) requireEnergyCapabilities(ctx context.Context, extra ...string) error {
+	uri := optimizerURI()
+	if site.energyCapabilitiesURI != uri || !time.Now().Before(site.energyCapabilitiesUntil) {
+		features, err := site.fetchEnergyCapabilities(ctx, uri)
+		if err != nil {
+			return err
+		}
+		site.energyCapabilities = features
+		site.energyCapabilitiesURI, site.energyCapabilitiesUntil = uri, time.Now().Add(time.Hour)
+	}
+	for _, name := range append(slices.Clone(energyBaseFeatures), extra...) {
+		if !slices.Contains(site.energyCapabilities, name) {
+			// ask again next time: the companion may be upgraded meanwhile
+			site.energyCapabilitiesUntil = time.Time{}
+			return fmt.Errorf("energy optimizer missing %s capability", name)
+		}
+	}
+	return nil
+}
+
+func (site *Site) fetchEnergyCapabilities(ctx context.Context, uri string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(uri, "/")+"/optimize/capabilities", nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := request.NewClient(site.log).Do(req)
 	if err != nil {
-		return fmt.Errorf("energy optimizer capabilities: %w", err)
+		return nil, fmt.Errorf("energy optimizer capabilities: %w", err)
 	}
 	defer resp.Body.Close()
 	var capabilities struct {
@@ -66,21 +108,15 @@ func (site *Site) requireEnergyCapabilities(ctx context.Context) error {
 		Features []string `json:"features"`
 	}
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("energy optimizer requires the compatible local companion; capabilities unavailable")
+		return nil, errors.New("energy optimizer requires the compatible local companion; capabilities unavailable")
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 16<<10)).Decode(&capabilities); err != nil {
-		return fmt.Errorf("energy optimizer capabilities: %w", err)
+		return nil, fmt.Errorf("energy optimizer capabilities: %w", err)
 	}
 	if capabilities.Version != 1 {
-		return errors.New("unsupported energy optimizer capability version")
+		return nil, errors.New("unsupported energy optimizer capability version")
 	}
-	for _, name := range []string{"battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step"} {
-		if !slices.Contains(capabilities.Features, name) {
-			return fmt.Errorf("energy optimizer missing %s capability", name)
-		}
-	}
-	site.energyCapabilitiesURI, site.energyCapabilitiesUntil = uri, time.Now().Add(time.Hour)
-	return nil
+	return capabilities.Features, nil
 }
 
 func (site *Site) solveEnergy(ctx context.Context, req energyRequest) (optimizer.OptimizationResult, error) {
@@ -197,6 +233,7 @@ func energyCost(req energyRequest, res optimizer.OptimizationResult) float64 {
 			}
 		}
 		cost -= float64(cfg.PA * (b.StateOfCharge[len(b.StateOfCharge)-1] - cfg.SInitial))
+		cost -= cheapBandValue(cfg, b.StateOfCharge[len(b.StateOfCharge)-1])
 	}
 	return cost
 }
@@ -263,7 +300,20 @@ func executableFirstActions(req energyRequest, details requestDetails, base opti
 		// Full power and stop have a stable EV command. A partial command can
 		// instead invoke PV tracking, phase switching or minimum-current gates.
 		if charge > .1 && base.Batteries[i].ChargingPower[0] != float32(full) {
-			return nil, errors.New("robust dispatch cannot fix a partial EV first action: PV tracking and current gates remain authoritative")
+			if !cheapBandFullPower(detail.band, req.Batteries[i], req.TimeSeries.PN[0]) {
+				return nil, errors.New("robust dispatch cannot fix a partial EV first action: PV tracking and current gates remain authoritative")
+			}
+			// executed at full power; the model may only store what fits
+			etaC := wire(req.EtaC)
+			if req.Batteries[i].EtaC != nil {
+				etaC = *req.Batteries[i].EtaC
+			}
+			ceiling := wire(req.Batteries[i].SMax)
+			if req.Batteries[i].SCapacity > 0 {
+				ceiling = wire(req.Batteries[i].SCapacity)
+			}
+			full = max(0, min(full, (ceiling-wire(req.Batteries[i].SInitial))/etaC))
+			charge = full
 		}
 		if base.Batteries[i].DischargingPower[0] > .1 {
 			return nil, errors.New("robust dispatch cannot command EV discharge")

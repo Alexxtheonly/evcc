@@ -172,6 +172,7 @@ type Site struct {
 	solarShading               solarShadingCache
 	energyCapabilitiesUntil    time.Time
 	energyCapabilitiesURI      string
+	energyCapabilities         []string
 	energySnapshotID           *uint64
 	energySnapshotSlot         time.Time
 	energySnapshotAction       string
@@ -180,6 +181,8 @@ type Site struct {
 	energyEfficiencyUpdated    time.Time
 	energyEfficiencyRefresh    bool
 	energyEfficiencyCandidates []metrics.BatteryEfficiencyCandidate
+	cheapBand                  cheapBandCache       // ADR-017 reference price, optimizer goroutine only
+	cheapBandRuns              map[int]cheapBandRun // charging runs by loadpoint id, optimizer goroutine only
 
 	solarScaleCached        func() (float64, error)                // util.Cached wrapper around querySolarScale
 	solarScaleByLeadCached  func() (map[int]float64, error)        // util.Cached wrapper around querySolarScaleByLead

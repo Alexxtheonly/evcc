@@ -123,6 +123,8 @@ type batteryDetail struct {
 	departure    *time.Time
 	etaC, etaD   float64
 	wearPerKWh   *float64
+	band         *energyBand // vehicle cheap-charge band, nil if not configured
+	minSoc       int         // vehicle floor in percent, for explaining the band
 }
 
 // batteryKey and loadpointKey build the canonical device keys used for
@@ -1380,10 +1382,23 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 	// uncontrollable power of loadpoints that cannot be modelled as storage
 	var unmodelled float64
 
+	// charging runs still in progress keep their start, ended ones are dropped
+	runs := make(map[int]cheapBandRun)
+	defer func() { site.cheapBandRuns = runs }()
+
 	for id, lp := range site.ActiveLoadpoints() {
 		// ignore disconnected loadpoints, including StatusNone
 		if s := lp.GetStatus(); s != api.StatusB && s != api.StatusC {
 			continue
+		}
+
+		var run *cheapBandRun
+		if lp.GetStatus() == api.StatusC {
+			r, ok := site.cheapBandRuns[id]
+			if !ok {
+				r = cheapBandRun{start: now, fromFloor: lp.GetSoc() < float64(lp.EffectiveMinSoc())}
+			}
+			runs[id], run = r, &r
 		}
 
 		v := lp.GetVehicle()
@@ -1398,6 +1413,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		// skip disabled loadpoints
 		if cfg, detail := site.loadpointRequest(lp, minLen, firstSlotDuration, grid, minImportPrice); cfg.CMax > 0 {
 			detail.loadpoint = &id
+			setCheapBandRun(detail.band, run, cfg, now)
 			batteries = append(batteries, optimizerBattery{cfg, detail})
 		}
 	}
@@ -1797,6 +1813,7 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 
 	detail.Type = batteryTypeVehicle
 	detail.Capacity = capacity
+	detail.minSoc = lp.EffectiveMinSoc()
 
 	if vt := v.GetTitle(); vt != "" {
 		if detail.Title != "" {
@@ -1842,6 +1859,11 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 	if demand != nil {
 		// after prorate, so the shortened first slot counts with the energy it really carries
 		bat.PDemand = clearDemandWhenFull(prorate(demand, firstSlotDuration), bat.SMax-bat.SInitial)
+	}
+
+	// the energy limit path above models charged energy, not soc: no band there
+	if lp.GetLimitEnergy() <= 0 || (capacity > 0 && soc > 0) {
+		detail.band = site.vehicleCheapBand(lp, detail.Name, capacity, minImportPrice)
 	}
 
 	return bat, detail
