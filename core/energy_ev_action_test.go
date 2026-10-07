@@ -125,3 +125,42 @@ func TestRobustFloorIntegration(t *testing.T) {
 	require.NotNil(t, summary)
 	assert.InDelta(t, 11040.0*537/3600, res.Batteries[0].ChargingPower[0], .5)
 }
+
+// TestRobustBandHoldIntegration: with a band car charging in the first slot, robust
+// evaluation must still succeed and must not apply "normal", which would feed the car.
+func TestRobustBandHoldIntegration(t *testing.T) {
+	url := os.Getenv("EVCC_ENERGY_SOLVER_TEST_URL")
+	if url == "" {
+		t.Skip("set EVCC_ENERGY_SOLVER_TEST_URL to the isolated companion")
+	}
+	client, err := optimizer.NewClientWithResponses(url)
+	require.NoError(t, err)
+	site := &Site{log: util.NewLogger("band-hold-test"), optimizerClient: client}
+	req := floorRequest()
+	req.TimeSeries.PN[0], req.TimeSeries.PN[1] = .0003, .0003 // below the band reference
+	req.Batteries[0].SInitial = 22550                         // 41 %, inside the band
+	req.Batteries[1].SInitial = 15456                         // home battery 80 %
+	for i := range req.Batteries {
+		req.Batteries[i].PA = terminalStorageValue(.0003) // the horizon minimum
+	}
+	details := floorDetails(api.ModePV)
+	in := liveBandInput()
+	in.soc, in.minSoc, in.limitSoc, in.pa = 41, 40, 80, req.Batteries[0].PA
+	details.BatteryDetails[0].band = cheapBand(in)
+	applyCheapBand(&req.Batteries[0], details.BatteryDetails[0].band)
+	require.NotNil(t, req.Batteries[0].BandStorageFeed)
+	for t := range req.TimeSeries.Dt {
+		gt, ft := float64(req.TimeSeries.Gt[t]), float64(req.TimeSeries.Ft[t])
+		site.energyInsights.Forecast = append(site.energyInsights.Forecast, energyForecastSlot{HomeLowWh: gt * .8, HomeWh: gt, HomeHighWh: gt * 1.3, SolarLowWh: ft * .5, SolarWh: ft, SolarHighWh: ft * 1.2})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	base, err := site.solveEnergy(ctx, req)
+	require.NoError(t, err)
+	require.Greater(t, base.Batteries[0].ChargingPower[0], float32(1000), "the car charges now")
+	assert.InDelta(t, 0, base.Batteries[1].DischargingPower[0], .1)
+	res, summary, err := site.robustEnergy(ctx, req, details, base)
+	require.NoError(t, err)
+	assert.NotEqual(t, "normal", summary.Selected)
+	assert.InDelta(t, 0, res.Batteries[1].DischargingPower[0], .1)
+}
