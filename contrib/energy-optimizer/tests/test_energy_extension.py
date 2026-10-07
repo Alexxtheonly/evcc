@@ -366,11 +366,24 @@ def test_minimum_run_skips_an_isolated_cheap_slot(client):
 
 
 def test_run_in_progress_continues_until_its_minimum(client):
-    # 15 minutes into a 30-minute minimum: slot 0 is expensive, the run still continues there
+    # 15 minutes into a 30-minute minimum: slot 0 is above the reference, but solar covers
+    # the minimum power there, so the run continues instead of stopping
     prices = [0.00050, 0.00010, 0.00010, 0.00050]
     data = band_request(prices, 2000, 0.00030, c_min_run=1800, c_run_elapsed=900)
-    charging = solve(client, data)["batteries"][0]["charging_power"]
-    assert charging[0] == pytest.approx(1380 / 4, abs=0.1)  # at minimum power only
+    data["time_series"]["ft"] = [400, 0, 0, 0]
+    data["time_series"]["p_E"] = [0.00008] * 4
+    result = solve(client, data)
+    assert result["batteries"][0]["charging_power"][0] >= 345 - 0.1
+    assert result["grid_import"][0] == pytest.approx(0, abs=0.1)
+
+
+def test_held_run_yields_rather_than_import_above_the_reference(client):
+    prices = [0.00050, 0.00010, 0.00010, 0.00050]
+    data = band_request(prices, 2000, 0.00030, c_min_run=1800, c_run_elapsed=900)
+    result = solve(client, data)
+    assert result["batteries"][0]["charging_power"][0] == pytest.approx(0, abs=0.1)
+    # the restart is a new run held to the full minimum
+    assert charge_runs(result["batteries"][0]["charging_power"]) == [(1, 2)]
 
 
 def test_run_past_its_minimum_may_stop(client):
@@ -438,3 +451,41 @@ def test_storage_feed_flag_true_is_the_default(client):
     explicit = deepcopy(data)
     explicit["batteries"][0]["band_storage_feed"] = True
     assert solve(client, explicit) == solve(client, data)
+
+
+def surplus_request(price):
+    """900 W of surplus (225 Wh per quarter hour over a 300 Wh household) and a car in its band
+    with a 0.36 reference; the car's minimum power is 1380 W."""
+    data = band_request([price] * 4, 27500, 0.00036063, s_initial=19800, s_min=16500, p_a=0.000279)
+    data["time_series"]["gt"] = [300] * 4
+    data["time_series"]["ft"] = [525] * 4
+    data["time_series"]["p_E"] = [0.0000786] * 4
+    return data
+
+
+def test_band_waits_rather_than_top_up_surplus_with_expensive_grid(client):
+    result = solve(client, surplus_request(0.00060))
+    assert sum(result["batteries"][0]["charging_power"]) == pytest.approx(0, abs=0.1)
+    assert sum(result["grid_import"]) == pytest.approx(0, abs=0.1)
+
+
+def test_band_tops_up_surplus_with_grid_below_the_reference(client):
+    result = solve(client, surplus_request(0.00030))
+    assert all(c >= 345 - 0.1 for c in result["batteries"][0]["charging_power"])
+
+
+def test_band_grid_rule_keeps_the_floor(client):
+    data = surplus_request(0.00060)
+    data["batteries"][0].update(s_initial=15000)
+    data["time_series"]["ft"] = [0] * 4
+    result = solve(client, data)
+    stored = result["batteries"][0]["state_of_charge"][-1]
+    assert stored == pytest.approx(16500, abs=0.5)  # the floor and not a Wh more
+
+
+def test_band_grid_rule_does_not_bind_plans(client):
+    data = surplus_request(0.00060)
+    data["time_series"]["ft"] = [0] * 4
+    data["batteries"][0]["s_goal"] = [0, 0, 0, 21000]
+    result = solve(client, data)
+    assert result["batteries"][0]["state_of_charge"][-1] >= 21000 - 0.5
