@@ -8,6 +8,7 @@ import (
 	"github.com/evcc-io/evcc/core/loadpoint"
 	"github.com/evcc-io/evcc/core/metrics"
 	"github.com/evcc-io/evcc/server/db"
+	"github.com/evcc-io/evcc/tariff"
 	optimizer "github.com/evcc-io/optimizer/client"
 )
 
@@ -191,8 +192,9 @@ func setCheapBandRun(band *energyBand, run *cheapBandRun, bat optimizer.BatteryC
 	}
 	// observed charging this cycle is a run in progress, however short
 	elapsed := max(now.Sub(run.start).Seconds(), 1)
+	// the companion holds whole slots: the rest can reach one slot further than its seconds
 	if remaining := band.minRun - elapsed; remaining > 0 && !run.fromFloor &&
-		float64(bat.SMax-bat.SInitial) >= eta*float64(bat.CMin)*remaining/3600+1 {
+		float64(bat.SMax-bat.SInitial) >= eta*float64(bat.CMin)*(remaining+tariff.SlotDuration.Seconds())/3600+1 {
 		band.elapsed, band.forced = elapsed, true
 		return
 	}
@@ -280,7 +282,7 @@ func explainCheapBand(band *energyBand, req energyRequest, res optimizer.Optimiz
 // Below minSoc the loadpoint floor charges at full power anyway. Inside the band, a
 // slot priced at or below the reference is worth charging at any power: the band top
 // ends it on the next control cycle. A run held to its minimum cannot stop, and full
-// power ends the held part sooner.
+// power is the command robust dispatch can execute for it.
 func cheapBandFullPower(band *energyBand, bat energyBattery, price float32) bool {
 	if band == nil || !band.active || band.Reference.Price == nil {
 		return false

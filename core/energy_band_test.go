@@ -477,8 +477,9 @@ func TestSetCheapBandRun(t *testing.T) {
 		{"ten minutes in", &cheapBandRun{start: now.Add(-10 * time.Minute)}, 19800, 600, true},
 		{"minimum reached", &cheapBandRun{start: now.Add(-45 * time.Minute)}, 19800, 1800, false},
 		{"floor run", &cheapBandRun{start: now.Add(-5 * time.Minute), fromFloor: true}, 19800, 1800, false},
-		// 20 more minutes at 1380 W store 414 Wh: 300 Wh of room is not enough
-		{"no room to continue", &cheapBandRun{start: now.Add(-10 * time.Minute)}, 54700, 1800, false},
+		// 20 more minutes reach up to 35 minutes of whole slots, 725 Wh stored at 1380 W
+		{"no room to continue", &cheapBandRun{start: now.Add(-10 * time.Minute)}, 54300, 1800, false},
+		{"just enough room", &cheapBandRun{start: now.Add(-10 * time.Minute)}, 54270, 600, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			band := cheapBand(liveBandInput())
