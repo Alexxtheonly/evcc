@@ -46,7 +46,8 @@ def test_capability_version(client):
     assert response.status_code == 200
     assert response.get_json() == {
         "version": 1,
-        "features": ["battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step"],
+        "features": ["battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step",
+                     "battery_band", "minimum_run"],
     }
 
 
@@ -235,6 +236,11 @@ def test_unavailable_fixed_action_is_rejected(client, request_data):
     {"first_step_charge": -1e-13, "first_step_discharge": 0},
     {"first_step_charge": 1e-13, "first_step_discharge": 1e-13},
     {"availability": [False, True, True], "first_step_charge": 1e-13, "first_step_discharge": 0},
+    {"s_band": 1000}, {"p_band": 0.0001}, {"s_band": 1000, "p_band": -0.0001},
+    {"s_band": 10001, "p_band": 0.0001}, {"s_band": float("nan"), "p_band": 0.0001},
+    {"s_band": 1000, "p_band": float("inf")}, {"c_min_run": 1800},
+    {"c_min": 1000, "c_min_run": -1}, {"c_min": 1000, "c_min_run": 86401},
+    {"c_min": 1000, "c_run_elapsed": -1}, {"c_min": 1000, "c_run_elapsed": True},
 ])
 def test_invalid_extension_is_rejected(client, request_data, extension):
     request_data["batteries"][0].update(extension)
@@ -252,3 +258,139 @@ def test_omitted_fields_preserve_dispatch(client, request_data):
         legacy["grid_import"], abs=0.1)
     assert extended["grid_export"] == pytest.approx(
         legacy["grid_export"], abs=0.1)
+
+
+def band_request(prices, s_band, threshold, eta_c=0.9, p_a=0.0, **battery):
+    """Vehicle-like battery valuing stored energy up to s_band so that grid energy pays off
+    below threshold (currency/Wh, AC side): eta_c * (p_a + p_band) = threshold."""
+    count = len(prices)
+    vehicle = {
+        "s_capacity": 55000, "s_min": 0, "s_max": 55000, "s_initial": 0,
+        "c_min": 1380, "c_max": 11040, "d_max": 0, "p_a": p_a,
+        "charge_from_grid": True, "discharge_to_grid": False,
+        "s_band": s_band, "p_band": threshold / eta_c - p_a,
+    }
+    vehicle.update(battery)
+    return {
+        "strategy": {"charging_strategy": "none"},
+        "eta_c": eta_c, "eta_d": eta_c,
+        "batteries": [vehicle],
+        "time_series": {
+            "dt": [900] * count, "gt": [0] * count, "ft": [0] * count,
+            "p_N": prices, "p_E": [0] * count,
+        },
+    }
+
+
+def charge_runs(charging):
+    runs, start = [], None
+    for t, energy in enumerate(charging + [0]):
+        if energy > 0.1 and start is None:
+            start = t
+        elif energy <= 0.1 and start is not None:
+            runs.append((start, t - 1))
+            start = None
+    return runs
+
+
+def test_band_buys_grid_only_below_reference(client):
+    # 0.30 EUR/kWh reference, realistic magnitudes; the band needs more than the cheap slots hold
+    prices = [0.00040, 0.00025, 0.00029, 0.00031, 0.00045, 0.00020]
+    result = solve(client, band_request(prices, 30000, 0.00030))
+    charging = result["batteries"][0]["charging_power"]
+    assert [t for t, energy in enumerate(charging) if energy > 0.1] == [1, 2, 5]
+    assert charging[1] == pytest.approx(2760, abs=0.1)  # full power, 11.04 kW for 15 min
+
+
+def test_band_stops_at_its_top(client):
+    data = band_request([0.00010] * 6, 5000, 0.00030)
+    result = solve(client, data)
+    assert result["batteries"][0]["state_of_charge"][-1] == pytest.approx(5000, abs=0.1)
+    data["batteries"][0]["s_initial"] = 6000
+    result = solve(client, data)
+    assert sum(result["batteries"][0]["charging_power"]) == pytest.approx(0, abs=0.1)
+
+
+def test_band_reference_converts_stored_energy_with_charge_efficiency(client):
+    # threshold 0.30 at eta_c 0.9 means p_band 0.000333 per stored Wh; a 0.32 slot must stay
+    # unused and a 0.29 slot be used, whatever p_a already contributes
+    data = band_request([0.00032, 0.00029, 0.00032], 2000, 0.00030, p_a=0.00020)
+    assert data["batteries"][0]["p_band"] == pytest.approx(0.0001333, abs=1e-7)
+    charging = solve(client, data)["batteries"][0]["charging_power"]
+    assert charging[0] == pytest.approx(0, abs=0.1)
+    assert charging[2] == pytest.approx(0, abs=0.1)
+    assert charging[1] == pytest.approx(2000 / 0.9, abs=0.1)
+
+
+def test_band_prefers_solar_to_cheap_grid(client):
+    data = band_request([0.00020, 0.00040, 0.00040], 2000, 0.00030)
+    data["time_series"]["ft"] = [0, 0, 3000]
+    data["time_series"]["p_E"] = [0.00008] * 3
+    charging = solve(client, data)["batteries"][0]["charging_power"]
+    assert charging[0] == pytest.approx(0, abs=0.1)
+    assert charging[2] == pytest.approx(2000 / 0.9, abs=0.1)
+
+
+def test_nothing_cheap_means_no_band_charging(client):
+    result = solve(client, band_request([0.00035, 0.00040, 0.00031], 30000, 0.00030))
+    assert sum(result["batteries"][0]["charging_power"]) == pytest.approx(0, abs=0.1)
+
+
+def test_band_does_not_relax_the_floor(client):
+    # below s_min the soft floor still charges immediately, price-blind, then waits for cheap energy
+    data = band_request([0.00050, 0.00045, 0.00020, 0.00045], 3800, 0.00030, s_initial=500, s_min=1500)
+    charging = solve(client, data)["batteries"][0]["charging_power"]
+    assert charging[0] * 0.9 + 500 >= 1500 - 0.1
+    assert charging[1] == pytest.approx(0, abs=0.1)
+    assert 500 + 0.9 * sum(charging) == pytest.approx(3800, abs=0.1)
+
+
+def test_band_value_enters_the_reported_objective(client):
+    data = band_request([0.00020, 0.00040], 2000, 0.00030, s_initial=500)
+    result = solve(client, data)
+    imported = sum(a * b for a, b in zip(result["grid_import"], data["time_series"]["p_N"]))
+    expected = (2000 - 500) * data["batteries"][0]["p_band"] - imported
+    assert result["objective_value"] == pytest.approx(expected, abs=1e-6)
+
+
+def test_minimum_run_skips_an_isolated_cheap_slot(client):
+    # 1000 Wh needed: the single cheapest slot would be a 15-minute run
+    prices = [0.00010, 0.00050, 0.00050, 0.00012, 0.00012, 0.00050]
+    data = band_request(prices, 900, 0.00030, eta_c=0.9)
+    assert charge_runs(solve(client, data)["batteries"][0]["charging_power"]) == [(0, 0)]
+    data["batteries"][0]["c_min_run"] = 1800
+    runs = charge_runs(solve(client, data)["batteries"][0]["charging_power"])
+    assert runs == [(3, 4)]
+
+
+def test_run_in_progress_continues_until_its_minimum(client):
+    # 15 minutes into a 30-minute minimum: slot 0 is expensive, the run still continues there
+    prices = [0.00050, 0.00010, 0.00010, 0.00050]
+    data = band_request(prices, 2000, 0.00030, c_min_run=1800, c_run_elapsed=900)
+    charging = solve(client, data)["batteries"][0]["charging_power"]
+    assert charging[0] == pytest.approx(1380 / 4, abs=0.1)  # at minimum power only
+
+
+def test_run_past_its_minimum_may_stop(client):
+    prices = [0.00050, 0.00010, 0.00010, 0.00050]
+    data = band_request(prices, 2000, 0.00030, c_min_run=1800, c_run_elapsed=1800)
+    assert solve(client, data)["batteries"][0]["charging_power"][0] == pytest.approx(0, abs=0.1)
+    # a run that ended may restart at once, but then lasts the minimum again
+    data["batteries"][0]["c_run_elapsed"] = 0
+    assert charge_runs(solve(client, data)["batteries"][0]["charging_power"]) == [(1, 2)]
+
+
+def test_minimum_run_is_cut_by_the_horizon_end(client):
+    prices = [0.00050, 0.00050, 0.00050, 0.00050, 0.00050, 0.00010]
+    data = band_request(prices, 900, 0.00030, c_min_run=3600)
+    assert charge_runs(solve(client, data)["batteries"][0]["charging_power"]) == [(5, 5)]
+
+
+def test_omitted_band_preserves_dispatch(client):
+    data = band_request([0.00020, 0.00040, 0.00010], 2000, 0.00030, s_initial=500, s_min=1500)
+    for key in ("s_band", "p_band"):
+        del data["batteries"][0][key]
+    legacy = solve(client, data)
+    explicit = deepcopy(data)
+    explicit["batteries"][0].update(c_run_elapsed=0)
+    assert solve(client, explicit) == legacy

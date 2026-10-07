@@ -32,7 +32,7 @@ when a worker exceeds its wall-clock timeout.
 ```json
 {
   "version": 1,
-  "features": ["battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step"]
+  "features": ["battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step", "battery_band", "minimum_run"]
 }
 ```
 
@@ -45,6 +45,9 @@ fields on each battery:
 | `eta_c`, `eta_d` | Finite fractions in `(0, 1]`; missing uses the request-wide efficiency. |
 | `wear_cost` | Nonnegative currency per **DC Wh discharged**. `0.03 EUR/kWh` in evcc becomes `0.00003 EUR/Wh` here. Defaults to zero. |
 | `first_step_charge`, `first_step_discharge` | Paired exact first-slot **AC Wh** values. Both must be supplied together. |
+| `s_band`, `p_band` | Paired. Band top as **stored Wh** and its extra value in currency per **stored Wh**, on top of `p_a`. Adds `b <= s_band`, `b <= s[T-1]` and `+ b * p_band` to the money objective: stored energy up to the band top is worth `p_a + p_band`, above it only `p_a`. With charge efficiency `eta_c`, grid energy pays off only in slots priced below `eta_c * (p_a + p_band)`; solar is preferred whenever feed-in pays less. No deadline. |
+| `c_min_run` | Seconds. A charging run that starts inside the horizon lasts at least this long, or until the horizon ends. Uses the `c_min` on/off binaries; requires `c_min > 0`. |
+| `c_run_elapsed` | Seconds the run in progress has lasted, 0 (default) if none. Below `c_min_run` the run continues until it has lasted `c_min_run` (a hard constraint: send it only when charging at `c_min` that long fits); at or above it the run may stop any time. |
 
 The response adds `wear_cost`, the total currency cost of wear. For each battery
 and slot, wear is `wear_cost * discharging_power / eta_d`. It enters the primary
@@ -53,7 +56,8 @@ the reported economic objective. Negative import/export and terminal inventory
 prices remain valid. Wear itself must never be negative.
 
 `objective_value` equals export revenue minus import cost and wear, plus the value
-of final minus **initial** battery energy, minus any configured demand-rate
+of final minus **initial** battery energy (including the band value of
+`min(final, s_band) - min(initial, s_band)`), minus any configured demand-rate
 cost. The upstream first-slot ending energy was an incorrect initial inventory;
 the patch fixes it. Upstream fixture checks recompute expected economics from
 their recorded grid flows and final-minus-initial inventory. Their legacy scalar
