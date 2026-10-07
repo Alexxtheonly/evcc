@@ -70,6 +70,34 @@ func (mr *MockAPIMockRecorder) GetAdaptivePlans() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAdaptivePlans", reflect.TypeOf((*MockAPI)(nil).GetAdaptivePlans))
 }
 
+// GetCheapBandMinRun mocks base method.
+func (m *MockAPI) GetCheapBandMinRun() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCheapBandMinRun")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// GetCheapBandMinRun indicates an expected call of GetCheapBandMinRun.
+func (mr *MockAPIMockRecorder) GetCheapBandMinRun() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCheapBandMinRun", reflect.TypeOf((*MockAPI)(nil).GetCheapBandMinRun))
+}
+
+// GetCheapBandSoc mocks base method.
+func (m *MockAPI) GetCheapBandSoc() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCheapBandSoc")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// GetCheapBandSoc indicates an expected call of GetCheapBandSoc.
+func (mr *MockAPIMockRecorder) GetCheapBandSoc() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCheapBandSoc", reflect.TypeOf((*MockAPI)(nil).GetCheapBandSoc))
+}
+
 // GetEffectiveRepeatingPlans mocks base method.
 func (m *MockAPI) GetEffectiveRepeatingPlans() []api.RepeatingPlan {
 	m.ctrl.T.Helper()
@@ -238,6 +266,30 @@ func (m *MockAPI) SetAdaptivePlans(arg0 []api.RepeatingPlan) error {
 func (mr *MockAPIMockRecorder) SetAdaptivePlans(arg0 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetAdaptivePlans", reflect.TypeOf((*MockAPI)(nil).SetAdaptivePlans), arg0)
+}
+
+// SetCheapBandMinRun mocks base method.
+func (m *MockAPI) SetCheapBandMinRun(minutes int) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetCheapBandMinRun", minutes)
+}
+
+// SetCheapBandMinRun indicates an expected call of SetCheapBandMinRun.
+func (mr *MockAPIMockRecorder) SetCheapBandMinRun(minutes any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCheapBandMinRun", reflect.TypeOf((*MockAPI)(nil).SetCheapBandMinRun), minutes)
+}
+
+// SetCheapBandSoc mocks base method.
+func (m *MockAPI) SetCheapBandSoc(soc int) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetCheapBandSoc", soc)
+}
+
+// SetCheapBandSoc indicates an expected call of SetCheapBandSoc.
+func (mr *MockAPIMockRecorder) SetCheapBandSoc(soc any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetCheapBandSoc", reflect.TypeOf((*MockAPI)(nil).SetCheapBandSoc), soc)
 }
 
 // SetLimitSoc mocks base method.

@@ -25,6 +25,8 @@ type vehicleStruct struct {
 	Mode                 api.ChargeMode      `json:"mode,omitempty"`
 	MinSoc               int                 `json:"minSoc,omitempty"`
 	LimitSoc             int                 `json:"limitSoc,omitempty"`
+	CheapBandSoc         int                 `json:"cheapBandSoc,omitempty"`
+	CheapBandMinRun      int                 `json:"cheapBandMinRun"`
 	MinCurrent           float64             `json:"minCurrent,omitempty"`
 	MaxCurrent           float64             `json:"maxCurrent,omitempty"`
 	Priority             int                 `json:"priority,omitempty"`
@@ -69,6 +71,8 @@ func (site *Site) publishVehicles() {
 			Mode:                 v.GetMode(),
 			MinSoc:               v.GetMinSoc(),
 			LimitSoc:             v.GetLimitSoc(),
+			CheapBandSoc:         v.GetCheapBandSoc(),
+			CheapBandMinRun:      v.GetCheapBandMinRun(),
 			MinCurrent:           ac.MinCurrent,
 			MaxCurrent:           ac.MaxCurrent,
 			Priority:             ac.Priority,

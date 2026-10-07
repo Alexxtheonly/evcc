@@ -104,6 +104,10 @@ const (
 	AdaptivePlans        = "adaptivePlans"        // key to access the adaptive (learned) repeating plans in db
 	AdaptivePlanLearning = "adaptivePlanLearning" // whether evcc learns adaptive plans from session history
 
+	// cheap-charge band (ADR-017): charge between minSoc and this soc only when cheap
+	CheapBandSoc    = "cheapBandSoc"    // band top soc, 0 = off
+	CheapBandMinRun = "cheapBandMinRun" // minimum charging run inside the band (minutes)
+
 	// learned vehicle state
 	SocGradient = "socGradient" // learned energy per soc step (Wh), see core/soc.Estimator
 

@@ -94,6 +94,37 @@ func (v *adapter) SetLimitSoc(soc int) {
 	v.publish()
 }
 
+// GetCheapBandSoc returns the cheap-charge band top soc, 0 if off
+func (v *adapter) GetCheapBandSoc() int {
+	if v, err := settings.Int(v.key() + keys.CheapBandSoc); err == nil {
+		return int(v)
+	}
+	return 0
+}
+
+// SetCheapBandSoc sets the cheap-charge band top soc, 0 turns it off
+func (v *adapter) SetCheapBandSoc(soc int) {
+	v.log.DEBUG.Printf("set %s cheap band soc: %d", v.name, soc)
+	settings.SetInt(v.key()+keys.CheapBandSoc, int64(soc))
+	v.publish()
+}
+
+// GetCheapBandMinRun returns the minimum charging run inside the band in minutes,
+// DefaultCheapBandMinRun when never set
+func (v *adapter) GetCheapBandMinRun() int {
+	if v, err := settings.Int(v.key() + keys.CheapBandMinRun); err == nil {
+		return int(v)
+	}
+	return DefaultCheapBandMinRun
+}
+
+// SetCheapBandMinRun sets the minimum charging run inside the band in minutes
+func (v *adapter) SetCheapBandMinRun(minutes int) {
+	v.log.DEBUG.Printf("set %s cheap band minimum run: %dmin", v.name, minutes)
+	settings.SetInt(v.key()+keys.CheapBandMinRun, int64(minutes))
+	v.publish()
+}
+
 // GetPlanSoc returns the charge plan soc
 func (v *adapter) GetPlanSoc() (time.Time, int) {
 	var ts time.Time

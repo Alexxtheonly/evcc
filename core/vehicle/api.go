@@ -8,6 +8,11 @@ import (
 
 //go:generate go tool mockgen -package vehicle -destination mock.go -mock_names API=MockAPI github.com/evcc-io/evcc/core/vehicle API
 
+// DefaultCheapBandMinRun is the minimum charging run inside the cheap-charge band (minutes)
+// when the vehicle has none stored. Chosen from a rolling-horizon replay of 30 days of real
+// prices (ADR-017): it removes the isolated 15-minute runs at no measurable cost.
+const DefaultCheapBandMinRun = 30
+
 type API interface {
 	// Instance returns the vehicle instance
 	Instance() api.Vehicle
@@ -28,6 +33,15 @@ type API interface {
 	GetLimitSoc() int
 	// SetLimitSoc sets the limit soc
 	SetLimitSoc(soc int)
+
+	// GetCheapBandSoc returns the cheap-charge band top soc, 0 if off
+	GetCheapBandSoc() int
+	// SetCheapBandSoc sets the cheap-charge band top soc, 0 turns it off
+	SetCheapBandSoc(soc int)
+	// GetCheapBandMinRun returns the minimum charging run inside the band in minutes
+	GetCheapBandMinRun() int
+	// SetCheapBandMinRun sets the minimum charging run inside the band in minutes
+	SetCheapBandMinRun(minutes int)
 
 	// GetPlanSoc returns the charge plan soc
 	GetPlanSoc() (time.Time, int)

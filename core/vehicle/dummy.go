@@ -47,6 +47,24 @@ func (v *dummy) GetLimitSoc() int {
 func (v *dummy) SetLimitSoc(soc int) {
 }
 
+// GetCheapBandSoc returns the cheap-charge band top soc
+func (v *dummy) GetCheapBandSoc() int {
+	return 0
+}
+
+// SetCheapBandSoc sets the cheap-charge band top soc
+func (v *dummy) SetCheapBandSoc(soc int) {
+}
+
+// GetCheapBandMinRun returns the minimum charging run inside the band
+func (v *dummy) GetCheapBandMinRun() int {
+	return DefaultCheapBandMinRun
+}
+
+// SetCheapBandMinRun sets the minimum charging run inside the band
+func (v *dummy) SetCheapBandMinRun(minutes int) {
+}
+
 // GetPlanSoc returns the charge plan soc
 func (v *dummy) GetPlanSoc() (time.Time, int) {
 	return time.Time{}, 0

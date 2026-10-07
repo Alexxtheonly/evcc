@@ -2,12 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/site"
+	"github.com/evcc-io/evcc/core/vehicle"
 	"github.com/gorilla/mux"
 )
 
@@ -37,6 +39,49 @@ func minSocHandler(site site.API) http.HandlerFunc {
 		}
 
 		jsonWrite(w, res)
+	}
+}
+
+// cheapBandSocHandler updates the cheap-charge band top soc, 0 turns the band off
+func cheapBandSocHandler(site site.API) http.HandlerFunc {
+	return vehicleIntHandler(site, 0, 100, func(v vehicle.API, value int) int {
+		v.SetCheapBandSoc(value)
+		return v.GetCheapBandSoc()
+	})
+}
+
+// cheapBandMinRunHandler updates the minimum charging run inside the band in minutes
+func cheapBandMinRunHandler(site site.API) http.HandlerFunc {
+	return vehicleIntHandler(site, 0, 240, func(v vehicle.API, value int) int {
+		v.SetCheapBandMinRun(value)
+		return v.GetCheapBandMinRun()
+	})
+}
+
+// vehicleIntHandler validates a bounded integer vehicle setting and stores it
+func vehicleIntHandler(site site.API, minimum, maximum int, set func(vehicle.API, int) int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+
+		v, err := site.Vehicles().ByName(vars["name"])
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		value, err := strconv.Atoi(vars["value"])
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err)
+			return
+		}
+		if value < minimum || value > maximum {
+			jsonError(w, http.StatusBadRequest, fmt.Errorf("value must be %d..%d", minimum, maximum))
+			return
+		}
+
+		jsonWrite(w, struct {
+			Value int `json:"value"`
+		}{set(v, value)})
 	}
 }
 
