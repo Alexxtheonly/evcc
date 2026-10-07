@@ -303,17 +303,7 @@ func executableFirstActions(req energyRequest, details requestDetails, base opti
 			if !cheapBandFullPower(detail.band, req.Batteries[i], req.TimeSeries.PN[0]) {
 				return nil, errors.New("robust dispatch cannot fix a partial EV first action: PV tracking and current gates remain authoritative")
 			}
-			// executed at full power; the model may only store what fits
-			etaC := wire(req.EtaC)
-			if req.Batteries[i].EtaC != nil {
-				etaC = *req.Batteries[i].EtaC
-			}
-			ceiling := wire(req.Batteries[i].SMax)
-			if req.Batteries[i].SCapacity > 0 {
-				ceiling = wire(req.Batteries[i].SCapacity)
-			}
-			full = max(0, min(full, (ceiling-wire(req.Batteries[i].SInitial))/etaC))
-			charge = full
+			full = storableCharge(full, req.Batteries[i], wire(req.EtaC), wire)
 		}
 		if base.Batteries[i].DischargingPower[0] > .1 {
 			return nil, errors.New("robust dispatch cannot command EV discharge")

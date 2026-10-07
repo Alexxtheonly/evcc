@@ -167,6 +167,20 @@ func cheapBand(in cheapBandInput) *energyBand {
 	return band
 }
 
+// trackCheapBandRun records the charging run of loadpoint id into runs, keeping the start
+// of a run already observed, and returns it; nil while the loadpoint is not charging.
+func (site *Site) trackCheapBandRun(id int, lp loadpoint.API, runs map[int]cheapBandRun, now time.Time) *cheapBandRun {
+	if lp.GetStatus() != api.StatusC {
+		return nil
+	}
+	run, ok := site.cheapBandRuns[id]
+	if !ok {
+		run = cheapBandRun{start: now, fromFloor: lp.GetSoc() < float64(lp.EffectiveMinSoc())}
+	}
+	runs[id] = run
+	return &run
+}
+
 // setCheapBandRun tells the solver how long the vehicle's run in progress has lasted. Below
 // minRun the companion makes it continue at least at minimum power, a hard constraint, so
 // that is only asked when it fits below the ceiling; otherwise, and for the floor's own run,
@@ -228,11 +242,12 @@ func applyCheapBand(bat *energyBattery, band *energyBand) {
 }
 
 // explainCheapBand sets the band status from the solved plan of battery i.
-func explainCheapBand(band *energyBand, req energyRequest, res optimizer.OptimizationResult, timestamps []time.Time, i int, soc float64, minSoc int) {
+func explainCheapBand(band *energyBand, req energyRequest, res optimizer.OptimizationResult, timestamps []time.Time, i int) {
 	if band == nil || !band.active {
 		return
 	}
-	if soc < float64(minSoc) {
+	// the request's SMin is the vehicle's minSoc, unclamped (see loadpointRequest)
+	if bat := req.Batteries[i]; bat.SInitial < bat.SMin {
 		band.Status = bandStatusBelowMinimum
 		return
 	}
@@ -271,6 +286,19 @@ func cheapBandFullPower(band *energyBand, bat energyBattery, price float32) bool
 		return false
 	}
 	return bat.SInitial < bat.SMin || band.forced || float64(price)*1e3 <= *band.Reference.Price
+}
+
+// storableCharge caps a full-power first-slot charge (AC Wh) to the room left below the
+// ceiling: executed at full power, the loadpoint stops at its limit, the model must too.
+func storableCharge(full float64, bat energyBattery, etaC float64, wire func(float32) float64) float64 {
+	if bat.EtaC != nil {
+		etaC = *bat.EtaC
+	}
+	ceiling := wire(bat.SMax)
+	if bat.SCapacity > 0 {
+		ceiling = wire(bat.SCapacity)
+	}
+	return max(0, min(full, (ceiling-wire(bat.SInitial))/etaC))
 }
 
 // cheapBandValue is the band's contribution to the solver objective between initial

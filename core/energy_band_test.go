@@ -192,20 +192,21 @@ func TestExplainCheapBand(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		charge, imp []float32
-		soc         float64
+		sInitial    float32
 		want        string
 		next        int
 	}{
-		{"charging now", []float32{1900, 0, 0, 0}, []float32{2200, 300, 280, 300}, 36, bandStatusCharging, -1},
-		{"cheap slot later", []float32{0, 0, 2760, 0}, []float32{310, 290, 3040, 300}, 36, bandStatusWaitingCheap, 2},
-		{"solar later", []float32{0, 0, 0, 2000}, []float32{310, 290, 280, 100}, 36, bandStatusWaitingSolar, 3},
-		{"nothing cheap", []float32{0, 0, 0, 0}, []float32{310, 290, 280, 300}, 36, bandStatusNothingCheap, -1},
-		{"tiny residual is not a plan", []float32{0, 5, 0, 0}, []float32{310, 295, 280, 300}, 36, bandStatusNothingCheap, -1},
-		{"floor first", []float32{1900, 0, 0, 0}, []float32{2200, 300, 280, 300}, 25, bandStatusBelowMinimum, -1},
+		{"charging now", []float32{1900, 0, 0, 0}, []float32{2200, 300, 280, 300}, 19800, bandStatusCharging, -1},
+		{"cheap slot later", []float32{0, 0, 2760, 0}, []float32{310, 290, 3040, 300}, 19800, bandStatusWaitingCheap, 2},
+		{"solar later", []float32{0, 0, 0, 2000}, []float32{310, 290, 280, 100}, 19800, bandStatusWaitingSolar, 3},
+		{"nothing cheap", []float32{0, 0, 0, 0}, []float32{310, 290, 280, 300}, 19800, bandStatusNothingCheap, -1},
+		{"tiny residual is not a plan", []float32{0, 5, 0, 0}, []float32{310, 295, 280, 300}, 19800, bandStatusNothingCheap, -1},
+		{"floor first", []float32{1900, 0, 0, 0}, []float32{2200, 300, 280, 300}, 13750, bandStatusBelowMinimum, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			band := cheapBand(liveBandInput())
-			explainCheapBand(band, req, result(tc.charge, tc.imp), timestamps, 0, tc.soc, 30)
+			req.Batteries[0].SInitial = tc.sInitial
+			explainCheapBand(band, req, result(tc.charge, tc.imp), timestamps, 0)
 			assert.Equal(t, tc.want, band.Status)
 			if tc.next < 0 {
 				assert.Nil(t, band.NextStart)
@@ -503,4 +504,35 @@ func TestSetCheapBandRun(t *testing.T) {
 	band := cheapBand(in)
 	setCheapBandRun(band, &cheapBandRun{start: now.Add(-time.Minute)}, bat, now)
 	assert.Zero(t, band.elapsed)
+}
+
+func TestTrackCheapBandRun(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	status, soc := api.StatusC, 36.0
+	lp := loadpoint.NewMockAPI(ctrl)
+	lp.EXPECT().GetStatus().DoAndReturn(func() api.ChargeStatus { return status }).AnyTimes()
+	lp.EXPECT().GetSoc().DoAndReturn(func() float64 { return soc }).AnyTimes()
+	lp.EXPECT().EffectiveMinSoc().Return(30).AnyTimes()
+
+	site := &Site{}
+	start := time.Date(2026, 10, 8, 2, 0, 0, 0, time.UTC)
+	cycle := func(now time.Time) *cheapBandRun {
+		runs := make(map[int]cheapBandRun)
+		run := site.trackCheapBandRun(0, lp, runs, now)
+		site.cheapBandRuns = runs
+		return run
+	}
+
+	run := cycle(start)
+	require.NotNil(t, run)
+	assert.Equal(t, start, run.start)
+	assert.False(t, run.fromFloor)
+	assert.Equal(t, start, cycle(start.Add(10*time.Minute)).start, "the start of a run in progress is kept")
+
+	status = api.StatusB
+	assert.Nil(t, cycle(start.Add(11*time.Minute)), "not charging: no run")
+	status, soc = api.StatusC, 25
+	run = cycle(start.Add(12 * time.Minute))
+	assert.Equal(t, start.Add(12*time.Minute), run.start, "a new run starts fresh")
+	assert.True(t, run.fromFloor)
 }

@@ -305,11 +305,7 @@ func (site *Site) populateEnergyDevices(req energyRequest, details requestDetail
 		}
 		if detail.band != nil {
 			band := *detail.band
-			soc := 0.0
-			if detail.Capacity > 0 {
-				soc = float64(bat.SInitial) / (detail.Capacity * 10)
-			}
-			explainCheapBand(&band, req, res, details.Timestamps, i, soc, detail.minSoc)
+			explainCheapBand(&band, req, res, details.Timestamps, i)
 			device.Band = &band
 		}
 		for t, start := range details.Timestamps {

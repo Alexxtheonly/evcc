@@ -124,7 +124,6 @@ type batteryDetail struct {
 	etaC, etaD   float64
 	wearPerKWh   *float64
 	band         *energyBand // vehicle cheap-charge band, nil if not configured
-	minSoc       int         // vehicle floor in percent, for explaining the band
 }
 
 // batteryKey and loadpointKey build the canonical device keys used for
@@ -1392,14 +1391,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 			continue
 		}
 
-		var run *cheapBandRun
-		if lp.GetStatus() == api.StatusC {
-			r, ok := site.cheapBandRuns[id]
-			if !ok {
-				r = cheapBandRun{start: now, fromFloor: lp.GetSoc() < float64(lp.EffectiveMinSoc())}
-			}
-			runs[id], run = r, &r
-		}
+		run := site.trackCheapBandRun(id, lp, runs, now)
 
 		v := lp.GetVehicle()
 
@@ -1813,7 +1805,6 @@ func (site *Site) loadpointRequest(lp loadpoint.API, minLen int, firstSlotDurati
 
 	detail.Type = batteryTypeVehicle
 	detail.Capacity = capacity
-	detail.minSoc = lp.EffectiveMinSoc()
 
 	if vt := v.GetTitle(); vt != "" {
 		if detail.Title != "" {
