@@ -36,12 +36,14 @@ export interface EnergyBand {
     median?: number;
     source: "median" | "fixed";
     days: number;
-    covered?: number; // days of price history actually in the window
+    covered?: number; // days in the window that have prices, gaps excluded
     margin: number;
     samples: number;
   };
   nextStart?: string;
   nextPrice?: number;
+  // no minimum charging power: no strict grid rule, no minimum block
+  minPowerMissing?: boolean;
 }
 
 export interface EnergyForecastSlot {

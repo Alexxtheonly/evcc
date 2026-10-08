@@ -1616,7 +1616,8 @@
           "waitingSolar": "{device}: waiting for solar at {time} to charge toward {top}.",
           "waitingCheap": "{device}: waiting for a cheap slot at {time} ({price}) to charge toward {top}.",
           "nothingCheap": "{device}: nothing in the plan is cheap enough, stays at {soc} for now (cheap charging up to {top})."
-        }
+        },
+        "minPowerMissing": "The strict grid rule and the minimum block need a minimum charging power, which this vehicle does not report: grid and solar are averaged and short sessions are possible."
       }
     },
     "co2": {

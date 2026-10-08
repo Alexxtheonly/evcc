@@ -110,36 +110,51 @@ func PersistTariffs(ts time.Time, grid, feedin, co2, temperature *float64) error
 	}).Error
 }
 
-// GridPriceStats is the median persisted grid import price (currency/kWh) of a window,
-// how many slots it was taken from and the earliest of them.
+// TariffsBackfillTable holds grid prices recovered from elsewhere (contrib/tariff-backfill)
+// for slots evcc never recorded. Only the band reference median reads it, and only where
+// tariffs has no grid price: the savings ledger, Results and EarliestTariffSlot never see
+// it. evcc does not create it; the backfill tool does.
+const TariffsBackfillTable = "tariffs_backfill"
+
+// GridPriceStats is the median grid import price (currency/kWh) of a window, how many
+// slots it was taken from and on how many local calendar days they fall.
 type GridPriceStats struct {
 	Median  float64
 	Samples int
-	Oldest  time.Time
+	Days    int
 }
 
-// GridPriceMedian returns the median grid price of the slots in [from,to). Slots without
-// a grid price are absent, never zero. No samples returns zero stats and no error:
-// callers must check Samples.
+// GridPriceMedian returns the median grid price of the slots in [from,to): recorded prices,
+// plus backfilled ones for slots without a recorded price when the backfill table exists.
+// Slots without a grid price are absent, never zero. No samples returns zero stats and no
+// error: callers must check Samples.
 func GridPriceMedian(from, to time.Time) (GridPriceStats, error) {
 	var rows []struct {
 		Ts   int64
 		Grid float64
 	}
-	if err := db.Instance.Model(new(tariffValue)).Select("ts, grid").
-		Where("ts >= ? AND ts < ? AND grid IS NOT NULL", from.Unix(), to.Unix()).
-		Order("ts").Scan(&rows).Error; err != nil {
+	query := "SELECT ts, grid FROM tariffs WHERE ts >= ? AND ts < ? AND grid IS NOT NULL"
+	args := []any{from.Unix(), to.Unix()}
+	if db.Instance.Migrator().HasTable(TariffsBackfillTable) {
+		query += " UNION ALL SELECT ts, grid FROM " + TariffsBackfillTable +
+			" WHERE ts >= ? AND ts < ? AND grid IS NOT NULL" +
+			" AND ts NOT IN (SELECT ts FROM tariffs WHERE grid IS NOT NULL)"
+		args = append(args, from.Unix(), to.Unix())
+	}
+	if err := db.Instance.Raw(query, args...).Scan(&rows).Error; err != nil {
 		return GridPriceStats{}, err
 	}
 	if len(rows) == 0 {
 		return GridPriceStats{}, nil
 	}
 	prices := make([]float64, len(rows))
+	days := make(map[string]bool)
 	for i, r := range rows {
 		prices[i] = r.Grid
+		days[time.Unix(r.Ts, 0).Local().Format(time.DateOnly)] = true
 	}
 	slices.Sort(prices)
-	res := GridPriceStats{Samples: len(prices), Oldest: time.Unix(rows[0].Ts, 0), Median: prices[len(prices)/2]}
+	res := GridPriceStats{Samples: len(prices), Days: len(days), Median: prices[len(prices)/2]}
 	if mid := len(prices) / 2; len(prices)%2 == 0 {
 		res.Median = (prices[mid-1] + prices[mid]) / 2
 	}

@@ -109,7 +109,7 @@ func TestGridPriceMedian(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, stats.Samples)
 	require.InDelta(t, 0.40, stats.Median, 1e-9)
-	require.Equal(t, from, stats.Oldest.UTC())
+	require.Equal(t, 1, stats.Days)
 
 	even := 0.30
 	require.NoError(t, PersistTariffs(from.Add(45*time.Minute), &even, nil, nil, nil))
@@ -117,4 +117,34 @@ func TestGridPriceMedian(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, stats.Samples)
 	require.InDelta(t, 0.35, stats.Median, 1e-9)
+}
+
+// TestGridPriceMedianBackfill: backfilled prices count only where nothing was recorded,
+// days with prices are counted with gaps excluded, and without the table nothing changes.
+func TestGridPriceMedianBackfill(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	require.NoError(t, db.Instance.AutoMigrate(new(tariffValue)))
+
+	day := time.Date(2026, 6, 10, 12, 0, 0, 0, time.Local)
+	recorded := 0.40
+	require.NoError(t, PersistTariffs(day, &recorded, nil, nil, nil))
+	from, to := day.AddDate(0, 0, -30), day.Add(time.Hour)
+
+	stats, err := GridPriceMedian(from, to)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Samples, "no backfill table: recorded prices only")
+
+	require.NoError(t, db.Instance.Exec("CREATE TABLE "+TariffsBackfillTable+" (ts integer, grid real, feedin real, co2 real, temperature real)").Error)
+	for ts, price := range map[time.Time]float64{
+		day:                   0.90, // overlaps the recorded slot: the recorded 0.40 wins
+		day.AddDate(0, 0, -2): 0.30, // two days earlier, a day of gap in between
+		day.AddDate(0, 0, -3): 0.20,
+	} {
+		require.NoError(t, db.Instance.Exec("INSERT INTO "+TariffsBackfillTable+" (ts, grid) VALUES (?, ?)", ts.Unix(), price).Error)
+	}
+	stats, err = GridPriceMedian(from, to)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.Samples)
+	require.InDelta(t, 0.30, stats.Median, 1e-9)
+	require.Equal(t, 3, stats.Days, "gaps excluded")
 }

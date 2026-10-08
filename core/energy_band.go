@@ -2,7 +2,6 @@ package core
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/evcc-io/evcc/api"
@@ -27,7 +26,16 @@ const (
 	cheapBandMinSamples = 96
 	// cheapBandChargeMinWh is the planned charge treated as charging when explaining the band
 	cheapBandChargeMinWh = 20
+	// cheapBandPriceTolerance (currency/kWh) is the companion's BAND_PRICE_TOLERANCE: a grid
+	// price at most this far above the reference still counts as at or below it
+	cheapBandPriceTolerance = 0.00005
 )
+
+// cheapBandCheap is the one definition of "at or below the reference", shared with the
+// companion's band grid rule (prices in currency/kWh).
+func cheapBandCheap(price, reference float64) bool {
+	return price <= reference+cheapBandPriceTolerance
+}
 
 const (
 	bandStatusInactive     = "inactive"     // mode, unknown soc or band top not above the minimum
@@ -46,7 +54,7 @@ type cheapBandReference struct {
 	Median  *float64 `json:"median,omitempty"`  // currency/kWh over Days
 	Source  string   `json:"source"`            // median or fixed
 	Days    int      `json:"days"`              // window setting, 30 or 90
-	Covered float64  `json:"covered,omitempty"` // days of price history actually in the window
+	Covered int      `json:"covered,omitempty"` // days in the window that have prices, gaps excluded
 	Margin  float64  `json:"margin"`            // percent
 	Samples int      `json:"samples"`
 }
@@ -71,6 +79,9 @@ type energyBand struct {
 	pBand   float64 // currency per stored Wh, on top of p_a
 	minRun  float64 // s, 0 = none
 	elapsed float64 // s the charging run in progress has lasted, 0 = none; below minRun it is held
+	// the vehicle has no minimum charging power: the companion has no on/off binary for it,
+	// so the strict grid rule and the minimum block cannot apply
+	MinPowerMissing bool `json:"minPowerMissing,omitempty"`
 	// home batteries must hold while the car charges in its band; never for the floor
 	refuseStorage bool
 }
@@ -96,8 +107,9 @@ func (site *Site) cheapBandReference(cfg EnergyIntelligenceSettings, now time.Ti
 		return cheapBandReference{Price: &price, Source: "fixed", Days: days, Margin: margin}
 	}
 
+	// a reference holds for the day; a missing one is retried hourly as history arrives
 	key := fmt.Sprintf("%s/%d/%g", now.Local().Format(time.DateOnly), days, margin)
-	if site.cheapBand.key == key {
+	if site.cheapBand.key == key || site.cheapBand.key == key+now.Local().Format("/15") {
 		return site.cheapBand.ref
 	}
 
@@ -110,15 +122,14 @@ func (site *Site) cheapBandReference(cfg EnergyIntelligenceSettings, now time.Ti
 		site.log.ERROR.Printf("cheap band reference: %v", err)
 		return ref
 	}
-	ref.Samples = stats.Samples
-	if stats.Samples > 0 {
-		// fewer days than the window: the median uses what exists and says so
-		ref.Covered = math.Round(now.Sub(stats.Oldest).Hours()/24*10) / 10
-	}
+	// fewer days than the window: the median uses what exists and says so
+	ref.Samples, ref.Covered = stats.Samples, stats.Days
 	if stats.Samples >= cheapBandMinSamples {
 		median := stats.Median
 		price := median * (1 - margin/100)
 		ref.Median, ref.Price = &median, &price
+	} else {
+		key += now.Local().Format("/15")
 	}
 	site.cheapBand = cheapBandCache{key: key, ref: ref}
 	return ref
@@ -200,11 +211,15 @@ func setCheapBandRun(band *energyBand, run *cheapBandRun, bat optimizer.BatteryC
 	if band == nil || !band.active || band.minRun <= 0 || run == nil {
 		return
 	}
-	// observed charging this cycle is a run in progress, however short
+	// Observed charging this cycle is a run in progress, however short. A run that stopped
+	// and restarted is observed as new (elapsed 1 s) and held to the full minimum again;
+	// that is accepted, the companion lets any hold yield where it cannot charge.
 	elapsed := max(now.Sub(run.start).Seconds(), 1)
-	// the companion holds whole slots: the rest can reach one slot further than its seconds
+	// the hold is band charging: it must fit below the band top, and the companion holds
+	// whole slots, so the rest can reach one slot further than its seconds
+	room := min(float64(bat.SMax), band.sBand) - float64(bat.SInitial)
 	if remaining := band.minRun - elapsed; remaining > 0 && !run.fromFloor &&
-		float64(bat.SMax-bat.SInitial) >= eta*float64(bat.CMin)*(remaining+tariff.SlotDuration.Seconds())/3600+1 {
+		room >= eta*float64(bat.CMin)*(remaining+tariff.SlotDuration.Seconds())/3600+1 {
 		band.elapsed = elapsed
 		return
 	}
@@ -243,6 +258,7 @@ func applyCheapBand(bat *energyBattery, band *energyBand) {
 	}
 	sBand = min(sBand, float64(ceiling))
 	bat.SBand, bat.PBand = &sBand, &pBand
+	band.MinPowerMissing = bat.CMin <= 0
 	// the companion uses the c_min on/off binaries to know when the car charges
 	if band.refuseStorage && bat.CMin > 0 {
 		feed := false
@@ -283,9 +299,11 @@ func explainCheapBand(band *energyBand, req energyRequest, res optimizer.Optimiz
 			start := timestamps[t]
 			band.NextStart = &start
 		}
-		band.Status = bandStatusWaitingCheap
-		if energyGridImport(req.OptimizationInput, res, t) < charge[t]/2 {
-			band.Status = bandStatusWaitingSolar
+		// above the reference the band may only charge from surplus (the companion's rule);
+		// at or below it, mostly grid-fed slots are cheap ones
+		band.Status = bandStatusWaitingSolar
+		if cheapBandCheap(price, *band.Reference.Price) && energyGridImport(req.OptimizationInput, res, t) >= charge[t]/2 {
+			band.Status = bandStatusWaitingCheap
 		}
 		return
 	}

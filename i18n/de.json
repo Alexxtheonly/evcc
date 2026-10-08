@@ -1616,7 +1616,8 @@
           "waitingSolar": "{device}: wartet auf Sonnenstrom um {time}, um in Richtung {top} zu laden.",
           "waitingCheap": "{device}: wartet auf ein günstiges Zeitfenster um {time} ({price}), um in Richtung {top} zu laden.",
           "nothingCheap": "{device}: im Plan ist nichts günstig genug, bleibt vorerst bei {soc} (günstig laden bis {top})."
-        }
+        },
+        "minPowerMissing": "Die strenge Netzregel und die Mindestladedauer brauchen eine Mindestladeleistung, die dieses Fahrzeug nicht meldet: Netz und Sonne werden gemittelt, kurze Ladevorgänge sind möglich."
       }
     },
     "co2": {

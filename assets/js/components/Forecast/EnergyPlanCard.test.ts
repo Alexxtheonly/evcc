@@ -287,10 +287,44 @@ describe("energy plan card", () => {
     expect(lines[0]!.text()).toContain('"top":"50\u00a0%"');
     expect(lines[0]!.text()).toContain("forecast.energy.band.referenceMedian");
     expect(lines[0]!.text()).toContain('"days":90');
-    expect(lines[0]!.text()).toContain('"covered":"51"');
+    expect(lines[0]!.text()).toContain('"covered":51');
     expect(lines[1]!.text()).toContain("forecast.energy.band.status.noReference");
     expect(lines[1]!.text()).toContain("forecast.energy.band.referenceMissing");
     expect(wrapper.text()).not.toMatch(/NaN|undefined/);
+  });
+
+  test("band explanation: whole covered days, never 0 with data, and a missing minimum power", () => {
+    const device = {
+      key: "calypso",
+      name: "calypso",
+      title: "calypso",
+      kind: "vehicle" as const,
+      capacityKWh: 55,
+      initialSoc: 36,
+      plan: [{ start: slot.start, chargeWh: 0, dischargeWh: 0, soc: 36 }],
+      band: {
+        status: "nothingCheap" as const,
+        topSoc: 50,
+        minRunMinutes: 30,
+        minPowerMissing: true,
+        reference: {
+          price: 0.36,
+          median: 0.4,
+          source: "median" as const,
+          days: 30,
+          covered: 0.4,
+          margin: 10,
+          samples: 40,
+        },
+      },
+    };
+    const wrapper = shallowMount(EnergyPlanCard, {
+      props: { insights: plan({ devices: [device] }) },
+      global,
+    });
+    const text = wrapper.get('[data-testid="energy-plan-band"]').text();
+    expect(text).toContain('"covered":1');
+    expect(text).toContain("forecast.energy.band.minPowerMissing");
   });
 
   test("no band line without a configured band", () => {

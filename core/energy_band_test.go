@@ -247,7 +247,7 @@ func TestCheapBandReference(t *testing.T) {
 	assert.Equal(t, 96, ref.Samples)
 	assert.InDelta(t, 0.35, *ref.Median, 1e-9)
 	assert.InDelta(t, 0.315, *ref.Price, 1e-9, "10 % below the median")
-	assert.Equal(t, 1.0, ref.Covered, "a 30-day window with one day of history says so")
+	assert.Equal(t, 2, ref.Covered, "24 hours of history touch two local days")
 
 	// cached for the day
 	late := 0.10
@@ -263,7 +263,7 @@ func TestCheapBandReference(t *testing.T) {
 	require.NotNil(t, ref.Price)
 	assert.InDelta(t, 0.35, *ref.Price, 1e-9, "margin 0 is a value, not the default")
 	assert.Equal(t, 98, ref.Samples, "the 90-day window reaches the old slot")
-	assert.Equal(t, 89.0, ref.Covered)
+	assert.Equal(t, 3, ref.Covered, "days with prices, the 87 empty days in between excluded")
 	assert.Equal(t, 90, ref.Days)
 
 	fixed := 0.28
@@ -522,4 +522,61 @@ func TestCheapBandStorageFeed(t *testing.T) {
 			assert.Equal(t, tc.want != nil, strings.Contains(string(encoded), `"band_storage_feed":false`))
 		})
 	}
+}
+
+func TestCheapBandReferenceRetriesHourlyWithoutHistory(t *testing.T) {
+	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
+	site := &Site{log: util.NewLogger("band-test")}
+	now := time.Date(2026, 10, 8, 7, 10, 0, 0, time.Local)
+	assert.Nil(t, site.cheapBandReference(EnergyIntelligenceSettings{}, now).Price)
+	for i := range 96 {
+		price := 0.40
+		require.NoError(t, metrics.PersistTariffs(now.Add(-time.Duration(i+1)*15*time.Minute), &price, nil, nil, nil))
+	}
+	assert.Nil(t, site.cheapBandReference(EnergyIntelligenceSettings{}, now.Add(30*time.Minute)).Price, "within the hour: cached")
+	assert.NotNil(t, site.cheapBandReference(EnergyIntelligenceSettings{}, now.Add(time.Hour)).Price, "next hour: retried, not stuck for the day")
+}
+
+func TestCheapBandPriceAtTheReference(t *testing.T) {
+	// fixed reference 0.33 and a slot priced 0.33 (float32 on the wire), live terminal value
+	ref := 0.33
+	assert.True(t, cheapBandCheap(float64(float32(0.00033))*1e3, ref))
+	assert.True(t, cheapBandCheap(0.33004, ref), "within 0.005 ct/kWh")
+	assert.False(t, cheapBandCheap(0.3301, ref))
+
+	in := liveBandInput()
+	in.ref = cheapBandReference{Price: &ref, Source: "fixed"}
+	band := cheapBand(in)
+	// the companion's break-even reconstructed from the wire values equals the reference
+	pa, _ := wireValue(in.pa)
+	breakEven := eta * (pa + band.pBand) * 1e3
+	assert.InDelta(t, ref, breakEven, cheapBandPriceTolerance/100)
+
+	req := liveRequest()
+	req.TimeSeries.PN[2] = float32(0.00033)
+	res := optimizer.OptimizationResult{GridImport: []float32{310, 290, 3040, 300}, GridExport: make([]float32, 4), Batteries: []optimizer.BatteryResult{{ChargingPower: []float32{0, 0, 2760, 0}}, {}}}
+	explainCheapBand(band, req, res, nil, 0)
+	assert.Equal(t, bandStatusWaitingCheap, band.Status)
+}
+
+func TestCheapBandWithoutMinimumPower(t *testing.T) {
+	req := liveRequest()
+	req.Batteries[0].CMin = 0
+	band := cheapBand(liveBandInput())
+	applyCheapBand(&req.Batteries[0], band)
+	assert.True(t, band.MinPowerMissing)
+	assert.Nil(t, req.Batteries[0].CMinRun)
+	assert.Nil(t, req.Batteries[0].BandStorageFeed)
+	encoded, err := json.Marshal(band)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"minPowerMissing":true`)
+}
+
+func TestSetCheapBandRunFitsBelowTheBandTop(t *testing.T) {
+	now := time.Date(2026, 10, 8, 2, 10, 0, 0, time.UTC)
+	bat := liveRequest().Batteries[0].BatteryConfig // limit 100 %, plenty of room below SMax
+	bat.SInitial = 27300                             // 200 Wh below the 27500 Wh band top
+	band := cheapBand(liveBandInput())
+	setCheapBandRun(band, &cheapBandRun{start: now.Add(-10 * time.Minute)}, bat, now)
+	assert.Equal(t, band.minRun, band.elapsed, "the hold does not fit below the band top: not held")
 }

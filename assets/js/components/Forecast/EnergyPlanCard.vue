@@ -674,9 +674,12 @@ export default defineComponent({
 										? this.unitPrice(band.reference.median)
 										: "",
 								days: band.reference.days,
-								covered: this.number(band.reference.covered ?? 0, 0),
+								// whole days; never 0 while there is data
+								covered: Math.max(1, Math.round(band.reference.covered ?? 0)),
 								margin: this.number(band.reference.margin, 0),
 							});
+			if (band.minPowerMissing)
+				source = `${source} ${this.$t("forecast.energy.band.minPowerMissing")}`;
 			return {
 				text: this.$t(`forecast.energy.band.status.${band.status}`, args),
 				reference: source,
