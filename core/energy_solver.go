@@ -439,7 +439,7 @@ func (site *Site) robustEnergy(ctx context.Context, req energyRequest, details r
 	if selected < 0 {
 		return base, nil, errors.New("scenario costs unavailable")
 	}
-	info := &energyScenarios{Status: "evaluated", Selected: names[selected], Reason: "Executable battery modes at current modeled net demand; EV full-power/stop commands held fixed. Forecast changes and hardware safety gates remain authoritative."}
+	info := &energyScenarios{Status: "evaluated", Selected: names[selected], Reason: "Executable battery modes at current modeled net demand; EV first actions held fixed as the loadpoint executes them (floor and mode Now at full power, other charges as planned). Forecast changes and hardware safety gates remain authoritative."}
 	info.Control = control
 	info.Excluded = excluded
 	for i, row := range costs {

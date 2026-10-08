@@ -445,39 +445,25 @@ func TestLoadpointRequestCheapBand(t *testing.T) {
 	assert.Nil(t, detail.band, "0 turns the band off")
 }
 
-// TestRobustBandPartialEVAction: a band vehicle planned at partial power in a slot at or
-// below the reference runs at full power, capped to what still fits; above it, or while a
-// run is only held to its minimum, the planned power stands.
+// TestRobustBandPartialEVAction: a band vehicle's partial first-slot charge is fixed as
+// planned, at or below the reference too (review exp2: widening a surplus-fed slot to full
+// grid power cost 0.23 EUR per slot and displaced cheaper night slots).
 func TestRobustBandPartialEVAction(t *testing.T) {
 	req := liveRequest()
-	req.TimeSeries.PN[0] = .0003136 // below the 0.36063 reference
 	details := requestDetails{BatteryDetails: []batteryDetail{{Type: batteryTypeVehicle, mode: api.ModePV, band: cheapBand(liveBandInput())}, {Type: batteryTypeBattery}}}
-	full := 11040.0 * 627 / 3600
 	base := optimizer.OptimizationResult{Batteries: []optimizer.BatteryResult{
 		{ChargingPower: []float32{900}, DischargingPower: []float32{0}},
 		{ChargingPower: []float32{0}, DischargingPower: []float32{0}},
 	}}
-
-	actions, err := executableFirstActions(req, details, base)
-	require.NoError(t, err)
-	require.NotEmpty(t, actions)
-	for _, action := range actions {
-		assert.InDelta(t, full, *action.request.Batteries[0].FirstStepCharge, 1e-6)
+	for _, price := range []float32{.0003136, .0005002} { // below and above the 0.36063 reference
+		req.TimeSeries.PN[0] = price
+		actions, err := executableFirstActions(req, details, base)
+		require.NoError(t, err)
+		require.NotEmpty(t, actions)
+		for _, action := range actions {
+			assert.InDelta(t, 900, *action.request.Batteries[0].FirstStepCharge, 1e-6, "%v %s", price, action.name)
+		}
 	}
-
-	// only the room below the ceiling can be stored
-	near := liveRequest()
-	near.TimeSeries.PN[0] = .0003136
-	near.Batteries[0].SInitial = 54900
-	actions, err = executableFirstActions(near, details, base)
-	require.NoError(t, err)
-	assert.InDelta(t, 100/eta, *actions[0].request.Batteries[0].FirstStepCharge, 1e-3)
-
-	// above the reference the planned power stands, held run or not
-	req.TimeSeries.PN[0] = .0005002
-	actions, err = executableFirstActions(req, details, base)
-	require.NoError(t, err)
-	assert.InDelta(t, 900, *actions[0].request.Batteries[0].FirstStepCharge, 1e-6)
 }
 
 func TestTrackCheapBandRun(t *testing.T) {

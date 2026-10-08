@@ -106,10 +106,15 @@ func TestRobustFullEVActionReconstructedFromRequest(t *testing.T) {
 			require.NoError(t, err, action.name)
 		}
 	}
+	// within the loadpoint's own full-power tolerance (50 W): full power
 	base.Batteries[1].ChargingPower[0] = float32(exact - .01)
 	actions, err = executableFirstActions(req, details, base)
 	require.NoError(t, err)
-	assert.InDelta(t, exact-.01, *actions[0].request.Batteries[1].FirstStepCharge, 1e-3, "a genuinely partial EV action is not rounded up to full power")
+	assert.Equal(t, exact, *actions[0].request.Batteries[1].FirstStepCharge)
+	base.Batteries[1].ChargingPower[0] = float32(exact - 100)
+	actions, err = executableFirstActions(req, details, base)
+	require.NoError(t, err)
+	assert.InDelta(t, exact-100, *actions[0].request.Batteries[1].FirstStepCharge, 1e-3, "a genuinely partial EV action is not rounded up to full power")
 }
 
 func TestRobustPartialDischargeIntegration(t *testing.T) {

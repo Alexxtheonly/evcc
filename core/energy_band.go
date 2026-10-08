@@ -292,18 +292,6 @@ func explainCheapBand(band *energyBand, req energyRequest, res optimizer.Optimiz
 	band.Status = bandStatusNothingCheap
 }
 
-// cheapBandFullPower reports whether a band vehicle's partial first-slot charge runs at
-// full power under robust dispatch: in a slot priced at or below the reference any
-// power is worth it, and the band top ends it on the next control cycle. A run held to
-// its minimum keeps its planned (minimum) power instead: the hold is not price-bounded,
-// so it must not be widened to full power.
-func cheapBandFullPower(band *energyBand, price float32) bool {
-	if band == nil || !band.active || band.Reference.Price == nil {
-		return false
-	}
-	return float64(price)*1e3 <= *band.Reference.Price
-}
-
 // cheapBandValue is the band's contribution to the solver objective between initial
 // and final stored energy (Wh): the solver maximizes b <= min(final, s_band).
 func cheapBandValue(bat energyBattery, final float32) float64 {
