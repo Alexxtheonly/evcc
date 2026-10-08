@@ -2,7 +2,7 @@
 # requires-python = ">=3.13"
 # dependencies = ["websockets>=13"]
 # ///
-"""Backfill evcc's `tariffs.grid` from Home Assistant long-term statistics.
+"""Backfill grid prices from Home Assistant long-term statistics into `tariffs_backfill`.
 
 evcc stores one row per 15-minute slot: `ts` is the slot start in unix seconds (UTC,
 multiple of 900), `grid` the import price in currency/kWh. Home Assistant keeps hourly
@@ -13,8 +13,12 @@ and evcc record the same quantity where both exist:
   1. fetch HA hourly statistics via WebSocket `recorder/statistics_during_period`;
   2. compare each HA hourly mean with the mean of evcc's four slots of that hour over the
      overlap; refuse (exit 2) if they disagree beyond --max-mean-diff / --max-abs-diff;
-  3. plan `INSERT OR IGNORE INTO tariffs (ts, grid)` for full HA hours strictly before the
-     first existing tariffs row, grid only: feedin, co2 and temperature stay NULL;
+  3. plan `INSERT OR IGNORE INTO tariffs_backfill (ts, grid)` for every slot of a full HA hour
+     that `tariffs` has no grid price for; the table (same columns as `tariffs`) is created if
+     absent. evcc's own `tariffs` is never written: only the cheap-charge band's reference
+     median reads `tariffs_backfill`, and only where `tariffs` has no price, so the savings
+     ledger, Results and the earliest-tariff bound keep evcc's own 15-minute record and never
+     see hourly means;
   4. --dry-run prints the row count and writes the SQL; without it the SQL is applied
      inside one transaction. Run it against a copy first.
 
@@ -35,6 +39,11 @@ import websockets
 
 SLOT = 900
 HOUR = 3600
+TABLE = "tariffs_backfill"
+SCHEMA = [
+    f"CREATE TABLE IF NOT EXISTS `{TABLE}` (`ts` integer,`grid` real,`feedin` real,`co2` real,`temperature` real);",
+    f"CREATE UNIQUE INDEX IF NOT EXISTS `idx_{TABLE}_timestamp` ON `{TABLE}`(`ts`);",
+]
 
 
 def read_token(path: Path, key: str) -> str:
@@ -90,11 +99,12 @@ def expansion_error(ha: dict[int, float], evcc: dict[int, list[float]]) -> dict:
     return {"slots": len(errors), "mean_abs": statistics.fmean(errors), "max_abs": max(errors)}
 
 
-def plan(ha: dict[int, float], first: int) -> list[tuple[int, float]]:
+def plan(ha: dict[int, float], recorded: set[int]) -> list[tuple[int, float]]:
+    """Every slot of an HA hour that evcc has no grid price for; recorded slots win."""
     rows = []
     for hour in sorted(ha):
         for ts in range(hour, hour + HOUR, SLOT):
-            if ts < first:
+            if ts not in recorded:
                 rows.append((ts, round(ha[hour], 6)))
     return rows
 
@@ -108,7 +118,7 @@ def main() -> int:
     p.add_argument("--sensor", default="sensor.kastanienweg_electricity_price")
     p.add_argument("--start", default="2026-01-01T00:00:00Z")
     p.add_argument("--max-mean-diff", type=float, default=0.002, help="currency/kWh, |mean of differences|")
-    p.add_argument("--max-abs-diff", type=float, default=0.02, help="currency/kWh, largest hourly difference")
+    p.add_argument("--max-abs-diff", type=float, default=0.005, help="currency/kWh, largest hourly difference")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--sql", type=Path, default=Path("tariffs-backfill.sql"))
     args = p.parse_args()
@@ -134,12 +144,14 @@ def main() -> int:
         print(json.dumps(report, indent=2))
         return 2
 
-    rows = plan(ha, first)
+    recorded = {ts for (ts,) in db.execute("SELECT ts FROM tariffs WHERE grid IS NOT NULL")}
+    rows = plan(ha, recorded)
     report["rows"] = len(rows)
+    report["inside_recorded_period"] = sum(1 for ts, _ in rows if ts >= first)
     if rows:
         report["from"] = datetime.fromtimestamp(rows[0][0], timezone.utc).isoformat()
         report["to"] = datetime.fromtimestamp(rows[-1][0] + SLOT, timezone.utc).isoformat()
-    statements = ["BEGIN;"] + [f"INSERT OR IGNORE INTO tariffs (ts, grid) VALUES ({ts}, {grid!r});" for ts, grid in rows] + ["COMMIT;"]
+    statements = ["BEGIN;", *SCHEMA] + [f"INSERT OR IGNORE INTO {TABLE} (ts, grid) VALUES ({ts}, {grid!r});" for ts, grid in rows] + ["COMMIT;"]
     args.sql.write_text("\n".join(statements) + "\n")
     report["sql"] = str(args.sql)
     if args.dry_run:
