@@ -362,10 +362,22 @@ index 0000000..e28ca5b
 +            discharge = math.nextafter(discharge, 0.0)
 +    raise ValueError('first step action exceeds physical storage capacity')
 diff --git a/src/optimizer/optimizer.py b/src/optimizer/optimizer.py
-index 77c2353..7334dd7 100644
+index 77c2353..9b67df0 100644
 --- a/src/optimizer/optimizer.py
 +++ b/src/optimizer/optimizer.py
-@@ -136,6 +136,25 @@ class BatteryConfig:
+@@ -38,6 +38,11 @@ DISCHARGING_STRATEGIES = ('none', 'discharge_before_import')
+ # recalculated from the solution and stays in its original unit.
+ OBJECTIVE_TARGET = 1e6
+ 
++# a grid price at most this far above a band's break-even (currency/Wh, 0.005 ct/kWh) still
++# counts as at or below it: prices and band terms cross the wire as float32 decimals, and a
++# slot priced exactly at the reference must not be decided by that rounding
++BAND_PRICE_TOLERANCE = 5e-8
++
+ # fixed factor to use instead of deriving one from the coefficients. None derives it, which is the
+ # production setting; the tests pin it to compare two scalings of the same model.
+ OBJECTIVE_SCALE = None
+@@ -136,6 +141,25 @@ class BatteryConfig:
      p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
      s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
      c_priority: int = 0
@@ -391,7 +403,7 @@ index 77c2353..7334dd7 100644
  
  
  @dataclass
-@@ -206,6 +225,8 @@ class Optimizer:
+@@ -206,6 +230,8 @@ class Optimizer:
              self.max_import_price,
              self.max_export_price,
              *(bat.p_a for bat in self.batteries),
@@ -400,7 +412,7 @@ index 77c2353..7334dd7 100644
          ]
          if self.is_grid_demand_rate_active:
              # prc_p_exc_imp is currency/W and the charge is set by the single worst time step, so
-@@ -249,6 +270,8 @@ class Optimizer:
+@@ -249,6 +275,8 @@ class Optimizer:
          self._setup_target_function()
          self._add_energy_balance_constraints()
          self._add_battery_constraints()
@@ -409,7 +421,7 @@ index 77c2353..7334dd7 100644
  
      def _setup_variables(self):
          """
-@@ -342,6 +365,11 @@ class Optimizer:
+@@ -342,6 +370,11 @@ class Optimizer:
          for t in self.time_steps:
              self.variables['y'].append(pulp.LpVariable(f"y_{t}", cat='Binary'))
  
@@ -421,20 +433,26 @@ index 77c2353..7334dd7 100644
          # Binary variable for charging activation
          self.variables['z_c'] = {}
          for i, bat in enumerate(self.batteries):
-@@ -353,6 +381,12 @@ class Optimizer:
+@@ -353,6 +386,18 @@ class Optimizer:
              else:
                  self.variables['z_c'][i] = None
  
-+        # seconds a run in progress falls short of its minimum, see _add_minimum_run_constraints
++        # seconds a run falls short of its minimum, see _add_minimum_run_constraints: one per
++        # possible start, and one for a run in progress
 +        self.variables['run_short'] = {}
 +        for i, bat in enumerate(self.batteries):
-+            held = bat.c_min_run and 0 < bat.c_run_elapsed < bat.c_min_run and self.variables['z_c'][i] is not None
-+            self.variables['run_short'][i] = pulp.LpVariable(f"run_short_{i}", lowBound=0) if held else None
++            if not bat.c_min_run or self.variables['z_c'][i] is None:
++                self.variables['run_short'][i] = []
++                continue
++            shortfalls = [pulp.LpVariable(f"run_short_{i}_{t}", lowBound=0) for t in self.time_steps]
++            if 0 < bat.c_run_elapsed < bat.c_min_run:
++                shortfalls.append(pulp.LpVariable(f"run_short_{i}_held", lowBound=0))
++            self.variables['run_short'][i] = shortfalls
 +
          # Binary variable to lock charging against discharging
          self.variables['z_cd'] = {}
          for i, bat in enumerate(self.batteries):
-@@ -396,6 +430,14 @@ class Optimizer:
+@@ -396,6 +441,14 @@ class Optimizer:
          # Final state of charge value [currency unit]
          for i, bat in enumerate(self.batteries):
              objective += self.variables['s'][i][-1] * bat.p_a
@@ -442,14 +460,14 @@ index 77c2353..7334dd7 100644
 +            objective -= bat.wear_cost / eta_d * pulp.lpSum(self.variables['d'][i])
 +            if self.variables['b'][i] is not None:
 +                objective += self.variables['b'][i] * bat.p_band
-+            if self.variables['run_short'][i] is not None:
-+                # a held run yields only where it may not charge at all: priced like the
-+                # missed minimum-power energy at the goal penalty
-+                objective -= self.prc_e_goal_pen * bat.c_min / 3600. * self.variables['run_short'][i]
++            if self.variables['run_short'][i]:
++                # a run yields only where it may not charge at all: priced like the missed
++                # minimum-power energy at the goal penalty
++                objective -= self.prc_e_goal_pen * bat.c_min / 3600. * pulp.lpSum(self.variables['run_short'][i])
  
          # charge for import power demand rate. The demand rate is applied to the maximum
          # power draw beyond the threshold within the time horizon.
-@@ -616,23 +658,44 @@ class Optimizer:
+@@ -616,23 +669,44 @@ class Optimizer:
  
          # Constraint (3): Battery dynamics
          for i, bat in enumerate(self.batteries):
@@ -491,10 +509,10 @@ index 77c2353..7334dd7 100644
 +
 +            if self.variables['b'][i] is not None:
 +                self.problem += self.variables['b'][i] <= self.variables['s'][i][-1]
++
++            self._add_minimum_run_constraints(i, bat)
  
 -            # Constraint (6): Battery SOC goal constraints (for t > 0)
-+            self._add_minimum_run_constraints(i, bat)
-+
 +            # Goals refer to energy at the end of each slot, including the first.
              if bat.s_goal is not None:
 -                for t in range(1, self.T):
@@ -502,7 +520,7 @@ index 77c2353..7334dd7 100644
                      if bat.s_goal[t] > 0:
                          self.problem += (self.variables['s'][i][t]
                                           + self.variables['s_goal_pen'][i][t] >= bat.s_goal[t])
-@@ -701,6 +764,96 @@ class Optimizer:
+@@ -701,6 +775,139 @@ class Optimizer:
                  self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                   * (1 - self.variables['z_cd'][i][t]))
  
@@ -528,30 +546,68 @@ index 77c2353..7334dd7 100644
 +        eta_c = bat.eta_c if bat.eta_c is not None else self.eta_c
 +        return eta_c * (bat.p_a + bat.p_band)
 +
++    def band_expensive(self, bat, t) -> bool:
++        """Whether slot t is priced above the band's break-even, with BAND_PRICE_TOLERANCE."""
++        return self.time_series.p_N[t] > self.band_threshold(bat) + BAND_PRICE_TOLERANCE
++
++    def _band_obligations(self, i, bat, expensive):
++        """
++        Import a band battery may take in expensive slots for what it must charge anyway:
++
++        - the floor s_min, in the slots full power needs to reach it (the loadpoint
++          fast-charges the floor at once), plus one;
++        - a plan goal, up to its highest s_goal and only in slots up to the last goal;
++        - per slot its p_demand (minimum power, smart cost limit, precondition), capped to
++          c_max.
++
++        Pools bound grid energy, not charged energy: in a pool slot with surplus the solver may
++        call the surplus band energy and the grid obligation energy. That residual is bounded
++        by the surplus in pool slots before the floor or goal is reached, never after.
++        """
++        eta_c = bat.eta_c if bat.eta_c is not None else self.eta_c
++        allowance = {t: 0 for t in expensive}
++
++        def pool(name, energy, slots):
++            if energy <= 0 or not slots:
++                return
++            shared = {t: pulp.LpVariable(f"band_{name}_{i}_{t}", lowBound=0) for t in slots}
++            self.problem += pulp.lpSum(shared.values()) <= energy
++            for t, var in shared.items():
++                allowance[t] = allowance[t] + var
++
++        floor = max(0., bat.s_min - bat.s_initial) / eta_c
++        reach, filled = 0, 0.
++        while reach < self.T and filled < floor:
++            filled += bat.c_max * self.time_series.dt[reach] / 3600.
++            reach += 1
++        pool("floor", floor, [t for t in expensive if t <= reach])
++        if bat.s_goal is not None and max(bat.s_goal) > 0:
++            last = max(t for t, goal in enumerate(bat.s_goal) if goal > 0)
++            goal = max(0., max(bat.s_goal) - max(bat.s_initial, bat.s_min)) / eta_c
++            pool("goal", goal, [t for t in expensive if t <= last])
++        if bat.p_demand is not None:
++            for t in expensive:
++                allowance[t] = allowance[t] + min(bat.p_demand[t], bat.c_max * self.time_series.dt[t] / 3600.)
++        return allowance
++
 +    def _add_band_grid_constraints(self):
 +        """
 +        Grid energy for a band battery must itself be priced at or below the band's break-even.
 +        In a slot above it the site may import only the household deficit max(0, gt - ft), the
-+        charging of other vehicles (d_max = 0) and, until the floor s_min is reached, the
-+        floor's own energy, whenever the band battery charges (z_c = 1). The band battery thus
-+        takes only surplus solar or, if storage feed is allowed, battery discharge there. Home
-+        batteries are left out of the allowance: grid-charging one while the car takes the
-+        solar would be the same purchase. Plans and continuous demand (s_goal, p_demand) keep
-+        today's behaviour.
++        charging of other vehicles (d_max = 0) and what the band battery must charge anyway
++        (floor, goals, demand, see _band_obligations), whenever the band battery charges
++        (z_c = 1). Beyond that it takes only surplus solar or, if storage feed is allowed,
++        battery discharge there. Home batteries are left out of the allowance: grid-charging
++        one while the car takes the solar would be the same purchase.
 +        """
 +        for i, bat in enumerate(self.batteries):
 +            z = self.variables['z_c'][i]
-+            if not bat.band_active() or bat.s_goal is not None or bat.p_demand is not None or z is None:
++            if not bat.band_active() or z is None:
 +                continue
-+            threshold = self.band_threshold(bat)
-+            expensive = [t for t in self.time_steps if self.time_series.p_N[t] > threshold * (1 + 1e-9)]
++            expensive = [t for t in self.time_steps if self.band_expensive(bat, t)]
 +            if not expensive:
 +                continue
-+            eta_c = bat.eta_c if bat.eta_c is not None else self.eta_c
-+            floor = max(0., bat.s_min - bat.s_initial) / eta_c
-+            allowance = {t: pulp.LpVariable(f"band_floor_{i}_{t}", lowBound=0) for t in expensive} if floor > 0 else {}
-+            if allowance:
-+                self.problem += pulp.lpSum(allowance.values()) <= floor
++            allowance = self._band_obligations(i, bat, expensive)
 +            vehicles = [k for k, other in enumerate(self.batteries) if k != i and other.d_max <= 0]
 +            for t in expensive:
 +                dth = self.time_series.dt[t] / 3600.
@@ -561,17 +617,19 @@ index 77c2353..7334dd7 100644
 +                big = self.time_series.gt[t] + sum(other.c_max for other in self.batteries) * dth
 +                allowed = (max(0., self.time_series.gt[t] - self.time_series.ft[t])
 +                           + pulp.lpSum(self.variables['c'][k][t] for k in vehicles)
-+                           + allowance.get(t, 0)
++                           + allowance[t]
 +                           + big * (1 - z[t]))
 +                self.problem += imported <= allowed
 +
 +    def _add_minimum_run_constraints(self, i, bat):
 +        """
 +        A charging run lasts at least c_min_run seconds, or until the horizon ends. A run
-+        that started c_run_elapsed seconds ago continues for the rest unless it may not
-+        charge at all (e.g. the band's grid rule): then it yields at a goal-sized penalty
-+        and ends; restarting later is a new run held to the full minimum. Uses the c_min
-+        activation binaries; validation requires c_min > 0.
++        that started c_run_elapsed seconds ago continues for the rest. Both obligations yield
++        only where the run may not charge at all (e.g. the band's grid rule, a fixed first
++        action in a scenario without the solar it was planned on), at a goal-sized penalty,
++        so the minimum never makes a request infeasible; the run then ends, and restarting
++        later is a new run held to the full minimum. Uses the c_min activation binaries;
++        validation requires c_min > 0.
 +        """
 +        z = self.variables['z_c'][i]
 +        if not bat.c_min_run or z is None:
@@ -586,20 +644,23 @@ index 77c2353..7334dd7 100644
 +                    break
 +            return slots, min(covered, duration)
 +
-+        if self.variables['run_short'][i] is not None:
++        shortfall = self.variables['run_short'][i]
++        if 0 < bat.c_run_elapsed < bat.c_min_run:
 +            slots, required = window(0, bat.c_min_run - bat.c_run_elapsed)
 +            self.problem += (pulp.lpSum(self.time_series.dt[k] * z[k] for k in slots)
-+                             + self.variables['run_short'][i] >= required)
++                             + shortfall[-1] >= required)
 +        for t in self.time_steps:
 +            previous = (1 if bat.c_run_elapsed > 0 else 0) if t == 0 else z[t - 1]
-+            # start indicator, forced to 1 when z switches on at t
++            # start indicator, forced to 1 when z switches on at t. Its shortfall keeps a fixed
++            # first action or a scenario that leaves the run nothing to charge from feasible.
 +            slots, required = window(t, bat.c_min_run)
-+            self.problem += (pulp.lpSum(self.time_series.dt[k] * z[k] for k in slots) >= required * (z[t] - previous))
++            self.problem += (pulp.lpSum(self.time_series.dt[k] * z[k] for k in slots) + shortfall[t]
++                             >= required * (z[t] - previous))
 +
      def _solver(self, tmpdir, **options):
          """CBC with the shared settings, writing its scratch files to tmpdir."""
          # COIN_CMD is the same solver taking a path, PULP_CBC_CMD is it pinned to the bundled
-@@ -922,6 +1075,7 @@ class Optimizer:
+@@ -922,6 +1129,7 @@ class Optimizer:
              result = {
                  'status': status,
                  'objective_value': self.get_clean_objective_value(),
@@ -607,7 +668,7 @@ index 77c2353..7334dd7 100644
                  'limit_violations': {
                      'grid_import_limit_exceeded': grid_imp_limit_violated,
                      'grid_export_limit_hit': grid_exp_limit_hit
-@@ -992,7 +1146,9 @@ class Optimizer:
+@@ -992,7 +1200,9 @@ class Optimizer:
          # Final state of charge value [currency unit]
          for i, bat in enumerate(self.batteries):
              clean_objective += (pulp.value(self.variables['s'][i][self.T-1])
@@ -618,7 +679,7 @@ index 77c2353..7334dd7 100644
  
          # charge for import power demand rate. The demand rate is applied to the maximum
          # power draw beyond the threshold within the time horizon.
-@@ -1000,4 +1156,12 @@ class Optimizer:
+@@ -1000,4 +1210,12 @@ class Optimizer:
              clean_objective += - self.grid.prc_p_exc_imp \
                  * pulp.value(self.variables['p_max_imp_exc'])
  

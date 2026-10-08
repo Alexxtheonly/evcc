@@ -489,3 +489,74 @@ def test_band_grid_rule_does_not_bind_plans(client):
     data["batteries"][0]["s_goal"] = [0, 0, 0, 21000]
     result = solve(client, data)
     assert result["batteries"][0]["state_of_charge"][-1] >= 21000 - 0.5
+
+
+def test_minimum_run_never_makes_a_fixed_first_action_infeasible(client):
+    # review exp1: a run started in slot 0 on solar, then the low-solar scenario leaves it
+    # nothing to charge from below the reference: the start obligation yields, no 422
+    pa = 0.00027941758
+    data = {
+        "eta_c": 0.9, "eta_d": 0.9, "strategy": {"charging_strategy": "none"},
+        "time_series": {"dt": [627, 900, 900, 900, 900, 900], "ft": [1200, 300, 300, 0, 0, 0],
+                        "gt": [300] * 6, "p_E": [0.0000786] * 6, "p_N": [0.00040] * 6},
+        "batteries": [
+            {"c_max": 11040, "c_min": 1380, "charge_from_grid": True, "d_max": 0, "p_a": pa,
+             "s_initial": 19800, "s_max": 55000, "s_min": 16500, "s_band": 27500,
+             "p_band": 0.00036063 / 0.9 - pa, "c_min_run": 1800, "band_storage_feed": False,
+             "first_step_charge": 900.0, "first_step_discharge": 0.0},
+            {"c_max": 6000, "c_min": 0, "charge_from_grid": True, "d_max": 6294.56, "p_a": pa,
+             "s_capacity": 19320, "s_initial": 10000, "s_max": 18354, "s_min": 966,
+             "first_step_charge": 0.0, "first_step_discharge": 0.0},
+        ],
+    }
+    result = solve(client, data)
+    assert result["batteries"][0]["charging_power"][0] == pytest.approx(900, abs=0.1)
+    # the run ends rather than importing at 0.40 above the 0.36 reference
+    assert sum(result["batteries"][0]["charging_power"][1:]) == pytest.approx(0, abs=0.1)
+
+
+def test_point_plan_keeps_the_minimum_run(client):
+    prices = [0.00010, 0.00050, 0.00050, 0.00012, 0.00012, 0.00050]
+    data = band_request(prices, 900, 0.00030, c_min_run=1800)
+    assert charge_runs(solve(client, data)["batteries"][0]["charging_power"]) == [(3, 4)]
+
+
+@pytest.mark.parametrize("name,update,expected", [
+    # minPV: the minimum power runs regardless of price, nothing beyond it
+    ("minpv", {"p_demand": [345] * 4}, [345] * 4),
+    # smart cost limit affordable in slot 1: full power there, no mixed top-up elsewhere
+    ("smart cost", {"p_demand": [0, 2760, 0, 0]}, [0, 2760, 0, 0]),
+    # all-zero demand changes nothing (review exp3)
+    ("zero demand", {"p_demand": [0, 0, 0, 0]}, [0, 0, 0, 0]),
+])
+def test_band_grid_rule_keeps_demand_obligations_only(client, name, update, expected):
+    data = surplus_request(0.00060)  # 225 Wh of surplus per slot
+    data["batteries"][0].update(update)
+    result = solve(client, data)
+    assert result["batteries"][0]["charging_power"] == pytest.approx(expected, abs=0.5), name
+
+
+def test_band_grid_rule_keeps_a_plan_goal_but_not_more(client):
+    # 225 Wh of surplus per slot, below the 345 Wh minimum: the plan goal may import at
+    # 0.60, mixed top-ups for the band beyond it may not
+    data = surplus_request(0.00060)
+    for key in ("dt", "gt", "ft", "p_N", "p_E"):
+        data["time_series"][key] = data["time_series"][key] * 2
+    data["batteries"][0]["s_goal"] = [0, 0, 0, 21000, 0, 0, 0, 0]
+    result = solve(client, data)
+    soc = result["batteries"][0]["state_of_charge"]
+    assert soc[3] >= 21000 - 0.5
+    assert soc[-1] == pytest.approx(soc[3], abs=0.5)
+
+
+@pytest.mark.parametrize("price,charges", [(0.00033, True), (0.00033 + 1e-7, False)])
+def test_slot_priced_at_the_reference_is_cheap(client, price, charges):
+    # fixed reference 0.33 EUR/kWh with the live terminal value: whether surplus may be
+    # topped up from the grid to the 1380 W minimum must not depend on float rounding
+    pa = 0.00027941758
+    data = band_request([price] * 4, 27500, 0.00033, p_a=pa, s_initial=19800, s_min=16500)
+    data["time_series"]["gt"] = [300] * 4
+    data["time_series"]["ft"] = [525] * 4
+    data["time_series"]["p_E"] = [0.0000786] * 4
+    charged = solve(client, data)["batteries"][0]["charging_power"][0] > 0.1
+    assert charged is charges
