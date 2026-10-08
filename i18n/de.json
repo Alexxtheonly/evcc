@@ -1600,7 +1600,7 @@
         "invalid": "Referenz für günstiges Laden prüfen: Abschlag 0–90 %, Preis pro kWh zwischen −10 und 10.",
         "fromBattery": "Hausspeicher darf günstiges Laden versorgen",
         "fromBatteryHint": "Aus (Standard): Solange ein Fahrzeug im Band günstig lädt, hält der Hausspeicher, auch der Haushalt läuft dann über Sonne oder Netz. Laden unter der Mindestladung wird nie eingeschränkt.",
-        "window30Default": "30 Tage (Standard)",
+        "window30Default": "30 Tage",
         "window90": "90 Tage"
       },
       "band": {

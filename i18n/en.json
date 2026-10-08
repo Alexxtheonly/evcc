@@ -1600,7 +1600,7 @@
         "invalid": "Check the cheap charging reference: margin 0–90 %, price per kWh between −10 and 10.",
         "fromBattery": "Home battery may supply band charging",
         "fromBatteryHint": "Off (default): while a car charges cheaply inside its band, the home battery holds, so the household also runs on solar or grid for those minutes. Charging below the minimum charge is never restricted.",
-        "window30Default": "30 days (default)",
+        "window30Default": "30 days",
         "window90": "90 days"
       },
       "band": {
