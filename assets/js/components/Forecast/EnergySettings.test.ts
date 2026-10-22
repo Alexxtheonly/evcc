@@ -116,6 +116,33 @@ test("unchanged configured values preserve billing instant, meter plane and expl
   expect(api.put).toHaveBeenCalledExactlyOnceWith("config/energyintelligence", settings);
 });
 
+test("heat pump model and meter are carried unchanged through a save", async () => {
+  const settings: Settings = { ...defaults(), heatPumpModel: "on", heatPumpMeter: "db:19" };
+  vi.mocked(api.get).mockResolvedValue({ data: settings });
+  vi.mocked(api.put).mockResolvedValue({});
+  const wrapper = mountSettings();
+  await open(wrapper);
+  await wrapper
+    .get('[data-testid="energy-heatingDegree"] #energy-heatingDegree-off')
+    .setValue(true);
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  expect(api.put).toHaveBeenCalledExactlyOnceWith(
+    "config/energyintelligence",
+    expect.objectContaining({ heatPumpModel: "on", heatPumpMeter: "db:19", heatingDegree: "off" })
+  );
+
+  // settings saved before the fields existed stay without them: the server reads absent as shadow
+  vi.mocked(api.put).mockClear();
+  vi.mocked(api.get).mockResolvedValue({ data: defaults() });
+  await open(wrapper);
+  await wrapper.get("form").trigger("submit");
+  await flushPromises();
+  const sent = vi.mocked(api.put).mock.calls[0]![1] as Settings;
+  expect(sent).not.toHaveProperty("heatPumpModel");
+  expect(sent).not.toHaveProperty("heatPumpMeter");
+});
+
 test("Automatic explicitly removes custom efficiencies without labelling old custom values as defaults", async () => {
   vi.mocked(api.get).mockResolvedValue({
     data: {

@@ -9,6 +9,10 @@ export interface EnergySettings {
   settlementFrom?: string | null;
   solarShading?: boolean;
   heatingDegree?: "auto" | "on" | "off";
+  // heat-pump split of the household forecast; absent means shadow / no meter. Not edited
+  // here, carried so a save does not reset it.
+  heatPumpModel?: "off" | "shadow" | "on";
+  heatPumpMeter?: string;
   // cheap-charge band reference (ADR-017); absent means the default
   cheapBandDays?: number;
   cheapBandMargin?: number;
