@@ -43,8 +43,7 @@ const (
 	heatPumpMinR         = 0.6 // Pearson r of daily heat-pump energy and heating-degree
 	heatPumpMinSlope     = 0.3 // kWh per K and day
 	heatPumpMaxSlope     = 3.0
-	heatPumpRecentDays   = 90 // the fit uses only the last heatPumpRecentDays ...
-	heatPumpRecentMin    = 60 // ... once this many valid days lie in them
+	heatPumpFitDays      = 400 // the fit uses every valid day of this many days before today
 	heatPumpShapeDays    = 30
 	heatPumpShapeMinDays = 7
 	heatPumpSigmaK       = 1.5 // temperature error the heat-pump band covers each side
@@ -85,7 +84,7 @@ type heatPumpFit struct {
 	A, B, R  float64 // kWh per day, kWh per K and day, Pearson r
 	Days     int     // days in the fit
 	HDDRange float64
-	Valid    int     // valid days available, before the recent-window choice
+	Valid    int     // valid days of the last heatPumpFitDays
 	MaxHDD   float64 // largest daily heating-degree in the fit
 	MaxDaily float64 // largest daily energy in the fit (kWh)
 }
@@ -177,21 +176,18 @@ func heatPumpDays(rows []metrics.HeatPumpRow, backfill []metrics.SlotValue, temp
 	return res
 }
 
-// fitHeatPump fits daily energy on daily heating-degree by ordinary least squares over all
-// valid days, or only the last heatPumpRecentDays once heatPumpRecentMin of them qualify.
+// fitHeatPump fits daily energy on daily heating-degree by ordinary least squares over every
+// valid day of the last heatPumpFitDays. Warm days (heating-degree 0) belong in it: the model is
+// max(0, a + b x HDD), and a recent-only window would forget the winter by autumn.
 // reason is the first shut gate; the fit is filled as far as it could be computed.
 func fitHeatPump(days []heatPumpDay, today time.Time) (heatPumpFit, string) {
-	fit := heatPumpFit{Valid: len(days)}
-	use := days
-	var recent []heatPumpDay
+	var use []heatPumpDay
 	for _, d := range days {
-		if !d.Date.Before(today.AddDate(0, 0, -heatPumpRecentDays)) {
-			recent = append(recent, d)
+		if !d.Date.Before(today.AddDate(0, 0, -heatPumpFitDays)) {
+			use = append(use, d)
 		}
 	}
-	if len(recent) >= heatPumpRecentMin && hddRange(recent) >= heatPumpMinHDDRange {
-		use = recent
-	}
+	fit := heatPumpFit{Valid: len(use)}
 	fit.Days = len(use)
 	if len(use) == 0 {
 		return fit, heatPumpFewDays

@@ -2,7 +2,6 @@ package core
 
 import (
 	"math"
-	"slices"
 	"testing"
 	"time"
 
@@ -115,24 +114,42 @@ func TestHeatPumpFitGates(t *testing.T) {
 		})
 	}
 
-	t.Run("the last 90 days once 60 of them qualify", func(t *testing.T) {
-		// old days follow another line (shifted by 20 kWh); the recent 70 follow a=2, b=1
-		var old, recent []heatPumpDay
-		for d := range 100 {
-			old = append(old, heatPumpDay{Date: today.AddDate(0, 0, -300+d), HDD: wide(d), Energy: 22 + wide(d)})
+	t.Run("a warm recent season does not replace the winter", func(t *testing.T) {
+		// 210 winter days with HDD 0-12 on a=2, b=1.3; then 90 warm days with HDD 0-6
+		// (a spread above 3 K, on the same line: only the window decides the slope's reach)
+		var days []heatPumpDay
+		for d := range 210 {
+			h := float64(d%13) * 12 / 12
+			days = append(days, heatPumpDay{Date: today.AddDate(0, 0, -300+d), HDD: h, Energy: 2 + 1.3*h + 0.6*math.Sin(float64(d))})
 		}
-		for d := range 70 {
-			recent = append(recent, heatPumpDay{Date: today.AddDate(0, 0, -70+d), HDD: wide(d), Energy: 2 + wide(d)})
+		for d := range 90 {
+			h := float64(d%7) * 6 / 6
+			days = append(days, heatPumpDay{Date: today.AddDate(0, 0, -90+d), HDD: h, Energy: 2.4 + 0.45*h + 0.3*math.Sin(float64(d)*1.7)}) // the warm season's flatter slope
 		}
-		fit, reason := fitHeatPump(append(slices.Clone(old), recent...), today)
+		fit, reason := fitHeatPump(days, today)
 		assert.Empty(t, reason)
-		assert.Equal(t, 70, fit.Days)
-		assert.Equal(t, 170, fit.Valid)
-		assert.InDelta(t, 1, fit.B, 1e-9)
+		assert.Equal(t, 300, fit.Days, "all valid days")
+		assert.Equal(t, 300, fit.Valid)
 
-		// 59 recent days: everything counts (expanding window)
-		fit, _ = fitHeatPump(append(slices.Clone(old), recent[:59]...), today)
-		assert.Equal(t, 159, fit.Days)
+		var recent []heatPumpDay
+		for _, d := range days[210:] {
+			recent = append(recent, d)
+		}
+		warm, _ := fitHeatPump(recent, today)
+		assert.Less(t, warm.B, 0.6, "the warm season alone looks flat and weak")
+		assert.Greater(t, fit.B, 1.0, "the all-data slope keeps the winter")
+		assert.Greater(t, fit.MaxHDD, 11.9, "so the clamp and cap cover a cold snap")
+		assert.Greater(t, fit.MaxDaily, 15.0)
+	})
+
+	t.Run("only the last 400 days", func(t *testing.T) {
+		var days []heatPumpDay
+		for d := range 450 {
+			h := float64(d % 10)
+			days = append(days, heatPumpDay{Date: today.AddDate(0, 0, -450+d), HDD: h, Energy: 2 + h})
+		}
+		fit, _ := fitHeatPump(days, today)
+		assert.Equal(t, 400, fit.Days)
 	})
 }
 

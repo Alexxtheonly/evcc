@@ -74,8 +74,7 @@ type HeatPumpThresholds struct {
 	MinR           float64 `json:"minR"`
 	MinSlope       float64 `json:"minSlope"`
 	MaxSlope       float64 `json:"maxSlope"`
-	RecentDays     int     `json:"recentDays"`
-	RecentMinDays  int     `json:"recentMinDays"`
+	FitDays        int     `json:"fitDays"`
 	ShapeDays      int     `json:"shapeDays"`
 	ShapeMinDays   int     `json:"shapeMinDays"`
 	DayFill        float64 `json:"dayFill"`
@@ -109,7 +108,7 @@ func (site *Site) heatPump(now time.Time) HeatPumpStatus {
 		Meter: cfg.HeatPumpMeter,
 		Thresholds: HeatPumpThresholds{
 			MinDays: heatPumpMinDays, MinHDDRange: heatPumpMinHDDRange, MinR: heatPumpMinR, MinSlope: heatPumpMinSlope, MaxSlope: heatPumpMaxSlope,
-			RecentDays: heatPumpRecentDays, RecentMinDays: heatPumpRecentMin, ShapeDays: heatPumpShapeDays, ShapeMinDays: heatPumpShapeMinDays,
+			FitDays: heatPumpFitDays, ShapeDays: heatPumpShapeDays, ShapeMinDays: heatPumpShapeMinDays,
 			DayFill: heatingDegreeDayFill, SigmaK: heatPumpSigmaK, MaxMeterAgeMin: heatPumpMaxMeterAge.Minutes(), MaxDropped: heatPumpMaxDropped,
 			BaseTemp: heatingDegreeBaseTemp,
 		},
