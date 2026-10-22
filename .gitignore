@@ -53,3 +53,4 @@ asset-stats.html
 *storybook.log
 /graphify-out/
 .graphifyignore
+__pycache__/
