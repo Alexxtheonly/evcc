@@ -153,3 +153,80 @@ func TestCheapBandReferenceSettings(t *testing.T) {
 	}
 	assert.Equal(t, 90, *site.GetEnergyIntelligenceSettings().CheapBandDays)
 }
+
+// TestHeatPumpSettings: heatPumpModel reads as shadow and heatPumpMeter as empty for settings
+// saved before they existed, both persist through the energy settings endpoint, bad values are
+// rejected and a save that does not mention them resets them to those defaults only.
+func TestHeatPumpSettings(t *testing.T) {
+	site := core.NewSite()
+	t.Cleanup(func() { _ = settings.SetJson("energyIntelligence", map[string]any{"settlementMode": "simulation"}) })
+
+	require.NoError(t, settings.SetJson("energyIntelligence", map[string]any{"robust": true, "settlementMode": "interval", "heatingDegree": "on"}))
+	old := site.GetEnergyIntelligenceSettings()
+	assert.Equal(t, "shadow", old.HeatPumpModel)
+	assert.Empty(t, old.HeatPumpMeter)
+	assert.Equal(t, "on", old.HeatingDegree, "the older setting is untouched")
+
+	put := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPut, "/api/config/energyintelligence", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		energyIntelligenceHandler(site)(w, r)
+		return w
+	}
+	status := func() map[string]any {
+		w := httptest.NewRecorder()
+		heatPumpHandler(site)(w, httptest.NewRequest(http.MethodGet, "/api/energyplan/heatpump", nil))
+		require.Equal(t, http.StatusOK, w.Code)
+		var res map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+		return res
+	}
+
+	st := status()
+	assert.Equal(t, "shadow", st["mode"])
+	assert.Equal(t, "", st["meter"])
+	model := st["model"].(map[string]any)
+	assert.Equal(t, false, model["open"])
+	assert.Equal(t, "no_meter", model["reason"])
+	assert.Equal(t, []any{}, st["days"])
+	assert.Contains(t, st, "thresholds")
+	assert.Contains(t, st, "decision")
+
+	for _, mode := range []string{"on", "off", "shadow"} {
+		w := put(`{"robust":true,"settlementMode":"interval","heatPumpModel":"` + mode + `","heatPumpMeter":"db:19"}`)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		assert.Contains(t, w.Body.String(), `"heatPumpModel":"`+mode+`"`)
+		assert.Contains(t, w.Body.String(), `"heatPumpMeter":"db:19"`)
+		got := site.GetEnergyIntelligenceSettings()
+		assert.Equal(t, mode, got.HeatPumpModel)
+		assert.Equal(t, "db:19", got.HeatPumpMeter)
+		assert.True(t, got.Robust, "other settings preserved")
+		st = status()
+		assert.Equal(t, mode, st["mode"])
+		assert.Equal(t, "db:19", st["meter"])
+	}
+
+	// the UI sends the whole object back: the new fields survive a save that carries them
+	got := site.GetEnergyIntelligenceSettings()
+	b, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, put(string(b)).Code)
+	assert.Equal(t, got, site.GetEnergyIntelligenceSettings())
+
+	// a client that does not know them gets the defaults
+	require.Equal(t, http.StatusOK, put(`{"settlementMode":"interval"}`).Code)
+	reset := site.GetEnergyIntelligenceSettings()
+	assert.Equal(t, "shadow", reset.HeatPumpModel)
+	assert.Empty(t, reset.HeatPumpMeter)
+
+	require.Equal(t, http.StatusOK, put(`{"settlementMode":"interval","heatPumpModel":"on","heatPumpMeter":"db:19"}`).Code)
+	for _, bad := range []string{
+		`"heatPumpModel":"yes"`, `"heatPumpModel":true`, `"heatPumpModel":"ON"`, `"heatPumpMeter":7`,
+		`"heatPumpMeter":"` + strings.Repeat("x", 129) + `"`,
+	} {
+		assert.Equal(t, http.StatusBadRequest, put(`{"settlementMode":"interval",`+bad+`}`).Code, bad)
+	}
+	assert.Equal(t, "on", site.GetEnergyIntelligenceSettings().HeatPumpModel, "a rejected save changes nothing")
+	assert.Equal(t, "db:19", site.GetEnergyIntelligenceSettings().HeatPumpMeter)
+	assert.Equal(t, http.StatusOK, put(`{"settlementMode":"interval","heatPumpMeter":"`+strings.Repeat("x", 128)+`"}`).Code, "128 characters are allowed")
+}

@@ -96,3 +96,11 @@ func heatingDegreeHandler(site *core.Site) http.HandlerFunc {
 		jsonWrite(w, site.HeatingDegree())
 	}
 }
+
+// heatPumpHandler returns the heat-pump split's gates, fit, per-date forecast and shadow
+// scores. Read-only; the setting lives in energyintelligence.
+func heatPumpHandler(site *core.Site) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jsonWrite(w, site.HeatPump())
+	}
+}

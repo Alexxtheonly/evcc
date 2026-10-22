@@ -302,6 +302,7 @@ func (s *HTTPd) RegisterSystemHandler(site *core.Site, pub publisher, cache *uti
 			"state":         {"GET", "/state", stateHandler(cache)},
 			"solarshading":  {"GET", "/energyplan/solarshading", solarShadingHandler(site)},
 			"heatingdegree": {"GET", "/energyplan/heatingdegree", heatingDegreeHandler(site)},
+			"heatpump":      {"GET", "/energyplan/heatpump", heatPumpHandler(site)},
 		}
 
 		for _, r := range routes {
