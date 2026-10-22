@@ -117,6 +117,14 @@ func TestQueryHeatPumpBackfillAndTemperatureHistory(t *testing.T) {
 	temps, err := QueryTemperatureHistory(at)
 	require.NoError(t, err)
 	assert.Equal(t, map[int64]float64{at.Unix(): 1.5, at.Add(15 * time.Minute).Unix(): -4}, temps, "a recorded reading wins over the backfill")
+
+	// flagged recordings are unknown: the backfill (or nothing) stays
+	bad := 30.0
+	require.NoError(t, db.Instance.Create(&meter{Meter: temp.Id, Timestamp: at.Add(15 * time.Minute).Unix(), SocTemp: &bad, Incomplete: true}).Error)
+	require.NoError(t, db.Instance.Create(&meter{Meter: temp.Id, Timestamp: at.Add(30 * time.Minute).Unix(), SocTemp: &bad, Recovered: true}).Error)
+	temps, err = QueryTemperatureHistory(at)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]float64{at.Unix(): 1.5, at.Add(15 * time.Minute).Unix(): -4}, temps)
 }
 
 func TestHomeForecastNonHeatPump(t *testing.T) {

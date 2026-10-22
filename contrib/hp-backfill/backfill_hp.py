@@ -43,7 +43,7 @@ import statistics
 import sys
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -230,7 +230,7 @@ async def fetch_hours(url: str, token: str, sensors: list[str], start: datetime)
         if json.loads(await ws.recv()).get("type") != "auth_ok":
             raise SystemExit("Home Assistant authentication failed")
         await ws.send(json.dumps({
-            "id": 1, "type": "recorder/statistics_during_period", "start_time": start.astimezone(timezone.utc).isoformat(),
+            "id": 1, "type": "recorder/statistics_during_period", "start_time": start.astimezone(UTC).isoformat(),
             "statistic_ids": sensors, "period": "hour", "types": ["change"],
         }))
         reply = json.loads(await ws.recv())
@@ -255,7 +255,7 @@ def temperature_chunks(start: date, end: date) -> list[tuple[date, date]]:
 def parse_temperature(payload: dict) -> dict[int, float | None]:
     hourly = payload["hourly"]
     return {
-        int(datetime.fromisoformat(t).replace(tzinfo=timezone.utc).timestamp()): v
+        int(datetime.fromisoformat(t).replace(tzinfo=UTC).timestamp()): v
         for t, v in zip(hourly["time"], hourly["temperature_2m"])
     }
 
@@ -296,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(args, fetch_ha=None, fetch_temp=fetch_temperature, now: datetime | None = None) -> int:
     not_before = parse_not_before(args.not_before)
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     uri = f"{args.db.resolve().as_uri()}?mode={'ro' if args.dry_run else 'rw'}"
     try:
@@ -317,8 +317,8 @@ def run(args, fetch_ha=None, fetch_temp=fetch_temperature, now: datetime | None 
         "not_before": not_before.isoformat(), "hours_received": len(imports), "hours_accepted": len(accepted), "refused": refused,
     }
     if accepted:
-        report["from"] = datetime.fromtimestamp(min(accepted), timezone.utc).isoformat()
-        report["to"] = datetime.fromtimestamp(max(accepted) + HOUR, timezone.utc).isoformat()
+        report["from"] = datetime.fromtimestamp(min(accepted), UTC).isoformat()
+        report["to"] = datetime.fromtimestamp(max(accepted) + HOUR, UTC).isoformat()
 
     if not accepted:
         report["verdict"] = "REFUSED: no hour passed the checks (missing sensor, or only invalid data): nothing written"
@@ -341,7 +341,7 @@ def run(args, fetch_ha=None, fetch_temp=fetch_temperature, now: datetime | None 
     temperature = None
     if args.temperature:
         end = (now - timedelta(days=1)).date()
-        hours = fetch_temp(args.temperature_url, args.lat, args.lon, not_before.astimezone(timezone.utc).date(), end)
+        hours = fetch_temp(args.temperature_url, args.lat, args.lon, not_before.astimezone(UTC).date(), end)
         temperature = plan_temperature(hours)
         report["temperature_slots_planned"] = len(temperature)
 

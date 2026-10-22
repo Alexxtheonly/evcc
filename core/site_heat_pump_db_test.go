@@ -379,6 +379,43 @@ func TestHeatPumpSplitGates(t *testing.T) {
 		assert.Equal(t, 3, f.site.heatPump(now).Model.ShapeDays)
 	})
 
+	t.Run("the evening of today: a tariff without past hours is filled from the recorded temperature", func(t *testing.T) {
+		fromNow := trueRates(5, func(now time.Time) time.Time { return now.Truncate(tariff.SlotDuration) })
+		f := seedHeatPump(t, now, 45, fromNow, nil)
+		profile, active, start := f.profileFor(t, 2*96)
+		series, _ := f.site.heatPumpSplit(heatPumpShadow, "db:19", now, profile, active)
+		require.NotNil(t, series)
+		for i := range series {
+			ts := start.Add(time.Duration(i) * tariff.SlotDuration)
+			require.InDelta(t, hpNonHP(slotIndex(ts))+hpTruthHP(ts), series[i], 1e-9, "slot %s", ts)
+		}
+
+		// the recorded morning is flagged unusable: today keeps the active forecast, tomorrow is modelled
+		f2 := seedHeatPump(t, now, 45, fromNow, nil)
+		require.NoError(t, db.Instance.Exec(`UPDATE meters SET incomplete = 1 WHERE soc_temp IS NOT NULL AND ts >= ?`, startOfToday(now).Unix()).Error)
+		profile, active, _ = f2.profileFor(t, 2*96)
+		series, _ = f2.site.heatPumpSplit(heatPumpShadow, "db:19", now, profile, active)
+		require.NotNil(t, series)
+		days := f2.site.heatPump(now).Days
+		require.Len(t, days, 3)
+		assert.False(t, days[0].Modelled)
+		assert.Equal(t, heatPumpTemperatureStale, days[0].Reason)
+		assert.True(t, days[1].Modelled)
+		assert.Equal(t, active[0], series[0])
+	})
+
+	t.Run("a missing meter is remembered for the retry interval, not queried every run", func(t *testing.T) {
+		f := seedHeatPump(t, now, 45, rates, nil)
+		_, reason := run(t, f, "db:20")
+		assert.Equal(t, heatPumpNoMeter, reason)
+		require.NoError(t, db.Instance.Exec(`INSERT INTO entities ("group", name, title) VALUES ('meter', 'db:20', 'late')`).Error)
+		_, reason = run(t, f, "db:20")
+		assert.Equal(t, heatPumpNoMeter, reason, "still cached")
+		f.site.heatPumpDailyState.at = time.Now().Add(-2 * heatPumpRetry)
+		_, reason = run(t, f, "db:20")
+		assert.NotEqual(t, heatPumpNoMeter, reason, "found after the retry interval")
+	})
+
 	t.Run("a date the temperature forecast does not cover keeps the active forecast", func(t *testing.T) {
 		short := func(now time.Time) api.Rates {
 			return trueRates(3, startOfToday)(now)[:96+96+40] // the third date has 40 slots of 96
@@ -783,7 +820,9 @@ func TestHeatPumpStatusJSON(t *testing.T) {
 	assert.InDelta(t, hpTruthB, fit["b"], 1e-9)
 	assert.InDelta(t, hpTruthA, fit["a"], 1e-9)
 	assert.InDelta(t, 1, fit["r"], 1e-9)
-	for _, key := range []string{"days", "hddRange", "validDays"} {
+	assert.InDelta(t, fit["maxHDD"].(float64)+3, fit["hddClamp"], 1e-9)
+	assert.InDelta(t, fit["maxDailyKWh"].(float64)*1.5, fit["dailyCapKWh"], 1e-9)
+	for _, key := range []string{"days", "hddRange", "validDays", "maxHDD", "hddClamp", "maxDailyKWh", "dailyCapKWh"} {
 		assert.Contains(t, fit, key)
 	}
 	for _, key := range []string{"shapeDays", "droppedSlots", "shapeLearned"} {
@@ -791,7 +830,7 @@ func TestHeatPumpStatusJSON(t *testing.T) {
 	}
 	days := got["days"].([]any)
 	require.NotEmpty(t, days)
-	for _, key := range []string{"date", "heatPumpKWh", "nonHeatPumpKWh", "totalKWh", "hdd"} {
+	for _, key := range []string{"date", "heatPumpKWh", "nonHeatPumpKWh", "totalKWh", "hdd", "extrapolated"} {
 		assert.Contains(t, days[0], key)
 	}
 	assert.Contains(t, got["thresholds"], "minDays")

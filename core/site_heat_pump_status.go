@@ -48,6 +48,11 @@ type HeatPumpFit struct {
 	Days      int     `json:"days"`
 	HDDRange  float64 `json:"hddRange"`
 	ValidDays int     `json:"validDays"`
+	// the forecast is not extrapolated beyond these: heating-degree clamp (K), daily energy cap (kWh)
+	MaxHDD      float64 `json:"maxHDD"`
+	HDDClamp    float64 `json:"hddClamp"`
+	MaxDailyKWh float64 `json:"maxDailyKWh"`
+	DailyCapKWh float64 `json:"dailyCapKWh"`
 }
 
 // HeatPumpModelStatus is the state of the model's gates.
@@ -130,7 +135,8 @@ func (site *Site) heatPump(now time.Time) HeatPumpStatus {
 			}
 			res.Model.ShapeDays, res.Model.ShapeLearned = a.ShapeDays, a.ShapeLearned
 			if a.Reason != heatPumpNoMeter && a.Reason != heatPumpError {
-				res.Model.Fit = &HeatPumpFit{A: a.Fit.A, B: a.Fit.B, R: a.Fit.R, Days: a.Fit.Days, HDDRange: a.Fit.HDDRange, ValidDays: a.Fit.Valid}
+				res.Model.Fit = &HeatPumpFit{A: a.Fit.A, B: a.Fit.B, R: a.Fit.R, Days: a.Fit.Days, HDDRange: a.Fit.HDDRange, ValidDays: a.Fit.Valid,
+					MaxHDD: a.Fit.MaxHDD, HDDClamp: a.Fit.hddClamp(), MaxDailyKWh: a.Fit.MaxDaily, DailyCapKWh: a.Fit.dailyCap()}
 			}
 		}
 	}

@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("backfill_hp", Path(__file__).with_name("backfill_hp.py"))
@@ -131,7 +131,7 @@ class RefusalTest(unittest.TestCase):
 
     def test_bound_is_local_midnight(self):
         self.assertEqual(bf.VALID_FROM.utcoffset(), timedelta(hours=1))
-        self.assertEqual(bf.VALID_FROM.astimezone(timezone.utc).hour, 23)
+        self.assertEqual(bf.VALID_FROM.astimezone(UTC).hour, 23)
 
 
 class PlanTest(unittest.TestCase):
@@ -179,7 +179,7 @@ class PlanTest(unittest.TestCase):
 
     def test_open_meteo_payload(self):
         payload = {"hourly": {"time": ["2025-12-01T00:00", "2025-12-01T01:00"], "temperature_2m": [1.5, None]}}
-        self.assertEqual(bf.parse_temperature(payload), {int(datetime(2025, 12, 1, tzinfo=timezone.utc).timestamp()): 1.5, int(datetime(2025, 12, 1, 1, tzinfo=timezone.utc).timestamp()): None})
+        self.assertEqual(bf.parse_temperature(payload), {int(datetime(2025, 12, 1, tzinfo=UTC).timestamp()): 1.5, int(datetime(2025, 12, 1, 1, tzinfo=UTC).timestamp()): None})
 
 
 class DatabaseTest(unittest.TestCase):
@@ -281,7 +281,7 @@ class DatabaseTest(unittest.TestCase):
 
     def test_temperature_is_idempotent_and_separate(self):
         make_db(self.path)
-        now = datetime(2025, 12, 3, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2025, 12, 3, 12, 0, tzinfo=UTC)
         seen = []
 
         def temp(url, lat, lon, start, end):

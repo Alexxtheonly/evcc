@@ -85,7 +85,7 @@ func QueryHeatPumpBackfill(id int, from time.Time) ([]SlotValue, error) {
 }
 
 // QueryTemperatureHistory returns the outdoor temperature per slot from from: backfilled
-// slots, replaced by the recorded Temperature meter wherever it has a reading.
+// slots, replaced by the recorded Temperature meter wherever it has a clean reading (not recovered, not incomplete).
 func QueryTemperatureHistory(from time.Time) (map[int64]float64, error) {
 	res := make(map[int64]float64)
 	if db.Instance.Migrator().HasTable(temperatureBackfill{}.TableName()) {
@@ -101,7 +101,7 @@ func QueryTemperatureHistory(from time.Time) (map[int64]float64, error) {
 	}
 	var rows []SlotValue
 	if err := db.Instance.Raw(`SELECT m.ts AS ts, m.soc_temp AS value FROM meters m JOIN entities e ON e.id = m.meter AND e."group" = ?
-		WHERE m.ts >= ? AND m.soc_temp IS NOT NULL`, Temperature, from.Unix()).Scan(&rows).Error; err != nil {
+		WHERE m.ts >= ? AND m.soc_temp IS NOT NULL AND COALESCE(m.recovered,0) = 0 AND COALESCE(m.incomplete,0) = 0`, Temperature, from.Unix()).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, r := range rows {

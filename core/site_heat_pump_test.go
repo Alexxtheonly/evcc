@@ -393,7 +393,7 @@ func hpCompose(a *heatPumpAnalysis, start time.Time, n int, nonHP float64, rates
 	for i := range flat {
 		flat[i] = metrics.HomeForecastSlot{Start: profile[i].Start, Low: nonHP / 2, Base: nonHP, High: nonHP * 2}
 	}
-	return composeHeatPump(a, heatPumpInput{Start: start, NonHP: flat, ProfileBand: profile, Active: active, Rates: rates, Loc: loc})
+	return composeHeatPump(a, heatPumpInput{Start: start, NonHP: flat, ProfileBand: profile, Active: active, Rates: rates, Now: start, Loc: loc})
 }
 
 func TestComposeHeatPump(t *testing.T) {
@@ -410,7 +410,7 @@ func TestComposeHeatPump(t *testing.T) {
 	for i := range shape {
 		shape[i] /= total
 	}
-	a := &heatPumpAnalysis{Shape: shape, Fit: heatPumpFit{A: 2, B: 1.3}}
+	a := &heatPumpAnalysis{Shape: shape, Fit: heatPumpFit{A: 2, B: 1.3, MaxHDD: 30, MaxDaily: 200}}
 	constant := func(from time.Time, n int, temp float64) api.Rates {
 		var res api.Rates
 		for i := range n {
@@ -460,7 +460,7 @@ func TestComposeHeatPump(t *testing.T) {
 
 	t.Run("a milder day gets less, never below zero", func(t *testing.T) {
 		day := time.Date(2026, 6, 10, 0, 0, 0, 0, loc)
-		warm := &heatPumpAnalysis{Shape: shape, Fit: heatPumpFit{A: -4, B: 1}}
+		warm := &heatPumpAnalysis{Shape: shape, Fit: heatPumpFit{A: -4, B: 1, MaxHDD: 30, MaxDaily: 200}}
 		series, band, days := hpCompose(warm, day, 96, 100, constant(day, 96, 25), loc)
 		assert.Zero(t, days[0].HeatPump, "a + b x 0 is negative: clamped")
 		for i := range series {
@@ -482,7 +482,7 @@ func TestComposeHeatPump(t *testing.T) {
 			assert.GreaterOrEqual(t, band[i].Low, 0.0)
 		}
 		// a high shape share must not push Low below the profile's low
-		tiny := &heatPumpAnalysis{Shape: shape, Fit: heatPumpFit{A: 0, B: 3}}
+		tiny := &heatPumpAnalysis{Shape: shape, Fit: heatPumpFit{A: 0, B: 3, MaxHDD: 30, MaxDaily: 200}}
 		_, band, _ = hpCompose(tiny, day, 96, 100, constant(day, 96, 14.5), loc)
 		for _, b := range band {
 			assert.GreaterOrEqual(t, b.Low, 50.0)
@@ -522,8 +522,149 @@ func TestComposeHeatPump(t *testing.T) {
 		assert.InDelta(t, want, sum, 1e-9)
 		assert.Less(t, sum, 2+13.0)
 
-		// rates that only begin at the start still cover the asked-for slots
+		// rates that only begin at the start cover 16 of 96 slots of the date: not modelled
 		_, _, days = hpCompose(a, start, 16, 0, constant(start, 32, 5), loc)
-		assert.True(t, days[0].Modelled)
+		assert.False(t, days[0].Modelled)
+		assert.Equal(t, heatPumpTemperatureStale, days[0].Reason)
 	})
+}
+
+func TestComposeHeatPumpEveningOfToday(t *testing.T) {
+	loc := berlin(t)
+	var shape [96]float64
+	for i := range shape {
+		shape[i] = 1.0 / 96
+	}
+	a := &heatPumpAnalysis{Shape: shape, Fit: heatPumpFit{A: 2, B: 1, MaxHDD: 30, MaxDaily: 100}}
+	midnight := time.Date(2026, 2, 10, 0, 0, 0, 0, loc)
+	now := midnight.Add(20*time.Hour + 7*time.Minute)
+	start := now.Truncate(tariff.SlotDuration)
+	temp := func(t time.Time) float64 { return float64(slotIndex(t)%10) - 2 }
+	var rates api.Rates // the tariff has no hours before now, and runs into tomorrow
+	for i := range 40 {
+		s := start.Add(time.Duration(i) * tariff.SlotDuration)
+		rates = append(rates, api.Rate{Start: s, End: s.Add(tariff.SlotDuration), Value: temp(s)})
+	}
+	history := map[int64]float64{}
+	for ts := midnight; ts.Before(start); ts = ts.Add(tariff.SlotDuration) {
+		history[ts.Unix()] = temp(ts)
+	}
+	input := func(history map[int64]float64) heatPumpInput {
+		n := 16
+		nonHP := make([]metrics.HomeForecastSlot, n)
+		for i := range nonHP {
+			nonHP[i] = metrics.HomeForecastSlot{Start: start.Add(time.Duration(i) * tariff.SlotDuration), Low: 10, Base: 20, High: 30}
+		}
+		return heatPumpInput{Start: start, NonHP: nonHP, ProfileBand: nonHP, Active: make([]float64, n), Rates: rates, Now: now, History: history, Loc: loc}
+	}
+
+	_, _, days := composeHeatPump(a, input(history))
+	require.Len(t, days, 1)
+	require.True(t, days[0].Modelled, days[0].Reason)
+	var hdd float64
+	for ts := midnight; ts.Before(midnight.AddDate(0, 0, 1)); ts = ts.Add(tariff.SlotDuration) {
+		hdd += heatingDegree(temp(ts))
+	}
+	assert.InDelta(t, hdd/96, days[0].HDD, 1e-12, "recorded morning plus forecast evening")
+
+	for name, h := range map[string]map[int64]float64{
+		"no history": nil,
+		"a third of the elapsed hours": func() map[int64]float64 {
+			m := map[int64]float64{}
+			for ts, v := range history {
+				if ts/900%3 == 0 {
+					m[ts] = v
+				}
+			}
+			return m
+		}(),
+	} {
+		series, _, days := composeHeatPump(a, input(h))
+		assert.False(t, days[0].Modelled, name)
+		assert.Equal(t, heatPumpTemperatureStale, days[0].Reason, name)
+		for _, v := range series {
+			assert.Zero(t, v, "the active value is kept")
+		}
+	}
+
+	// slots not yet elapsed are never filled from history
+	future := map[int64]float64{}
+	for ts := start; ts.Before(midnight.AddDate(0, 0, 1)); ts = ts.Add(tariff.SlotDuration) {
+		future[ts.Unix()] = 5
+	}
+	for ts, v := range history {
+		future[ts] = v
+	}
+	in := input(future)
+	in.Rates = in.Rates[:4]
+	in.NonHP, in.ProfileBand, in.Active = in.NonHP[:4], in.ProfileBand[:4], in.Active[:4]
+	_, _, days = composeHeatPump(a, in)
+	assert.False(t, days[0].Modelled, "the 4 forecast slots are all asked for, but the rest of the evening is unknown")
+}
+
+func TestComposeHeatPumpDoesNotExtrapolateTheColdSnap(t *testing.T) {
+	loc := berlin(t)
+	var shape [96]float64
+	for i := range shape {
+		shape[i] = 1.0 / 96
+	}
+	day := time.Date(2026, 2, 10, 0, 0, 0, 0, loc)
+	flat := func(temp float64) api.Rates {
+		var res api.Rates
+		for i := range 96 {
+			s := day.Add(time.Duration(i) * tariff.SlotDuration)
+			res = append(res, api.Rate{Start: s, End: s.Add(tariff.SlotDuration), Value: temp})
+		}
+		return res
+	}
+	// fit over 0-12 K, b = 3, the largest day 36 kWh
+	fit := heatPumpFit{A: 0, B: 3, HDDRange: 12, MaxHDD: 12, MaxDaily: 36}
+	total := func(a heatPumpFit, temp float64) (heatPumpPlanDay, float64) {
+		series, _, days := hpCompose(&heatPumpAnalysis{Shape: shape, Fit: a}, day, 96, 0, flat(temp), loc)
+		var sum float64
+		for _, v := range series {
+			sum += v
+		}
+		return days[0], sum
+	}
+
+	d, sum := total(fit, -10) // HDD 25
+	assert.InDelta(t, 25, d.HDD, 1e-12, "the forecast heating-degree is reported as it is")
+	assert.True(t, d.Extrapolated)
+	assert.InDelta(t, 3*15, d.HeatPump, 1e-9, "clamped to the fit's 12 K + 3 K, not 3 x 25")
+	assert.InDelta(t, 45, sum, 1e-9)
+
+	d, _ = total(fit, 5) // HDD 10, inside the fit
+	assert.False(t, d.Extrapolated)
+	assert.InDelta(t, 30, d.HeatPump, 1e-9)
+
+	d, _ = total(fit, 3) // HDD 12 exactly: the edge is not extrapolation
+	assert.False(t, d.Extrapolated)
+	d, _ = total(fit, 0) // HDD 15: at the clamp
+	assert.False(t, d.Extrapolated)
+	assert.InDelta(t, 45, d.HeatPump, 1e-9)
+
+	// the intercept lifts the clamped day above 1.5 x the largest day: capped at 54 kWh
+	high := heatPumpFit{A: 20, B: 3, HDDRange: 12, MaxHDD: 12, MaxDaily: 36}
+	d, sum = total(high, -10)
+	assert.True(t, d.Extrapolated)
+	assert.InDelta(t, 54, d.HeatPump, 1e-9)
+	assert.InDelta(t, 54, sum, 1e-9)
+
+	// a day inside the HDD clamp but over the cap is capped too
+	d, _ = total(heatPumpFit{A: 0, B: 3, MaxHDD: 12, MaxDaily: 20}, 0)
+	assert.True(t, d.Extrapolated)
+	assert.InDelta(t, 30, d.HeatPump, 1e-9)
+
+	// the fit records what it saw
+	days := []heatPumpDay{}
+	for i := range 20 {
+		days = append(days, heatPumpDay{Date: day.AddDate(0, 0, i-30), HDD: float64(i) * 12 / 19, Energy: 2.9 * float64(i) * 12 / 19})
+	}
+	f, reason := fitHeatPump(days, day)
+	assert.Empty(t, reason)
+	assert.InDelta(t, 12, f.MaxHDD, 1e-9)
+	assert.InDelta(t, 34.8, f.MaxDaily, 1e-9)
+	assert.InDelta(t, 15, f.hddClamp(), 1e-9)
+	assert.InDelta(t, 52.2, f.dailyCap(), 1e-9)
 }
