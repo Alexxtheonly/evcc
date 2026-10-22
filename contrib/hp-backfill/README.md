@@ -28,14 +28,15 @@ entity id and stops with a clear error if evcc has no such meter yet. Sensor ids
 (default 49.1579 / 9.1737, the same as the temperature forecast) and the cross-check limits are
 arguments; see `--help`.
 
-Exit codes: 0 ok, 2 cross-check failed (nothing written), 1 any other error.
+Exit codes: 0 ok, 2 cross-check failed (nothing written), 3 no hour passed the checks (missing sensor or
+only invalid data; also with `--dry-run`), 1 any other error.
 
 ## Safety rules (enforced in code and tested)
 
 - No hour before 2025-11-17 00:00 Europe/Berlin is ever written. `--not-before` can move the
   bound later, never earlier. The Shelly's earlier data shows phantom returned energy and is invalid.
-- An hour is refused when its returned energy changed by more than 0.001 kWh or has no returned
-  value (it cannot be verified), or when its import change is negative, missing or not finite.
+- An hour is refused when its returned energy changed outside [0, 0.001] kWh (a negative change is a
+  counter reset) or has no returned value (it cannot be verified), or when its import change is negative, missing or not finite.
   Refusals are counted by reason in the report (`refused`).
 - Each accepted hour becomes four equal slots. Slots where `meters` already holds a clean heat-pump
   row (not recovered, not incomplete) are skipped: real data wins.
@@ -52,8 +53,11 @@ Exit codes: 0 ok, 2 cross-check failed (nothing written), 1 any other error.
 
 ```sh
 sqlite3 /tmp/evcc-copy.db "select count(*), min(ts), max(ts) from meters_backfill"
+# rows overlapping a clean real meters row are allowed (e.g. after a later rerun, once evcc recorded
+# those slots): not an error. The model takes a day from meters when it is complete there, else wholly
+# from the backfill, never a mix. On a first run on a copy expect 0 here.
 sqlite3 /tmp/evcc-copy.db "select count(*) from meters_backfill b join meters m on m.meter=b.meter and m.ts=b.ts \
-    where coalesce(m.recovered,0)=0 and coalesce(m.incomplete,0)=0"   # expect 0: real slots are not backfilled
+    where coalesce(m.recovered,0)=0 and coalesce(m.incomplete,0)=0"
 sqlite3 /tmp/evcc-copy.db "select min(ts) >= strftime('%s','2025-11-16 23:00:00') from meters_backfill"  # expect 1
 # the meters table is byte-for-byte the same rows as before
 ```

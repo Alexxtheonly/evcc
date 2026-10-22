@@ -100,6 +100,14 @@ class RefusalTest(unittest.TestCase):
         self.assertEqual(sorted(accepted), [START, START + 7200])
         self.assertEqual(refused["returned_energy"], 2)
 
+    def test_negative_returned_change_is_unverifiable(self):
+        returned = hours(3, 0.0)
+        returned[START + 3600] = -0.0001
+        returned[START + 7200] = -40.0
+        accepted, refused = self.accept(hours(3), returned)
+        self.assertEqual(list(accepted), [START])
+        self.assertEqual(refused["returned_energy"], 2)
+
     def test_unverifiable_and_invalid_hours(self):
         imports = {START: 1.0, START + 3600: -0.5, START + 7200: math.nan, START + 10800: math.inf, START + 14400: None, START + 18000: 1.0}
         returned = {START: 0.0, START + 3600: 0.0, START + 7200: 0.0, START + 10800: 0.0, START + 14400: 0.0}
@@ -221,6 +229,16 @@ class DatabaseTest(unittest.TestCase):
         code, third = self.run_with(self.ha(48, 2.0))
         self.assertEqual(third["changed"]["meters_backfill"], 48 * 4 - 1, "a changed value is updated, not duplicated")
         self.assertEqual(len(table_rows(self.path, "meters_backfill")), 48 * 4 - 1)
+
+    def test_no_accepted_hours_exits_3_also_in_dry_run(self):
+        make_db(self.path)
+        before = self.path.read_bytes()
+        for kw in ({}, {"dry_run": True}):
+            for ha in ({IMPORT: hours(5), RETURNED: {}}, {IMPORT: {}, RETURNED: hours(5, 0.0)}, {}, {IMPORT: hours(5), RETURNED: hours(5, 1.0)}):
+                code, report = self.run_with(ha, **kw)
+                self.assertEqual(code, 3)
+                self.assertEqual(report["hours_accepted"], 0)
+        self.assertEqual(self.path.read_bytes(), before)
 
     def test_dry_run_writes_nothing_not_even_the_tables(self):
         make_db(self.path)

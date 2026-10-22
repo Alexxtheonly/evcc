@@ -13,7 +13,7 @@ heat-pump forecast fits its daily model on both. This tool:
      *returned* energy via WebSocket `recorder/statistics_during_period`;
   2. refuses every hour before --not-before (default and floor 2025-11-17 00:00
      Europe/Berlin: the Shelly's earlier data is invalid), every hour whose returned energy
-     changed by more than 0.001 kWh or is missing, and every hour with a negative, missing
+     changed by more than 0.001 kWh, is negative (counter reset) or is missing, and every hour with a negative, missing
      or non-finite change; the counts are reported;
   3. cross-checks the accepted hours against evcc's own `meters` rows of the heat pump once
      at least --min-overlap-days days of complete hours overlap: if the hourly sums disagree
@@ -119,7 +119,7 @@ def accept_hours(imports: dict, returned: dict, not_before: int) -> tuple[dict[i
             refused["invalid_change"] += 1
         elif hour not in returned or not finite(returned[hour]):
             refused["returned_missing"] += 1
-        elif returned[hour] > RETURNED_LIMIT:
+        elif not 0 <= returned[hour] <= RETURNED_LIMIT:  # negative: a counter reset, unverifiable
             refused["returned_energy"] += 1
         else:
             accepted[hour] = float(change)
@@ -310,8 +310,6 @@ def run(args, fetch_ha=None, fetch_temp=fetch_temperature, now: datetime | None 
         fetch_ha = lambda sensors, start: asyncio.run(fetch_hours(args.url, token, sensors, start))
     series = fetch_ha([args.import_sensor, args.returned_sensor], parse_not_before(args.history_from, floor=False))
     imports, returned = series.get(args.import_sensor, {}), series.get(args.returned_sensor, {})
-    if not imports:
-        raise SystemExit("no hourly statistics returned")
     accepted, refused = accept_hours(imports, returned, int(not_before.timestamp()))
 
     report = {
@@ -322,6 +320,11 @@ def run(args, fetch_ha=None, fetch_temp=fetch_temperature, now: datetime | None 
         report["from"] = datetime.fromtimestamp(min(accepted), timezone.utc).isoformat()
         report["to"] = datetime.fromtimestamp(max(accepted) + HOUR, timezone.utc).isoformat()
 
+    if not accepted:
+        report["verdict"] = "REFUSED: no hour passed the checks (missing sensor, or only invalid data): nothing written"
+        print(json.dumps(report, indent=2))
+        print("no accepted hours: check the sensor ids and --not-before", file=sys.stderr)
+        return 3
     real = real_slots(db, entity)
     try:
         report["cross_check"] = cross_check(accepted, real, args.min_overlap_days, args.max_mean_diff, args.max_abs_diff)
