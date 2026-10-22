@@ -760,6 +760,10 @@ func TestHeatPumpStatusJSON(t *testing.T) {
 	assert.False(t, st.Model.Open)
 
 	saveHeatPumpSettings(t, heatPumpOn, "db:19")
+	pending := f.site.heatPump(now)
+	assert.False(t, pending.Model.Open, "the daily fit alone does not say the forecast would run")
+	assert.Equal(t, heatPumpPending, pending.Model.Reason)
+	require.NotNil(t, pending.Model.Fit)
 	start := now.Truncate(tariff.SlotDuration)
 	profile, err := metrics.HomeForecast(start, start.Add(96*tariff.SlotDuration))
 	require.NoError(t, err)

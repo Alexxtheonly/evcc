@@ -393,7 +393,7 @@ func hpCompose(a *heatPumpAnalysis, start time.Time, n int, nonHP float64, rates
 	for i := range flat {
 		flat[i] = metrics.HomeForecastSlot{Start: profile[i].Start, Low: nonHP / 2, Base: nonHP, High: nonHP * 2}
 	}
-	return composeHeatPump(a, start, flat, profile, active, rates, loc)
+	return composeHeatPump(a, heatPumpInput{Start: start, NonHP: flat, ProfileBand: profile, Active: active, Rates: rates, Loc: loc})
 }
 
 func TestComposeHeatPump(t *testing.T) {

@@ -124,7 +124,10 @@ func (site *Site) heatPump(now time.Time) HeatPumpStatus {
 			res.Error = err.Error()
 		}
 		if a != nil {
-			res.Model.Open, res.Model.Reason = a.Open, a.Reason
+			res.Model.Open, res.Model.Reason = false, a.Reason
+			if a.Open {
+				res.Model.Reason = heatPumpPending
+			}
 			res.Model.ShapeDays, res.Model.ShapeLearned = a.ShapeDays, a.ShapeLearned
 			if a.Reason != heatPumpNoMeter && a.Reason != heatPumpError {
 				res.Model.Fit = &HeatPumpFit{A: a.Fit.A, B: a.Fit.B, R: a.Fit.R, Days: a.Fit.Days, HDDRange: a.Fit.HDDRange, ValidDays: a.Fit.Valid}

@@ -66,6 +66,7 @@ const (
 	heatPumpNegativeResidual = "negative_residual"
 	heatPumpProfile          = "profile_unavailable"
 	heatPumpError            = "error"
+	heatPumpPending          = "not_run_yet" // status only: the daily fit is open, no planning run has checked the rest
 )
 
 // heatPumpDay is one complete local date of the fit: the heat pump's energy (kWh) and the
@@ -97,15 +98,14 @@ func heatPumpDays(rows []metrics.HeatPumpRow, backfill []metrics.SlotValue, temp
 		hdd      float64
 		min, max float64
 	}
-	key := func(ts int64) (time.Time, int) {
+	date := func(ts int64) time.Time {
 		t := time.Unix(ts, 0).In(loc)
-		d := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
-		return d, int(d.AddDate(0, 0, 1).Sub(d) / tariff.SlotDuration)
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
 	}
 	add := func(m map[time.Time]*sum, ts int64, v float64) {
-		d, length := key(ts)
+		d := date(ts)
 		if m[d] == nil {
-			m[d] = &sum{length: length}
+			m[d] = &sum{length: int(d.AddDate(0, 0, 1).Sub(d) / tariff.SlotDuration)}
 		}
 		m[d].n++
 		m[d].sum += v
@@ -133,7 +133,7 @@ func heatPumpDays(rows []metrics.HeatPumpRow, backfill []metrics.SlotValue, temp
 		if math.IsNaN(v) || math.IsInf(v, 0) {
 			continue
 		}
-		d, _ := key(ts)
+		d := date(ts)
 		t := temperature[d]
 		if t == nil {
 			t = &temp{min: v, max: v}
@@ -410,12 +410,26 @@ func heatPumpForecastStale(rates api.Rates, now time.Time) bool {
 	return n >= heatPumpConstantSlot && lo == hi
 }
 
-// composeHeatPump forecasts the n slots from start: the non-heat-pump profile plus the heat
+// heatPumpInput is what composeHeatPump forecasts from: the slots from Start with their
+// non-heat-pump profile, and for dates it cannot forecast the active forecast (kWh per
+// slot) and the household profile's band.
+type heatPumpInput struct {
+	Start       time.Time
+	NonHP       []metrics.HomeForecastSlot
+	ProfileBand []metrics.HomeForecastSlot
+	Active      []float64
+	Rates       api.Rates
+	Loc         *time.Location
+}
+
+// composeHeatPump forecasts the slots of in: the non-heat-pump profile plus the heat
 // pump's daily energy a + b x HDD spread by the learned shape. Dates whose forecast covers
-// less than heatingDegreeDayFill of the slots asked for keep active (kWh per slot) and
-// profileBand. series is kWh per slot, band Wh per slot with the heat-pump part widened by
-// the energy of heatPumpSigmaK each side.
-func composeHeatPump(a *heatPumpAnalysis, start time.Time, nonHP, profileBand []metrics.HomeForecastSlot, active []float64, rates api.Rates, loc *time.Location) (series []float64, band []metrics.HomeForecastSlot, days []heatPumpPlanDay) {
+// less than heatingDegreeDayFill of the slots asked for keep in.Active (kWh per slot) and
+// in.ProfileBand. series is kWh per slot, band Wh per slot with the heat-pump part widened by
+// the energy of heatPumpSigmaK each side. Calibrating the band of the sum against its own
+// archived residuals (as calibrateHomeRanges does for the household forecast) is a later step.
+func composeHeatPump(a *heatPumpAnalysis, in heatPumpInput) (series []float64, band []metrics.HomeForecastSlot, days []heatPumpPlanDay) {
+	start, nonHP, profileBand, active, rates, loc := in.Start, in.NonHP, in.ProfileBand, in.Active, in.Rates, in.Loc
 	n := len(nonHP)
 	series, band = make([]float64, n), make([]metrics.HomeForecastSlot, n)
 	type group struct {
@@ -490,20 +504,19 @@ func composeHeatPump(a *heatPumpAnalysis, start time.Time, nonHP, profileBand []
 
 // heatPumpLastState is the outcome of the latest run.
 type heatPumpLastState struct {
-	mu       sync.Mutex
-	updated  time.Time
-	open     bool
-	reason   string
-	days     []heatPumpPlanDay
-	stats    metrics.NonHeatPumpStats
-	analysis *heatPumpAnalysis
+	mu      sync.Mutex
+	updated time.Time
+	open    bool
+	reason  string
+	days    []heatPumpPlanDay
+	stats   metrics.NonHeatPumpStats
 }
 
-func (site *Site) heatPumpRecord(open bool, reason string, a *heatPumpAnalysis, stats metrics.NonHeatPumpStats, days []heatPumpPlanDay) {
+func (site *Site) heatPumpRecord(open bool, reason string, stats metrics.NonHeatPumpStats, days []heatPumpPlanDay) {
 	l := &site.heatPumpLast
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.updated, l.open, l.reason, l.analysis, l.stats, l.days = time.Now(), open, reason, a, stats, days
+	l.updated, l.open, l.reason, l.stats, l.days = time.Now(), open, reason, stats, days
 }
 
 // heatPumpSplit computes the heat-pump forecast of the n request slots from start for
@@ -515,45 +528,48 @@ func (site *Site) heatPumpSplit(mode, ref string, now time.Time, profile *metric
 	if mode == heatPumpOff {
 		return nil, nil
 	}
-	closed := func(a *heatPumpAnalysis, stats metrics.NonHeatPumpStats, reason string) ([]float64, []metrics.HomeForecastSlot) {
-		site.heatPumpRecord(false, reason, a, stats, nil)
+	closed := func(stats metrics.NonHeatPumpStats, reason string) ([]float64, []metrics.HomeForecastSlot) {
+		site.heatPumpRecord(false, reason, stats, nil)
 		return nil, nil
 	}
 	var stats metrics.NonHeatPumpStats
 	if ref == "" {
-		return closed(nil, stats, heatPumpNoMeter)
+		return closed(stats, heatPumpNoMeter)
 	}
 	if db.Instance == nil || profile == nil || len(profile.Rates) != len(active) || len(active) == 0 {
-		return closed(nil, stats, heatPumpError)
+		return closed(stats, heatPumpError)
 	}
 
 	a, err := site.heatPumpDailyAnalysis(ref, now)
 	if err != nil || a == nil {
-		return closed(a, stats, heatPumpError)
+		return closed(stats, heatPumpError)
 	}
 	if !a.Open {
-		return closed(a, stats, a.Reason)
+		return closed(stats, a.Reason)
 	}
 
 	var rates api.Rates
 	if tempTariff := site.GetTariff(api.TariffUsageTemperature); tempTariff != nil {
-		rates, _ = tempTariff.Rates()
+		var err error
+		if rates, err = tempTariff.Rates(); err != nil {
+			rates = nil
+		}
 	}
 	if heatPumpForecastStale(rates, now) {
-		return closed(a, stats, heatPumpTemperatureStale)
+		return closed(stats, heatPumpTemperatureStale)
 	}
 
 	id, ok, err := metrics.HeatPumpEntity(ref)
 	if err != nil || !ok {
-		return closed(a, stats, heatPumpNoMeter)
+		return closed(stats, heatPumpNoMeter)
 	}
 	incomplete, newest, seen, err := metrics.HeatPumpFreshness(id, now.Add(-24*time.Hour))
 	if err != nil {
 		site.log.ERROR.Printf("heat pump freshness: %v", err)
-		return closed(a, stats, heatPumpError)
+		return closed(stats, heatPumpError)
 	}
 	if incomplete > 0 || !seen || now.Sub(newest.Add(tariff.SlotDuration)) > heatPumpMaxMeterAge {
-		return closed(a, stats, heatPumpMeterIncomplete)
+		return closed(stats, heatPumpMeterIncomplete)
 	}
 
 	from := profile.Rates[0].Start
@@ -562,30 +578,30 @@ func (site *Site) heatPumpSplit(mode, ref string, now time.Time, profile *metric
 	if err != nil {
 		if !errors.Is(err, metrics.ErrIncomplete) {
 			site.log.ERROR.Printf("heat pump profile: %v", err)
-			return closed(a, stats, heatPumpError)
+			return closed(stats, heatPumpError)
 		}
-		return closed(a, stats, heatPumpProfile)
+		return closed(stats, heatPumpProfile)
 	}
 	if stats.Pairs == 0 || float64(stats.Dropped) > heatPumpMaxDropped*float64(stats.Pairs) {
-		return closed(a, stats, heatPumpNegativeResidual)
+		return closed(stats, heatPumpNegativeResidual)
 	}
 	if len(nonHP.Rates) != len(active) {
-		return closed(a, stats, heatPumpError)
+		return closed(stats, heatPumpError)
 	}
 
-	series, band, days := composeHeatPump(a, from, nonHP.Rates, profile.Rates, active, rates, time.Local)
+	series, band, days := composeHeatPump(a, heatPumpInput{Start: from, NonHP: nonHP.Rates, ProfileBand: profile.Rates, Active: active, Rates: rates, Loc: time.Local})
 	modelled := false
 	for _, d := range days {
 		modelled = modelled || d.Modelled
 	}
 	for i := range series {
 		if math.IsNaN(series[i]) || math.IsInf(series[i], 0) || series[i] < 0 {
-			return closed(a, stats, heatPumpError)
+			return closed(stats, heatPumpError)
 		}
 	}
 	if !modelled {
-		return closed(a, stats, heatPumpTemperatureStale)
+		return closed(stats, heatPumpTemperatureStale)
 	}
-	site.heatPumpRecord(true, "", a, stats, days)
+	site.heatPumpRecord(true, "", stats, days)
 	return series, band
 }
