@@ -143,14 +143,29 @@ func buildHomeProfile(rows []meter, at time.Time) ([2][96]HomeForecastSlot, Prof
 
 // HomeForecast predicts up to seven days from strictly earlier, clean household data.
 func HomeForecast(from, to time.Time) (*HomeForecastResult, error) {
+	res, _, err := homeForecast(from, to, nil)
+	return res, err
+}
+
+// homeForecast is HomeForecast; with heatPump set the profile is built from the household
+// energy minus that entity's energy per slot and its range is not calibrated against the
+// household forecast errors.
+func homeForecast(from, to time.Time, heatPump *int) (*HomeForecastResult, NonHeatPumpStats, error) {
+	var stats NonHeatPumpStats
 	if from.IsZero() || !to.After(from) || to.Sub(from) > 7*24*time.Hour {
-		return nil, fmt.Errorf("invalid household forecast horizon")
+		return nil, stats, fmt.Errorf("invalid household forecast horizon")
 	}
 	var rows []meter
 	if err := db.Instance.Select("meter, ts, COALESCE(energy,-1) AS energy, recovered, incomplete").Where("meter = ? AND ts >= ? AND ts < ?", 1, from.AddDate(0, 0, -37).Unix(), from.Unix()).Order("ts").Find(&rows).Error; err != nil {
-		return nil, err
+		return nil, stats, err
 	}
 	cut := from.AddDate(0, 0, -30).Unix()
+	if heatPump != nil {
+		var err error
+		if rows, stats, err = subtractHeatPump(rows, *heatPump, from.AddDate(0, 0, -37), from, cut); err != nil {
+			return nil, stats, err
+		}
+	}
 	var current []meter
 	for _, r := range rows {
 		if r.Timestamp >= cut {
@@ -188,17 +203,19 @@ func HomeForecast(from, to time.Time) (*HomeForecastResult, error) {
 	}
 	res := &HomeForecastResult{Quality: q, Rates: []HomeForecastSlot{}}
 	if err != nil {
-		return res, err
+		return res, stats, err
 	}
 	for t := from.Truncate(tariff.SlotDuration); t.Before(to); t = t.Add(tariff.SlotDuration) {
 		v := profile[dayType(t)][profileIndex(t)]
 		v.Start = t
 		res.Rates = append(res.Rates, v)
 	}
-	if err := calibrateHomeRanges(from, res); err != nil {
-		return res, err
+	if heatPump == nil {
+		if err := calibrateHomeRanges(from, res); err != nil {
+			return res, stats, err
+		}
 	}
-	return res, nil
+	return res, stats, nil
 }
 
 type homeForecastSample struct {
