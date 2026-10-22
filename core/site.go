@@ -167,8 +167,10 @@ type Site struct {
 	energyInsights             optimizerInsights
 	energyProfile              *metrics.HomeForecastResult
 	energyHome                 []float64
-	energyHomeShadow           map[string][]float64 // heating-degree variants not in use, Wh per request slot like energyHome
-	energySolarSpread          []solarSpread        // per request slot while solar shading is active, nil otherwise
+	energyHomeShadow           map[string][]float64       // forecast variants not in use (heating-degree, profile, hp-split), Wh per request slot like energyHome
+	energyHeatPumpBand         []metrics.HomeForecastSlot // Wh band of the hp-split variant per request slot, nil while it is closed
+	energyHeatPumpOn           bool                       // energyHome is the hp-split forecast
+	energySolarSpread          []solarSpread              // per request slot while solar shading is active, nil otherwise
 	solarShading               solarShadingCache
 	energyCapabilitiesUntil    time.Time
 	energyCapabilitiesURI      string
@@ -191,6 +193,8 @@ type Site struct {
 	heatingDegreeDailyState heatingDegreeDailyCache
 	heatingDegreeLast       heatingDegreeLastState
 	heatingDegreeSnapshot   time.Time // start of the last shadow snapshot period taken
+	heatPumpDailyState      heatPumpDailyCache
+	heatPumpLast            heatPumpLastState
 }
 
 // siteState is the site's cached measurement state, updated once per meter cycle

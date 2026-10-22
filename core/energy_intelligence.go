@@ -24,6 +24,8 @@ type EnergyIntelligenceSettings struct {
 	SettlementFrom       *time.Time                         `json:"settlementFrom"`
 	SolarShading         bool                               `json:"solarShading"`  // ADR-016 sun-position correction replaces the daily solar scale
 	HeatingDegree        string                             `json:"heatingDegree"` // household demand temperature correction: auto (default), on or off
+	HeatPumpModel        string                             `json:"heatPumpModel"` // heat-pump split of the household forecast: shadow (default), on or off
+	HeatPumpMeter        string                             `json:"heatPumpMeter"` // ext meter entity ref of the heat pump, empty if not configured
 	// cheap-charge band reference price (ADR-017): median grid price over CheapBandDays
 	// minus CheapBandMargin percent, or CheapBandPrice (currency/kWh) when set. Nil = default.
 	CheapBandDays   *int     `json:"cheapBandDays,omitempty"`
@@ -44,6 +46,12 @@ func (cfg EnergyIntelligenceSettings) validate() error {
 	}
 	if !slices.Contains([]string{"", heatingDegreeAuto, heatingDegreeOn, heatingDegreeOff}, cfg.HeatingDegree) {
 		return errors.New("heatingDegree must be auto, on or off")
+	}
+	if !slices.Contains([]string{"", heatPumpOff, heatPumpShadow, heatPumpOn}, cfg.HeatPumpModel) {
+		return errors.New("heatPumpModel must be off, shadow or on")
+	}
+	if len(cfg.HeatPumpMeter) > 128 {
+		return errors.New("heatPumpMeter must be at most 128 characters")
 	}
 	if d := cfg.CheapBandDays; d != nil && *d != 30 && *d != 90 {
 		return errors.New("cheapBandDays must be 30 or 90")
@@ -78,7 +86,7 @@ func (cfg EnergyIntelligenceSettings) validate() error {
 }
 
 func (site *Site) GetEnergyIntelligenceSettings() EnergyIntelligenceSettings {
-	defaults := EnergyIntelligenceSettings{SettlementMode: "simulation", BatteryWear: map[string]float64{}, HeatingDegree: heatingDegreeAuto}
+	defaults := EnergyIntelligenceSettings{SettlementMode: "simulation", BatteryWear: map[string]float64{}, HeatingDegree: heatingDegreeAuto, HeatPumpModel: heatPumpShadow}
 	cfg := EnergyIntelligenceSettings{SettlementMode: "simulation", BatteryWear: map[string]float64{}}
 	if err := settings.Json(energyIntelligenceKey, &cfg); err != nil && !errors.Is(err, settings.ErrNotFound) {
 		site.log.ERROR.Printf("energy intelligence settings: %v", err)
@@ -89,6 +97,7 @@ func (site *Site) GetEnergyIntelligenceSettings() EnergyIntelligenceSettings {
 		return defaults
 	}
 	cfg.HeatingDegree = heatingDegreeMode(cfg.HeatingDegree) // saved before the setting existed
+	cfg.HeatPumpModel = heatPumpModelMode(cfg.HeatPumpModel)
 	return cfg
 }
 

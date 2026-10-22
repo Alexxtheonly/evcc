@@ -490,19 +490,28 @@ func percentileLinear(sorted []float64, p float64) float64 {
 	return sorted[lo] + (pos-float64(lo))*(sorted[hi]-sorted[lo])
 }
 
-// scoreHeatingDegreeShadow scores the complete windows of one type.
-func scoreHeatingDegreeShadow(window string, maxMissing int, windows []metrics.HomeForecastShadowWindow) heatingDegreeShadowScore {
-	res := heatingDegreeShadowScore{Window: window, MaxMissing: maxMissing, Required: heatingDegreeScoreMinWindows}
-	var on, auto, diff []float64
+// shadowPair is the comparison of variants a and b over the complete windows of one type:
+// the mean absolute errors (kWh) and the mean of |a error| - |b error| with its 95 % interval.
+type shadowPair struct {
+	Windows            int
+	Ready              bool
+	MAEA, MAEB         *float64
+	Delta, CILow, CIHi *float64
+}
+
+// scoreShadowPair scores the windows with at most maxMissing missing slots; the interval
+// needs heatingDegreeScoreMinWindows of them.
+func scoreShadowPair(maxMissing int, windows []metrics.HomeForecastShadowWindow, a, b string) shadowPair {
+	var errA, errB, diff []float64
 	for _, w := range windows {
 		if w.Missing > maxMissing {
 			continue
 		}
-		eOn := math.Abs(w.Variants[heatingDegreeOn] - w.Actual)
-		eAuto := math.Abs(w.Variants[heatingDegreeAuto] - w.Actual)
-		on, auto, diff = append(on, eOn), append(auto, eAuto), append(diff, eOn-eAuto)
+		eA := math.Abs(w.Variants[a] - w.Actual)
+		eB := math.Abs(w.Variants[b] - w.Actual)
+		errA, errB, diff = append(errA, eA), append(errB, eB), append(diff, eA-eB)
 	}
-	res.Windows = len(diff)
+	res := shadowPair{Windows: len(diff)}
 	if res.Windows < heatingDegreeScoreMinWindows {
 		return res
 	}
@@ -515,8 +524,31 @@ func scoreHeatingDegreeShadow(window string, maxMissing int, windows []metrics.H
 		return &s
 	}
 	low, high := blockBootstrapMean(diff, heatingDegreeBootstrapBlock, heatingDegreeBootstrapRuns)
-	res.Ready, res.MAEOn, res.MAEAuto, res.Delta, res.CILow, res.CIHigh = true, mean(on), mean(auto), mean(diff), &low, &high
+	res.Ready, res.MAEA, res.MAEB, res.Delta, res.CILow, res.CIHi = true, mean(errA), mean(errB), mean(diff), &low, &high
 	return res
+}
+
+// scoreHeatingDegreeShadow scores the complete windows of one type.
+func scoreHeatingDegreeShadow(window string, maxMissing int, windows []metrics.HomeForecastShadowWindow) heatingDegreeShadowScore {
+	p := scoreShadowPair(maxMissing, windows, heatingDegreeOn, heatingDegreeAuto)
+	return heatingDegreeShadowScore{
+		Window: window, MaxMissing: maxMissing, Windows: p.Windows, Required: heatingDegreeScoreMinWindows, Ready: p.Ready,
+		MAEOn: p.MAEA, MAEAuto: p.MAEB, Delta: p.Delta, CILow: p.CILow, CIHigh: p.CIHi,
+	}
+}
+
+// shadowWindowsByType splits snapshot windows into the day (issued 00:00) and overnight
+// (17:00-07:00) windows.
+func shadowWindowsByType(windows []metrics.HomeForecastShadowWindow) map[string][]metrics.HomeForecastShadowWindow {
+	byType := map[string][]metrics.HomeForecastShadowWindow{}
+	for _, w := range windows {
+		kind := "overnight"
+		if w.Start.In(time.Local).Hour() == 0 {
+			kind = "day"
+		}
+		byType[kind] = append(byType[kind], w)
+	}
+	return byType
 }
 
 // HeatingDegreeStatus is the read-only state of the household demand
@@ -616,14 +648,7 @@ func (site *Site) HeatingDegree() HeatingDegreeStatus {
 		res.ShadowError = err.Error()
 		return res
 	}
-	byType := map[string][]metrics.HomeForecastShadowWindow{}
-	for _, w := range windows {
-		kind := "overnight"
-		if w.Start.In(time.Local).Hour() == 0 {
-			kind = "day"
-		}
-		byType[kind] = append(byType[kind], w)
-	}
+	byType := shadowWindowsByType(windows)
 	res.Shadow = []heatingDegreeShadowScore{
 		scoreHeatingDegreeShadow("day", 4, byType["day"]),
 		scoreHeatingDegreeShadow("overnight", 2, byType["overnight"]),

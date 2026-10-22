@@ -2098,6 +2098,7 @@ func (site *Site) homeProfile(minLen int) ([]float64, error) {
 	profile, err := metrics.HomeForecast(start, start.Add(time.Duration(minLen)*tariff.SlotDuration))
 	site.energyProfile = profile
 	site.energyHomeShadow = make(map[string][]float64)
+	site.energyHeatPumpBand, site.energyHeatPumpOn = nil, false
 	if profile != nil {
 		site.energyInsights.Profile = &profile.Quality
 		if profile.Quality.Source == "cached" || profile.Quality.InterpolatedBuckets > 0 || profile.Quality.PooledBuckets > 0 {
@@ -2112,7 +2113,9 @@ func (site *Site) homeProfile(minLen int) ([]float64, error) {
 		res[i] = slot.Base / 1e3
 	}
 
-	res, shadow := site.heatingDegreeVariants(site.energyInsights.Settings.HeatingDegree, res)
+	raw := slices.Clone(res)
+	settings := site.energyInsights.Settings
+	res, shadow := site.heatingDegreeVariants(settings.HeatingDegree, res)
 
 	// convert to Wh
 	toWh := func(v float64, i int) float64 {
@@ -2120,6 +2123,21 @@ func (site *Site) homeProfile(minLen int) ([]float64, error) {
 	}
 	for v, profile := range shadow {
 		site.energyHomeShadow[v] = lo.Map(profile, toWh)
+	}
+
+	if hpMode := heatPumpModelMode(settings.HeatPumpModel); hpMode != heatPumpOff {
+		site.energyHomeShadow[profileVariant] = lo.Map(raw, toWh)
+		split, band := site.heatPumpSplit(hpMode, settings.HeatPumpMeter, time.Now(), profile, res)
+		if split != nil {
+			site.energyHomeShadow[heatPumpVariant] = lo.Map(split, toWh)
+			site.energyHeatPumpBand = band
+			if hpMode == heatPumpOn {
+				if v := heatingDegreeMode(settings.HeatingDegree); v != heatingDegreeOff {
+					site.energyHomeShadow[v] = lo.Map(res, toWh)
+				}
+				res, site.energyHeatPumpOn = split, true
+			}
+		}
 	}
 	return lo.Map(res, toWh), nil
 }

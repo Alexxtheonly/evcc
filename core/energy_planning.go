@@ -104,7 +104,7 @@ func (site *Site) energyForecast(req optimizer.OptimizationInput, details reques
 	issued := time.Now()
 	archive := make([]metrics.HomeForecastSlot, 0, len(details.Timestamps))
 	for i, start := range details.Timestamps {
-		low, base, high := homeForecastBand(site.energyProfile.Rates[i], float64(req.TimeSeries.Dt[i])/tariff.SlotDuration.Seconds(), site.energyHome[i])
+		low, base, high := homeForecastBand(site.homeBandRaw(i, site.energyHeatPumpOn), float64(req.TimeSeries.Dt[i])/tariff.SlotDuration.Seconds(), site.energyHome[i])
 		solar := float64(req.TimeSeries.Ft[i])
 		solarLow, solarHigh := solar, solar
 		if solar > 0 {
@@ -134,6 +134,15 @@ func (site *Site) energyForecast(req optimizer.OptimizationInput, details reques
 	return nil
 }
 
+// homeBandRaw is the band slot i's forecast is shifted from: the profile's, or with heatPump
+// the heat-pump split's.
+func (site *Site) homeBandRaw(i int, heatPump bool) metrics.HomeForecastSlot {
+	if heatPump && i < len(site.energyHeatPumpBand) {
+		return site.energyHeatPumpBand[i]
+	}
+	return site.energyProfile.Rates[i]
+}
+
 // homeForecastBand returns a slot's household low/base/high (Wh) for the
 // corrected energy home (Wh per full slot): the profile's band shifted by the
 // correction, scaled to the slot's fraction.
@@ -145,18 +154,20 @@ func homeForecastBand(raw metrics.HomeForecastSlot, fraction, home float64) (low
 	return low, base, high
 }
 
-// archiveHeatingDegreeShadow archives the heating-degree variants not in use
-// at the lead times, and in each snapshot period the whole horizon of "auto"
-// and "on" (ADR-015 shadow). Failures are logged only: the shadow never
-// affects planning.
+// archiveHeatingDegreeShadow archives the forecast variants not in use at the
+// lead times, and in each snapshot period the whole horizon of "auto" and "on"
+// (ADR-015 shadow) and, while the heat-pump model runs, of "hp-split" and the
+// uncorrected "profile" it is scored against. A closed hp-split archives
+// nothing: its windows lack the variant and are not scored, the others are
+// unaffected. Failures are logged only: the shadow never affects planning.
 func (site *Site) archiveHeatingDegreeShadow(req optimizer.OptimizationInput, details requestDetails, issued time.Time) {
-	slots := func(home []float64) []metrics.HomeForecastSlot {
+	slots := func(home []float64, heatPump bool) []metrics.HomeForecastSlot {
 		res := make([]metrics.HomeForecastSlot, 0, len(details.Timestamps))
 		for i, start := range details.Timestamps {
 			if i == 0 || i >= len(home) {
 				continue
 			}
-			low, base, high := homeForecastBand(site.energyProfile.Rates[i], float64(req.TimeSeries.Dt[i])/tariff.SlotDuration.Seconds(), home[i])
+			low, base, high := homeForecastBand(site.homeBandRaw(i, heatPump), float64(req.TimeSeries.Dt[i])/tariff.SlotDuration.Seconds(), home[i])
 			res = append(res, metrics.HomeForecastSlot{Start: start, Low: low, Base: base, High: high})
 		}
 		return res
@@ -167,15 +178,16 @@ func (site *Site) archiveHeatingDegreeShadow(req optimizer.OptimizationInput, de
 	snapshot := n > 0 && site.heatingDegreeSnapshotDue(issued, details.Timestamps[n-1].Add(time.Duration(req.TimeSeries.Dt[n-1])*time.Second))
 
 	ok := true
-	for _, v := range []string{heatingDegreeAuto, heatingDegreeOn} {
+	for _, v := range []string{heatingDegreeAuto, heatingDegreeOn, heatPumpVariant, profileVariant} {
 		home, shadow := site.energyHomeShadow[v]
-		if v == mode {
+		if !shadow && v == mode {
 			home = site.energyHome
 		}
-		if (!shadow && !snapshot) || len(home) != n {
+		leads := shadow && v != profileVariant
+		if (!leads && !snapshot) || len(home) != n {
 			continue
 		}
-		if err := metrics.ArchiveHomeForecastShadow(issued, v, slots(home), snapshot); err != nil {
+		if err := metrics.ArchiveHomeForecastShadow(issued, v, slots(home, v == heatPumpVariant), snapshot); err != nil {
 			site.log.ERROR.Printf("heating degree shadow (%s): %v", v, err)
 			ok = false
 		}
