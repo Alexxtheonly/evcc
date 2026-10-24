@@ -369,7 +369,7 @@
 									$t("forecast.energy.plan.layer.grid")
 								}}
 							</th>
-							<td>{{ gridText(details.grid) }}</td>
+							<td class="wrap">{{ gridText(details.grid) }}</td>
 						</tr>
 						<tr v-for="device in details.devices" :key="device.key">
 							<th>
@@ -380,7 +380,7 @@
 									device.title
 								}}</span>
 							</th>
-							<td>
+							<td class="wrap">
 								<template v-if="device.soc != null">
 									{{ percent(device.soc) }}
 									<small class="d-block">{{ deviceState(device) }}</small>
