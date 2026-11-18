@@ -389,6 +389,7 @@ const (
 	vetoReasonForcedIdle optimizerVetoReason = "forcedIdle" // controllable batteries derived conflicting actions, so none was applied
 	vetoReasonDamping    optimizerVetoReason = "damping"    // a mode change is pending confirmation by a later run
 	vetoReasonLiveRate   optimizerVetoReason = "liveRate"   // the live rate has moved past the price the decision was based on
+	vetoReasonPhaseLimit optimizerVetoReason = "phaseLimit" // a grid charge would push the most loaded phase over the per-phase limit (ADR-049)
 )
 
 // optimizerDecision is the vetted outcome of one optimizer run.
@@ -411,6 +412,7 @@ type optimizerDecision struct {
 	chargeVetoed bool                // a grid charge suggestion was declined by a gate
 	vetoReason   optimizerVetoReason // reason for chargeVetoed, or for mode staying at api.BatteryUnknown
 	price        float64             // price (currency/kWh) underlying an accepted charge decision (mode == api.BatteryCharge with no veto)
+	chargePowerW float64             // grid charge power (W) of an accepted charge decision, re-checked by the live phase gate
 }
 
 // gridChargeJustified checks that grid-charging the battery now is worth it: a
@@ -447,8 +449,10 @@ func chargePaybackJustified(pn, soc, discharge []float32, sInitial float32) bool
 // batteries: they must agree (details is index-aligned with req.Batteries/
 // res.Batteries, see applyOptimizerResult), and a Charge suggestion is
 // additionally gated on the plan being worth it (gridChargeJustified) and
-// every controllable battery's plan paying itself back (chargePaybackJustified).
-func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer.OptimizationInput, res optimizer.OptimizationResult, details []batteryDetail) optimizerDecision {
+// every controllable battery's plan paying itself back (chargePaybackJustified)
+// and on fitting the per-phase import limit (ADR-049): a charge that would
+// push the most loaded phase over it falls back to hold.
+func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer.OptimizationInput, res optimizer.OptimizationResult, details []batteryDetail, gate phaseLimitGate) optimizerDecision {
 	mode := api.BatteryUnknown
 
 	for _, detail := range details {
@@ -510,8 +514,19 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 		}
 	}
 
+	// grid charge runs at full power on every controllable home battery
+	var chargePower float64
+	for i, detail := range details {
+		if detail.Type == batteryTypeBattery && detail.controllable {
+			chargePower += float64(req.Batteries[i].CMax)
+		}
+	}
+	if gate.exceeds(chargePower) {
+		return optimizerDecision{mode: api.BatteryHold, suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPhaseLimit}
+	}
+
 	// pn is currency/Wh
-	return optimizerDecision{mode: mode, suggestedMode: mode, price: float64(pn[0]) * 1e3}
+	return optimizerDecision{mode: mode, suggestedMode: mode, price: float64(pn[0]) * 1e3, chargePowerW: chargePower}
 }
 
 // setOptimizerBatteryMode stores the battery-mode decision from the latest run.
@@ -549,6 +564,7 @@ func (site *Site) setOptimizerBatteryMode(d optimizerDecision) {
 		site.optimizerBatteryModePending = api.BatteryUnknown
 		site.optimizerBatteryModePendingSince = time.Time{}
 		site.optimizerChargePrice = d.price
+		site.optimizerChargePowerW = d.chargePowerW
 	}
 
 	site.optimizerBatteryModeUpdated = now
@@ -960,6 +976,7 @@ func (site *Site) ResetOptimizerBatteryMode() {
 	site.optimizerBatteryModePending = api.BatteryUnknown
 	site.optimizerBatteryModePendingSince = time.Time{}
 	site.optimizerChargePrice = 0
+	site.optimizerChargePowerW = 0
 	site.optimizerChargeVetoed = false
 	site.optimizerVetoReason = vetoReasonNone
 	site.optimizerSuggestedMode = api.BatteryUnknown
@@ -1539,7 +1556,7 @@ func (site *Site) applyOptimizerResultWithEconomics(req optimizer.OptimizationIn
 
 	// derive and damp the battery mode to apply from the home battery
 	// suggestions; setOptimizerBatteryMode re-checks Automatic() under lock
-	decision := batteryModeCandidate(suggestions, req, res, details)
+	decision := batteryModeCandidate(suggestions, req, res, details, site.phaseLimitGate())
 	decision.economics = economics
 	site.setOptimizerBatteryMode(decision)
 

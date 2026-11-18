@@ -107,7 +107,7 @@ func TestBatteryModeCandidate(t *testing.T) {
 		{"conflict", map[string]types.Suggestion{"battery:a": {Action: "hold"}, "battery:b": {Action: "normal"}}, []batteryDetail{bat("a"), bat("b")}, optimizerDecision{suggestedMode: api.BatteryHold, vetoReason: vetoReasonForcedIdle}},
 		{"vehicle ignored", map[string]types.Suggestion{"loadpoint:0": {Action: "charge"}}, []batteryDetail{vehicle}, optimizerDecision{}},
 	} {
-		d := batteryModeCandidate(tc.suggestions, req, res, tc.details)
+		d := batteryModeCandidate(tc.suggestions, req, res, tc.details, phaseLimitGate{})
 		assert.Equal(t, tc.expected.mode, d.mode, tc.name)
 		assert.Equal(t, tc.expected.suggestedMode, d.suggestedMode, tc.name)
 		assert.Equal(t, tc.expected.chargeVetoed, d.chargeVetoed, tc.name)
@@ -123,7 +123,7 @@ func TestBatteryModeCandidate(t *testing.T) {
 	// reads "charge" - the pairing control_slots.SuggestedMode/VetoReason
 	// needs to make the rejected suggestion auditable, not just the veto.
 	flatReq, flatRes := chargeReqRes([]float32{0.0002, 0.0002}, 5000, []float32{6375, 4990}, []float32{0, 1375})
-	d := batteryModeCandidate(charge, flatReq, flatRes, details)
+	d := batteryModeCandidate(charge, flatReq, flatRes, details, phaseLimitGate{})
 	assert.Equal(t, api.BatteryUnknown, d.mode, "charge without spread")
 	assert.Equal(t, api.BatteryCharge, d.suggestedMode, "charge without spread: suggestion preserved")
 	assert.True(t, d.chargeVetoed, "charge without spread sets veto")
@@ -132,13 +132,13 @@ func TestBatteryModeCandidate(t *testing.T) {
 	// charge is vetoed when the spread passes but the plan's payback is too thin:
 	// buy 0.20, give back at 0.25 < (0.20+0.03)/0.81 = 0.284
 	thinReq, thinRes := chargeReqRes([]float32{0.0002, 0.00025}, 5000, []float32{6375, 4990}, []float32{0, 1375})
-	d = batteryModeCandidate(charge, thinReq, thinRes, details)
+	d = batteryModeCandidate(charge, thinReq, thinRes, details, phaseLimitGate{})
 	assert.Equal(t, api.BatteryUnknown, d.mode, "thin payback")
 	assert.Equal(t, api.BatteryCharge, d.suggestedMode, "thin payback: suggestion preserved")
 	assert.True(t, d.chargeVetoed, "thin payback sets veto")
 
 	// missing battery results cannot justify a charge
-	d = batteryModeCandidate(charge, optimizer.OptimizationInput{TimeSeries: optimizer.TimeSeries{PN: pn}}, optimizer.OptimizationResult{}, details)
+	d = batteryModeCandidate(charge, optimizer.OptimizationInput{TimeSeries: optimizer.TimeSeries{PN: pn}}, optimizer.OptimizationResult{}, details, phaseLimitGate{})
 	assert.Equal(t, api.BatteryUnknown, d.mode, "missing results")
 	assert.Equal(t, api.BatteryCharge, d.suggestedMode, "missing results: suggestion preserved")
 	assert.True(t, d.chargeVetoed, "missing results set veto")

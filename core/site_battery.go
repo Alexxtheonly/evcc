@@ -176,6 +176,11 @@ func (site *Site) batterySuggestionMode(rate api.Rate) (api.BatteryMode, bool) {
 		return api.BatteryUnknown, false
 	}
 
+	// a load that started after the decision may leave no room for the charge (ADR-049)
+	if site.optimizerBatteryMode == api.BatteryCharge && site.phaseLimitGateLocked().exceeds(site.optimizerChargePowerW) {
+		return api.BatteryHold, true
+	}
+
 	return site.optimizerBatteryMode, true
 }
 
