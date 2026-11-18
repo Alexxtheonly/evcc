@@ -96,9 +96,15 @@ func (site *Site) prepareEnergy(req optimizer.OptimizationInput, details *reques
 	}
 	site.Lock()
 	site.gridPhaseLimitA = cfg.GridPhaseLimitA
-	share := site.phaseSnapshot.homeShare
+	share, live := site.phaseSnapshot.homeShare, site.phaseSnapshot.liveChargeW
+	site.batteryChargeRatingW = 0
+	for i, detail := range details.BatteryDetails {
+		if detail.Type == batteryTypeBattery && i < len(res.Batteries) {
+			site.batteryChargeRatingW += float64(res.Batteries[i].CMax)
+		}
+	}
 	site.Unlock()
-	applyPhaseLimit(&res, details.BatteryDetails, cfg.GridPhaseLimitA, share, site.loadpointMaxCurrent)
+	applyPhaseLimit(&res, details.BatteryDetails, cfg.GridPhaseLimitA, share, live, site.loadpointMaxCurrent)
 	return res, nil
 }
 

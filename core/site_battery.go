@@ -128,6 +128,15 @@ func (site *Site) requiredBatteryMode(batteryGridChargeActive bool, rate api.Rat
 		res = api.BatteryNormal
 	}
 
+	// ADR-049: no charge path (external mode, classic grid charge, optimizer)
+	// may start or keep a battery charge that overloads a phase
+	if (res == api.BatteryCharge || (res == api.BatteryUnknown && batMode == api.BatteryCharge)) && site.phaseLimitVetoesCharge() {
+		res = keepUnlessModified(api.BatteryNormal)
+		if batMode == api.BatteryCharge {
+			res = api.BatteryNormal
+		}
+	}
+
 	return res
 }
 
@@ -177,8 +186,8 @@ func (site *Site) batterySuggestionMode(rate api.Rate) (api.BatteryMode, bool) {
 	}
 
 	// a load that started after the decision may leave no room for the charge (ADR-049)
-	if site.optimizerBatteryMode == api.BatteryCharge && site.phaseLimitGateLocked().exceeds(site.optimizerChargePowerW) {
-		return api.BatteryHold, true
+	if site.optimizerBatteryMode == api.BatteryCharge && site.phaseLimitGateLocked().exceeds(site.phaseChargeRatingLocked()) {
+		return api.BatteryNormal, true
 	}
 
 	return site.optimizerBatteryMode, true

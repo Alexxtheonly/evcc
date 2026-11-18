@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"math"
+	"time"
 )
 
 // ADR-049: per-phase grid import limit. The solver gets one conservative
@@ -10,13 +11,28 @@ import (
 // that would push the most loaded phase over the limit. No phase identity is
 // modelled: every term is the worst case on a single phase.
 
-// homePhaseShareMin is the worst-phase share of household load when nothing
-// better is known: a perfectly balanced house.
+// homePhaseShareMin is the worst-phase share of household load in a
+// perfectly balanced house, the floor for a measured share.
 const homePhaseShareMin = 1.0 / 3
 
+// homePhaseShareUnknown is the share before any phase currents were seen:
+// all household load on one phase.
+const homePhaseShareUnknown = 1.0
+
 // homePhaseShareMinA (A summed over phases) is the household current below
-// which the measured phase split is noise and the balanced default applies.
+// which the measured phase split is noise and the balanced floor applies.
 const homePhaseShareMinA = 3.0
+
+// homePhaseShareHold keeps the worst observed share this long, so a briefly
+// balanced moment does not lower the row.
+const homePhaseShareHold = time.Hour
+
+const (
+	phaseSnapshotMaxAge = 60 * time.Second // older snapshot: gate fails closed
+	phaseGateClearA     = 2.0              // a latched veto clears this far below the limit
+	phaseGateHoldOff    = 60 * time.Second // minimum veto duration
+	phaseChargeMargin   = 1.05             // DC/AC and rating margin on battery charge power
+)
 
 // phaseVoltage is the nominal phase voltage the limit converts with.
 func phaseVoltage() float64 {
@@ -32,19 +48,26 @@ type phaseSnapshot struct {
 	// baseA is the worst grid phase import (A) with the home battery's own
 	// flow removed, i.e. what the phase carries if the battery stands still.
 	baseA float64
-	// homeShare is the worst-phase share of household load in [1/3, 1].
-	homeShare float64
-	valid     bool
+	// homeShare is the worst-phase share of household load in [1/3, 1],
+	// the peak over homePhaseShareHold; 1 until phase currents were seen.
+	homeShare   float64
+	homeShareAt time.Time
+	// liveChargeW is the measured battery charge power (W, >= 0)
+	liveChargeW float64
+	at          time.Time // measurement time; zero = never
+	valid       bool      // grid phase currents read this cycle
+	latched     bool      // live gate vetoes until cleared with hysteresis
+	vetoAt      time.Time // last time the live gate tripped
 }
 
 // homePhaseShare derives the worst-phase share of household load from signed
 // grid phase currents (import positive), the loadpoint phase currents and the
 // site's PV and battery power (battery positive = discharge). Inverter output
-// is taken as symmetric across three phases. Falls back to 1/3 when the meter
-// has no phase currents or the household draws too little to tell.
+// is taken as symmetric across three phases. Without phase currents the share
+// is unknown (1); with too little household current to tell it is 1/3.
 func homePhaseShare(grid []float64, loadpoints [][]float64, pvW, batteryW float64) float64 {
 	if len(grid) != 3 {
-		return homePhaseShareMin
+		return homePhaseShareUnknown
 	}
 	inverterA := (max(0, pvW) + batteryW) / (3 * phaseVoltage())
 	home := make([]float64, 3)
@@ -76,7 +99,8 @@ func phaseBaseA(grid []float64, batteryW float64) (float64, bool) {
 }
 
 // updatePhaseSnapshot runs in the site loop after the meters were read and
-// before loadpoints update, the goroutine that writes lp.chargeCurrents.
+// before loadpoints update, the goroutine that writes lp.chargeCurrents. It
+// also advances the live gate's latch.
 func (site *Site) updatePhaseSnapshot(state siteState) {
 	var lps [][]float64
 	for _, lp := range site.loadpoints {
@@ -84,48 +108,94 @@ func (site *Site) updatePhaseSnapshot(state siteState) {
 			lps = append(lps, lp.chargeCurrents)
 		}
 	}
+	now := time.Now()
 	base, ok := phaseBaseA(state.gridCurrents, state.battery.Power)
-	snap := phaseSnapshot{
-		baseA:     base,
-		homeShare: homePhaseShare(state.gridCurrents, lps, state.pvPower, state.battery.Power),
-		valid:     ok,
-	}
+	share := homePhaseShare(state.gridCurrents, lps, state.pvPower, state.battery.Power)
+
 	site.Lock()
+	defer site.Unlock()
+	prev := site.phaseSnapshot
+	snap := phaseSnapshot{baseA: base, liveChargeW: max(0, -state.battery.Power), at: now, valid: ok,
+		homeShare: share, homeShareAt: now, latched: prev.latched, vetoAt: prev.vetoAt}
+	switch {
+	case !ok && !prev.homeShareAt.IsZero() && now.Sub(prev.homeShareAt) < homePhaseShareHold:
+		snap.homeShare, snap.homeShareAt = prev.homeShare, prev.homeShareAt // keep the last measured peak
+	case !ok:
+		snap.homeShare, snap.homeShareAt = homePhaseShareUnknown, time.Time{}
+	case prev.homeShareAt.IsZero() == false && prev.homeShare > share && now.Sub(prev.homeShareAt) < homePhaseShareHold:
+		snap.homeShare, snap.homeShareAt = prev.homeShare, prev.homeShareAt
+	}
 	site.phaseSnapshot = snap
-	site.Unlock()
+	g := site.phaseLimitGateLocked()
+	g.latched = false
+	switch charge := site.phaseChargeRatingLocked(); {
+	case g.limitA <= 0:
+		site.phaseSnapshot.latched = false
+	case g.exceeds(charge):
+		site.phaseSnapshot.latched, site.phaseSnapshot.vetoAt = true, now
+	case prev.latched && (now.Sub(prev.vetoAt) < phaseGateHoldOff || g.withChargeA(charge) > g.limitA-phaseGateClearA):
+		// stay latched: hold-off running or not yet clearly below the limit
+	default:
+		site.phaseSnapshot.latched = false
+	}
+}
+
+// phaseChargeRatingLocked is the battery grid charge power the gate assumes:
+// the larger of the active decision's, the request's rating and the measured.
+func (site *Site) phaseChargeRatingLocked() float64 {
+	return max(site.optimizerChargePowerW, site.batteryChargeRatingW, site.phaseSnapshot.liveChargeW)
 }
 
 // phaseLimitGate decides whether a battery grid charge fits the phase limit.
 // The zero value is disabled.
 type phaseLimitGate struct {
-	limitA float64 // per-phase limit, 0 = disabled
-	baseA  float64 // live worst-phase import without the battery
-	valid  bool    // baseA measured
+	limitA      float64   // per-phase limit, 0 = disabled
+	baseA       float64   // live worst-phase import without the battery
+	liveChargeW float64   // measured battery charge power, a floor for the rating
+	valid       bool      // baseA measured
+	at, now     time.Time // measurement and evaluation time
+	latched     bool      // live veto not yet cleared
 }
 
-// exceeds reports whether charging at chargeW, split evenly over three
-// phases, would push the worst phase over the limit. Without phase currents
-// the grid power is unknown per phase and the gate fails closed.
+// withChargeA is the worst phase with the battery charging at chargeW (or
+// the measured power if higher), plus the DC/AC margin, over three phases.
+func (g phaseLimitGate) withChargeA(chargeW float64) float64 {
+	return g.baseA + max(chargeW, g.liveChargeW)*phaseChargeMargin/(3*phaseVoltage())
+}
+
+// exceeds reports whether charging at chargeW would push the worst phase over
+// the limit. Without fresh phase currents (meter error, no capability or a
+// snapshot older than phaseSnapshotMaxAge) the gate fails closed.
 func (g phaseLimitGate) exceeds(chargeW float64) bool {
 	if g.limitA <= 0 {
 		return false
 	}
-	if !g.valid {
+	if !g.valid || g.now.Sub(g.at) > phaseSnapshotMaxAge || g.latched {
 		return true
 	}
-	return g.baseA+chargeW/(3*phaseVoltage()) > g.limitA
+	return g.withChargeA(chargeW) > g.limitA
 }
 
 // phaseLimitGateLocked is the gate from the latest snapshot. Caller holds the
 // site lock (read or write).
 func (site *Site) phaseLimitGateLocked() phaseLimitGate {
-	return phaseLimitGate{limitA: site.gridPhaseLimitA, baseA: site.phaseSnapshot.baseA, valid: site.phaseSnapshot.valid}
+	s := site.phaseSnapshot
+	return phaseLimitGate{limitA: site.gridPhaseLimitA, baseA: s.baseA, liveChargeW: s.liveChargeW,
+		valid: s.valid, at: s.at, now: time.Now(), latched: s.latched}
 }
 
 func (site *Site) phaseLimitGate() phaseLimitGate {
 	site.RLock()
 	defer site.RUnlock()
 	return site.phaseLimitGateLocked()
+}
+
+// phaseLimitVetoesCharge is the live gate for every battery charge path
+// (optimizer, external mode, classic grid charge).
+func (site *Site) phaseLimitVetoesCharge() bool {
+	site.RLock()
+	defer site.RUnlock()
+	return site.phaseLimitGateLocked().exceeds(site.phaseChargeRatingLocked())
 }
 
 // energyPhaseLimit is the request part of the per-phase limit. base_phase_max
@@ -189,20 +259,34 @@ func (req energyRequest) MarshalJSON() ([]byte, error) {
 const energyPhaseDivisor = 3
 
 // applyPhaseLimit attaches the per-phase limit to req. Home batteries count
-// at their power divided by three phases; loadpoints and expected vehicles at
+// at their power divided by three phases, scaled up when the measured charge
+// power liveChargeW exceeds their summed rating; loadpoints and expected vehicles at
 // their charger's maximum current on the worst phase whenever they charge,
 // whatever their phase count (a 3p car at 16 A loads every phase with 16 A,
 // a 1p car loads one phase with 16 A). maxCurrent returns the loadpoint's
 // maximum current, or the largest of all loadpoints for id < 0.
-func applyPhaseLimit(req *energyRequest, details []batteryDetail, limitA, homeShare float64, maxCurrent func(id int) float64) {
+func applyPhaseLimit(req *energyRequest, details []batteryDetail, limitA, homeShare, liveChargeW float64, maxCurrent func(id int) float64) {
 	if limitA <= 0 {
 		return
 	}
+	if homeShare <= 0 {
+		homeShare = homePhaseShareUnknown // never measured
+	}
 	req.PhaseLimit = &energyPhaseLimit{LimitA: limitA, HomeShare: min(1, max(homePhaseShareMin, homeShare))}
+	var rating float64
+	for i := range req.Batteries {
+		if i < len(details) && details[i].Type == batteryTypeBattery {
+			rating += float64(req.Batteries[i].CMax)
+		}
+	}
+	scale := 1.0
+	if rating > 0 {
+		scale = max(1, liveChargeW/rating)
+	}
 	for i := range req.Batteries {
 		bat := &req.Batteries[i]
 		if i < len(details) && details[i].Type == batteryTypeBattery {
-			divisor := float64(energyPhaseDivisor)
+			divisor := max(1, energyPhaseDivisor/scale)
 			bat.PhaseDivisor = &divisor
 			continue
 		}

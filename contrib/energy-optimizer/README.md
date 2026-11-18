@@ -62,6 +62,8 @@ Batteries with neither field are not counted, and discharge or PV gives no relie
 The slack costs ten times the penalty base per Wh: above every money gain, below
 goal and SoC penalties, so a request is never infeasible and obligations and a fixed
 first step win. Without `i_max_phase` the phase fields are inert.
+evcc sends `phase_divisor` below 3 when the battery was measured charging above its
+summed `c_max`, and a household share of 1 until grid phase currents were seen.
 
 The response adds `wear_cost`, the total currency cost of wear. For each battery
 and slot, wear is `wear_cost * discharging_power / eta_d`. It enters the primary

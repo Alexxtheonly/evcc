@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/types"
@@ -51,7 +52,7 @@ func TestEnergyPhaseLimitDisabledIsByteIdentical(t *testing.T) {
 	before, err := json.Marshal(legacyEnergyRequest{req.OptimizationInput, req.Batteries})
 	require.NoError(t, err)
 
-	applyPhaseLimit(&req, details, 0, 0.8, maxCurrent16)
+	applyPhaseLimit(&req, details, 0, 0.8, 0, maxCurrent16)
 	assert.Nil(t, req.PhaseLimit)
 	after, err := json.Marshal(req)
 	require.NoError(t, err)
@@ -80,7 +81,7 @@ func TestEnergyPhaseLimitRequestFields(t *testing.T) {
 		return map[int]float64{0: 16, 1: 16, -1: 20}[id]
 	}
 
-	applyPhaseLimit(&req, details, 45, 0.8, maxCurrent)
+	applyPhaseLimit(&req, details, 45, 0.8, 0, maxCurrent)
 	assert.Contains(t, energyRequestFeatures(req), "phase_limit")
 
 	body, err := json.Marshal(req)
@@ -115,19 +116,28 @@ func TestEnergyPhaseLimitRequestFields(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &doc))
 	assert.InDeltaSlice(t, []float64{460, 800, 480}, doc.TimeSeries.BasePhaseMax, 1e-6)
 
-	// the share is clamped to [1/3, 1]
+	// never measured: all household load on one phase; measured: floor 1/3
 	req2, details2 := phaseLimitRequest()
-	applyPhaseLimit(&req2, details2, 45, 0, maxCurrent16)
-	assert.InDelta(t, 1.0/3, req2.PhaseLimit.HomeShare, 1e-9)
+	applyPhaseLimit(&req2, details2, 45, 0, 0, maxCurrent16)
+	assert.InDelta(t, 1.0, req2.PhaseLimit.HomeShare, 1e-9)
+	req3, details3 := phaseLimitRequest()
+	applyPhaseLimit(&req3, details3, 45, 0.2, 0, maxCurrent16)
+	assert.InDelta(t, 1.0/3, req3.PhaseLimit.HomeShare, 1e-9)
+
+	// a battery measured charging above its rating counts at the measured power
+	req4, details4 := phaseLimitRequest()
+	applyPhaseLimit(&req4, details4, 45, 0.8, 9000, maxCurrent16)
+	assert.InDelta(t, 2.0, *req4.Batteries[0].PhaseDivisor, 1e-9)
 }
 
-func TestEnergyPhaseLimitReplayCoefficients(t *testing.T) {
-	// 2026-11-18 03:45-04:05: limit 45 A. The worst-phase row of a slot in which
+func TestEnergyPhaseLimitReplayRowCoefficientsOnly(t *testing.T) {
+	// Checks only the row coefficients Go sends, not a solved plan (the solver
+	// replay is in contrib/energy-optimizer/tests). 2026-11-18 03:45-04:05: limit 45 A. The worst-phase row of a slot in which
 	// all three devices charge must exceed the limit, so the solver has to drop
 	// one of them; without the battery it fits.
 	req, details := phaseLimitRequest()
 	share := homePhaseShare([]float64{10, 1, 1}, nil, 0, 0) // base ~10 A on L1
-	applyPhaseLimit(&req, details, 45, share, maxCurrent16)
+	applyPhaseLimit(&req, details, 45, share, 0, maxCurrent16)
 
 	u, hours := phaseVoltage(), 0.25
 	limitWh := req.PhaseLimit.LimitA * u * hours
@@ -158,7 +168,7 @@ func TestHomePhaseShare(t *testing.T) {
 		pv, bat   float64
 		wantShare float64
 	}{
-		{"no phase currents", nil, nil, 0, 0, 1.0 / 3},
+		{"no phase currents: unknown", nil, nil, 0, 0, 1},
 		{"balanced", []float64{4, 4, 4}, nil, 0, 0, 1.0 / 3},
 		{"base on L1", []float64{10, 1, 1}, nil, 0, 0, 10.0 / 12},
 		{"too little to tell", []float64{1, 0.5, 0.5}, nil, 0, 0, 1.0 / 3},
@@ -193,8 +203,12 @@ func TestPhaseLimitGate(t *testing.T) {
 		{"disabled without meter", phaseLimitGate{valid: false}, 6000, false},
 		{"replay: 42 A + 8.7 A > 45 A", phaseLimitGate{limitA: 45, baseA: 42, valid: true}, 6000, true},
 		{"fits", phaseLimitGate{limitA: 45, baseA: 30, valid: true}, 6000, false},
-		{"exactly at limit", phaseLimitGate{limitA: 45, baseA: 45 - 6000/(3*u), valid: true}, 6000, false},
+		{"exactly at limit incl. 5% margin", phaseLimitGate{limitA: 45, baseA: 45 - 6000*1.05/(3*u), valid: true}, 6000, false},
+		{"margin pushes over", phaseLimitGate{limitA: 45, baseA: 45 - 6000/(3*u), valid: true}, 6000, true},
+		{"live charge above rating counts", phaseLimitGate{limitA: 45, baseA: 30, liveChargeW: 40000, valid: true}, 6000, true},
 		{"no phase currents fails closed", phaseLimitGate{limitA: 45}, 6000, true},
+		{"stale snapshot fails closed", phaseLimitGate{limitA: 45, baseA: 10, valid: true, now: time.Unix(61, 0), at: time.Unix(0, 0)}, 6000, true},
+		{"latched", phaseLimitGate{limitA: 45, baseA: 10, valid: true, latched: true}, 6000, true},
 	} {
 		assert.Equal(t, tc.want, tc.gate.exceeds(tc.charge), tc.name)
 	}
@@ -215,7 +229,7 @@ func TestBatteryModeCandidatePhaseLimit(t *testing.T) {
 	}{
 		{"charge without limit", "charge", phaseLimitGate{}, api.BatteryCharge, vetoReasonNone},
 		{"charge fits", "charge", phaseLimitGate{limitA: 45, baseA: 20, valid: true}, api.BatteryCharge, vetoReasonNone},
-		{"charge vetoed to hold", "charge", phaseLimitGate{limitA: 45, baseA: 42, valid: true}, api.BatteryHold, vetoReasonPhaseLimit},
+		{"charge vetoed to normal", "charge", phaseLimitGate{limitA: 45, baseA: 42, valid: true}, api.BatteryNormal, vetoReasonPhaseLimit},
 		// holdcharge withholds charging, it never adds import
 		{"holdcharge untouched", "holdcharge", phaseLimitGate{limitA: 45, baseA: 44, valid: true}, api.BatteryHoldCharge, vetoReasonNone},
 		{"normal untouched", "normal", phaseLimitGate{limitA: 45, baseA: 60, valid: true}, api.BatteryNormal, vetoReasonNone},
@@ -246,7 +260,7 @@ func TestBatterySuggestionModePhaseLimit(t *testing.T) {
 	assert.Equal(t, api.BatteryCharge, mode, "limit off")
 
 	site.gridPhaseLimitA = 45
-	site.phaseSnapshot = phaseSnapshot{baseA: 20, homeShare: 1.0 / 3, valid: true}
+	site.phaseSnapshot = phaseSnapshot{baseA: 20, homeShare: 1.0 / 3, valid: true, at: time.Now()}
 	mode, _ = site.batterySuggestionMode(rate)
 	assert.Equal(t, api.BatteryCharge, mode, "fits")
 
@@ -254,7 +268,43 @@ func TestBatterySuggestionModePhaseLimit(t *testing.T) {
 	site.phaseSnapshot.baseA = 42
 	mode, ok = site.batterySuggestionMode(rate)
 	assert.True(t, ok)
-	assert.Equal(t, api.BatteryHold, mode, "live gate holds")
+	assert.Equal(t, api.BatteryNormal, mode, "live gate falls back to normal")
+
+	// stale snapshot
+	site.phaseSnapshot = phaseSnapshot{baseA: 20, valid: true, at: time.Now().Add(-2 * time.Minute)}
+	mode, _ = site.batterySuggestionMode(rate)
+	assert.Equal(t, api.BatteryNormal, mode, "stale fails closed")
+}
+
+func TestPhaseSnapshotLatch(t *testing.T) {
+	u := phaseVoltage()
+	site := &Site{gridPhaseLimitA: 45, batteryChargeRatingW: 6000}
+	state := func(l1 float64) siteState {
+		return siteState{gridCurrents: []float64{l1, 5, 5}}
+	}
+	site.updatePhaseSnapshot(state(42)) // 42 + 6.3*... > 45: trips
+	require.True(t, site.phaseSnapshot.latched)
+	assert.True(t, site.phaseLimitVetoesCharge())
+
+	// load gone, but hold-off running
+	site.updatePhaseSnapshot(state(10))
+	assert.True(t, site.phaseSnapshot.latched, "hold-off")
+
+	// hold-off over, but within 2 A of the limit
+	site.phaseSnapshot.vetoAt = time.Now().Add(-2 * phaseGateHoldOff)
+	site.updatePhaseSnapshot(state(45 - 6000*1.05/(3*u) - 1))
+	assert.True(t, site.phaseSnapshot.latched, "not clearly below")
+
+	// clearly below
+	site.updatePhaseSnapshot(state(20))
+	assert.False(t, site.phaseSnapshot.latched)
+	assert.False(t, site.phaseLimitVetoesCharge())
+
+	// grid meter error: no currents, fails closed, share keeps the measured peak
+	share := site.phaseSnapshot.homeShare
+	site.updatePhaseSnapshot(siteState{})
+	assert.True(t, site.phaseLimitVetoesCharge())
+	assert.Equal(t, share, site.phaseSnapshot.homeShare)
 }
 
 func TestEnergyIntelligenceGridPhaseLimitValidation(t *testing.T) {

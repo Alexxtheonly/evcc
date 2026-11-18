@@ -145,6 +145,7 @@ type Site struct {
 	optimizerChargePowerW            float64             // grid charge power (W) of the active charge decision, for the phase gate
 	gridPhaseLimitA                  float64             // ADR-049 per-phase import limit, 0 = off
 	phaseSnapshot                    phaseSnapshot       // live per-phase state, see updatePhaseSnapshot
+	batteryChargeRatingW             float64             // summed home battery CMax of the last request, for the phase gate
 	optimizerChargeVetoed            bool                // last run suggested grid charging but a gate declined it
 	optimizerVetoReason              optimizerVetoReason // why the applied mode is not (fully) in effect, for UI annotation
 

@@ -451,7 +451,7 @@ func chargePaybackJustified(pn, soc, discharge []float32, sInitial float32) bool
 // additionally gated on the plan being worth it (gridChargeJustified) and
 // every controllable battery's plan paying itself back (chargePaybackJustified)
 // and on fitting the per-phase import limit (ADR-049): a charge that would
-// push the most loaded phase over it falls back to hold.
+// push the most loaded phase over it falls back to normal.
 func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer.OptimizationInput, res optimizer.OptimizationResult, details []batteryDetail, gate phaseLimitGate) optimizerDecision {
 	mode := api.BatteryUnknown
 
@@ -522,7 +522,8 @@ func batteryModeCandidate(suggestions map[string]types.Suggestion, req optimizer
 		}
 	}
 	if gate.exceeds(chargePower) {
-		return optimizerDecision{mode: api.BatteryHold, suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPhaseLimit}
+		// normal, not hold: the battery keeps covering the house and lowers import
+		return optimizerDecision{mode: api.BatteryNormal, suggestedMode: mode, chargeVetoed: true, vetoReason: vetoReasonPhaseLimit}
 	}
 
 	// pn is currency/Wh

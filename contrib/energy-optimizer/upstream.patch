@@ -1,5 +1,5 @@
 diff --git a/openapi.yaml b/openapi.yaml
-index 43c58e7..7d9eb19 100644
+index 43c58e7..cb9d95a 100644
 --- a/openapi.yaml
 +++ b/openapi.yaml
 @@ -39,6 +39,25 @@ servers:
@@ -37,18 +37,18 @@ index 43c58e7..7d9eb19 100644
  
    /optimize/health:
      get:
-@@ -184,6 +205,11 @@ components:
-           minimum: 0
+@@ -185,6 +206,11 @@ components:
            description: |
              price per W to consider in case the import limit is exceeded. 
+             If not specified, the limit will be protected by a hard constraint.
 +        i_max_phase:
 +          type: number
 +          minimum: 0
 +          maximum: 1000
 +          description: Per-phase import current limit (A). Adds one soft worst-phase row per slot over phase_current, phase_divisor and time_series.base_phase_max; the overshoot is penalized, never infeasible.
-             If not specified, the limit will be protected by a hard constraint.
      BatteryConfig:
        type: object
+       required:
 @@ -196,6 +222,68 @@ components:
          - d_max
          - p_a
