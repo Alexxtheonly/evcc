@@ -47,7 +47,7 @@ def test_capability_version(client):
     assert response.get_json() == {
         "version": 1,
         "features": ["battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step",
-                     "battery_band", "minimum_run"],
+                     "battery_band", "minimum_run", "phase_limit"],
     }
 
 
@@ -560,3 +560,127 @@ def test_slot_priced_at_the_reference_is_cheap(client, price, charges):
     data["time_series"]["p_E"] = [0.0000786] * 4
     charged = solve(client, data)["batteries"][0]["charging_power"][0] > 0.1
     assert charged is charges
+
+
+# ADR-049 per-phase import limit. Replay of 2026-11-18 03:45-04:05 local: BYD home
+# battery grid charging at 6 kW, Luna on a 3p 16 A wallbox, Calypso on a 1p 16 A
+# wallbox (on L1), household ~10 A on L1. L1 reached ~52 A and tripped the fuse.
+PHASE_U = 230.
+PHASE_SLOT = 900
+
+
+def phase_replay_request(limit=None):
+    slots = 8
+    data = {
+        "strategy": {"charging_strategy": "none"},
+        "eta_c": 0.95, "eta_d": 0.95,
+        "batteries": [
+            {"s_capacity": 10000, "s_min": 500, "s_max": 10000, "s_initial": 2000,
+             "c_min": 0, "c_max": 6000, "d_max": 6000, "p_a": 0.0003,
+             "charge_from_grid": True, "discharge_to_grid": False},
+            {"s_capacity": 75000, "s_min": 0, "s_max": 70000, "s_initial": 20000,
+             "c_min": 4140, "c_max": 11040, "d_max": 0, "p_a": 0.0003,
+             "charge_from_grid": True, "discharge_to_grid": False},
+            {"s_capacity": 50000, "s_min": 0, "s_max": 45000, "s_initial": 20000,
+             "c_min": 1380, "c_max": 3680, "d_max": 0, "p_a": 0.0003,
+             "charge_from_grid": True, "discharge_to_grid": False},
+        ],
+        "time_series": {
+            "dt": [PHASE_SLOT] * slots,
+            # 12 A household, 10 A of it on L1
+            "gt": [12 * PHASE_U * PHASE_SLOT / 3600] * slots,
+            "ft": [0] * slots,
+            "p_N": [0.0001] * 4 + [0.0004] * 4,
+            "p_E": [0.00005] * slots,
+        },
+    }
+    if limit is not None:
+        data["grid"] = {"i_max_phase": limit}
+        data["time_series"]["base_phase_max"] = [10 * PHASE_U * PHASE_SLOT / 3600] * slots
+        data["batteries"][0]["phase_divisor"] = 3
+        data["batteries"][1]["phase_current"] = 16
+        data["batteries"][2]["phase_current"] = 16
+    return data
+
+
+def worst_phase_amps(data, result):
+    """Planned worst-phase current per slot, the way the row counts it."""
+    amps = []
+    for t, dt in enumerate(data["time_series"]["dt"]):
+        hours = dt / 3600
+        a = data["time_series"]["base_phase_max"][t] / (PHASE_U * hours)
+        for bat, res in zip(data["batteries"], result["batteries"]):
+            charge = res["charging_power"][t]
+            if charge <= 0.1:
+                continue
+            if "phase_divisor" in bat:
+                a += charge / bat["phase_divisor"] / (PHASE_U * hours)
+            else:
+                a += bat["phase_current"]
+        amps.append(a)
+    return amps
+
+
+def test_phase_limit_replay_unset_overloads_l1(client):
+    # the old plan: everything charges in the cheap slots, L1 at ~50.7 A
+    result = solve(client, phase_replay_request())
+    amps = worst_phase_amps(phase_replay_request(limit=45), result)
+    assert max(amps) == pytest.approx(10 + 16 + 16 + 6000 / 3 / PHASE_U, abs=0.1)
+
+
+def test_phase_limit_replay_keeps_every_slot_under_limit(client):
+    data = phase_replay_request(limit=45)
+    result = solve(client, data)
+    amps = worst_phase_amps(data, result)
+    assert max(amps) <= 45 + 1e-3, amps
+    # still buys cheap energy: something charges in every cheap slot
+    for t in range(4):
+        assert sum(b["charging_power"][t] for b in result["batteries"]) > 100
+
+
+def test_phase_limit_unset_is_old_plan(client):
+    # phase fields without grid.i_max_phase are inert
+    plain = phase_replay_request()
+    tagged = phase_replay_request(limit=45)
+    del tagged["grid"]
+    del tagged["time_series"]["base_phase_max"]
+    a, b = solve(client, plain), solve(client, tagged)
+    for x, y in zip(a["batteries"], b["batteries"]):
+        assert x["charging_power"] == pytest.approx(y["charging_power"], abs=0.1)
+    assert a["objective_value"] == pytest.approx(b["objective_value"], abs=1e-6)
+
+
+def test_phase_limit_never_infeasible(client):
+    # household alone above the limit, and a fixed first step charging everything
+    data = phase_replay_request(limit=20)
+    data["time_series"]["base_phase_max"] = [30 * PHASE_U * PHASE_SLOT / 3600] * 8
+    data["batteries"][0].update(first_step_charge=1500, first_step_discharge=0)
+    result = solve(client, data)
+    assert result["batteries"][0]["charging_power"][0] == pytest.approx(1500, abs=0.1)
+
+
+def test_phase_limit_goal_wins(client):
+    # Luna must gain ~10 kWh by slot 4: four slots at 11 kW. Luna (16 A) and the
+    # household (10 A) alone exceed a 25 A limit, the goal is met anyway (slack) and
+    # Calypso and the home battery give way
+    data = phase_replay_request(limit=25)
+    goal = [0] * 8
+    goal[3] = 20000 + 0.95 * 4 * 11040 * PHASE_SLOT / 3600 - 1
+    data["batteries"][1]["s_goal"] = goal
+    result = solve(client, data)
+    assert result["batteries"][1]["state_of_charge"][3] >= goal[3] - 1
+    for i in (0, 2):
+        assert result["batteries"][i]["charging_power"][:4] == pytest.approx([0] * 4, abs=0.1)
+    assert worst_phase_amps(data, result)[:4] == pytest.approx([26] * 4, abs=1e-3)
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d["time_series"].__setitem__("base_phase_max", [0] * 3),
+    lambda d: d.__setitem__("grid", {"i_max_phase": 0}),
+    lambda d: d["batteries"][0].__setitem__("phase_divisor", 0.5),
+    lambda d: d["batteries"][0].__setitem__("phase_current", -1),
+])
+def test_phase_limit_validation(client, request_data, change):
+    data = deepcopy(request_data)
+    change(data)
+    assert client.post("/optimize/charge-schedule", json=data).status_code == 400

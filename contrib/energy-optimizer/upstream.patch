@@ -1,5 +1,5 @@
 diff --git a/openapi.yaml b/openapi.yaml
-index 43c58e7..ef6a033 100644
+index 43c58e7..7d9eb19 100644
 --- a/openapi.yaml
 +++ b/openapi.yaml
 @@ -39,6 +39,25 @@ servers:
@@ -37,7 +37,19 @@ index 43c58e7..ef6a033 100644
  
    /optimize/health:
      get:
-@@ -196,6 +217,58 @@ components:
+@@ -184,6 +205,11 @@ components:
+           minimum: 0
+           description: |
+             price per W to consider in case the import limit is exceeded. 
++        i_max_phase:
++          type: number
++          minimum: 0
++          maximum: 1000
++          description: Per-phase import current limit (A). Adds one soft worst-phase row per slot over phase_current, phase_divisor and time_series.base_phase_max; the overshoot is penalized, never infeasible.
+             If not specified, the limit will be protected by a hard constraint.
+     BatteryConfig:
+       type: object
+@@ -196,6 +222,68 @@ components:
          - d_max
          - p_a
        properties:
@@ -84,6 +96,16 @@ index 43c58e7..ef6a033 100644
 +          minimum: 0
 +          maximum: 86400
 +          description: Minimum duration of a charging run that starts inside the horizon, seconds. Requires c_min > 0.
++        phase_current:
++          type: number
++          minimum: 0
++          maximum: 1000
++          description: Worst-phase current (A) whenever it charges, for grid.i_max_phase (chargers at their max current).
++        phase_divisor:
++          type: number
++          minimum: 1
++          maximum: 3
++          description: Phases its charging power spreads over, for grid.i_max_phase (home batteries).
 +        band_storage_feed:
 +          type: boolean
 +          default: true
@@ -96,7 +118,7 @@ index 43c58e7..ef6a033 100644
          charge_from_grid:
            type: boolean
            description: |
-@@ -248,7 +321,6 @@ components:
+@@ -248,7 +336,6 @@ components:
            example: 5000
          p_a:
            type: number
@@ -104,7 +126,7 @@ index 43c58e7..ef6a033 100644
            description: Monetary value of the stored energy per Wh at end of time horizon
            example: 0.25
          p_demand:
-@@ -306,14 +378,12 @@ components:
+@@ -306,15 +393,19 @@ components:
            type: array
            items:
              type: number
@@ -117,9 +139,16 @@ index 43c58e7..ef6a033 100644
              type: number
 -            minimum: 0
            description: Grid export remuneration per Wh at each time step (currency units/Wh)
++        base_phase_max:
++          type: array
++          items:
++            type: number
++            minimum: 0
++          description: Worst-phase household energy at each time step (Wh), requires grid.i_max_phase
            example: [0.15, 0.12, 0.10, 0.11, 0.14, 0.16]
  
-@@ -392,6 +462,9 @@ components:
+     OptimizationInput:
+@@ -392,6 +483,9 @@ components:
      OptimizationResult:
        type: object
        properties:
@@ -129,7 +158,7 @@ index 43c58e7..ef6a033 100644
          status:
            type: string
            enum: [Optimal, Feasible, Infeasible, Unbounded, Undefined, Not Solved]
-@@ -411,8 +484,8 @@ components:
+@@ -411,8 +505,8 @@ components:
            type: number
            nullable: true
            description: |
@@ -141,7 +170,7 @@ index 43c58e7..ef6a033 100644
          limit_violations:
            type: object
 diff --git a/src/optimizer/app.py b/src/optimizer/app.py
-index a355b2d..2918f7e 100644
+index a355b2d..cc1d3ad 100644
 --- a/src/optimizer/app.py
 +++ b/src/optimizer/app.py
 @@ -10,6 +10,7 @@ from flask import Flask, jsonify, request
@@ -152,7 +181,13 @@ index a355b2d..2918f7e 100644
  from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
  from .settings import OptimizerSettings
  
-@@ -104,6 +105,17 @@ grid_model = api.model('GridConfig', {
+@@ -100,10 +101,24 @@ strategy_model = api.model('OptimizationStrategy', {
+ grid_model = api.model('GridConfig', {
+     'p_max_imp': fields.Float(required=False, description='Maximum grid import power in W'),
+     'p_max_exp': fields.Float(required=False, description='Maximum grid export power in W'),
+-    'prc_p_exc_imp': fields.Float(required=False, description='price per W to consider in case the import limit is exceeded. ')
++    'prc_p_exc_imp': fields.Float(required=False, description='price per W to consider in case the import limit is exceeded. '),
++    'i_max_phase': fields.Float(required=False, description='Per-phase import current limit (A), one soft worst-phase row per slot'),
  })
  
  battery_config_model = api.model('BatteryConfig', {
@@ -167,10 +202,20 @@ index a355b2d..2918f7e 100644
 +    'c_min_run': fields.Float(required=False, description='Minimum length of a charging run started inside the horizon (s)'),
 +    'c_run_elapsed': fields.Float(required=False, description='Seconds the charging run in progress has lasted, 0 if none'),
 +    'band_storage_feed': fields.Boolean(required=False, description='Whether batteries may discharge into this battery while its band is active'),
++    'phase_current': fields.Float(required=False, description='Worst-phase current (A) whenever it charges, for grid.i_max_phase'),
++    'phase_divisor': fields.Float(required=False, description='Phases its charging power spreads over (1..3), for grid.i_max_phase'),
      'charge_from_grid': fields.Boolean(required=False, description='Controls whether the battery can be charged from the grid.'),
      'discharge_to_grid': fields.Boolean(required=False, description='Controls whether the battery can discharge to grid.'),
      's_capacity': fields.Float(required=False, description='Capacity at 100% state of charge (Wh)'),
-@@ -149,6 +161,7 @@ limit_violation_result_model = api.model('LimitViolationResult', {
+@@ -125,6 +140,7 @@ time_series_model = api.model('TimeSeries', {
+     'ft': fields.List(fields.Float, required=True, description='Forecasted solar generation at each time step (Wh)'),
+     'p_N': fields.List(fields.Float, required=True, description='Price per Wh taken from grid at each time step'),
+     'p_E': fields.List(fields.Float, required=True, description='Remuneration per Wh fed into grid at each time step'),
++    'base_phase_max': fields.List(fields.Float, required=False, description='Worst-phase household energy at each time step (Wh), for grid.i_max_phase'),
+ })
+ 
+ optimization_input_model = api.model('OptimizationInput', {
+@@ -149,6 +165,7 @@ limit_violation_result_model = api.model('LimitViolationResult', {
  })
  
  optimization_result_model = api.model('OptimizationResult', {
@@ -178,7 +223,7 @@ index a355b2d..2918f7e 100644
      'status': fields.String(description='Optimization status'),
      'objective_value': fields.Float(description='Optimal objective function value'),
      'limit_violations': fields.Nested(limit_violation_result_model, description='Collection of flags signalling the violation of defined limits'),
-@@ -174,6 +187,7 @@ class OptimizeCharging(Resource):
+@@ -174,6 +191,7 @@ class OptimizeCharging(Resource):
          """
          try:
              data = api.payload
@@ -186,7 +231,17 @@ index a355b2d..2918f7e 100644
  
              # Parse strategy items with default values
              strat_data = data.get('strategy', {})
-@@ -207,6 +221,17 @@ class OptimizeCharging(Resource):
+@@ -187,7 +205,8 @@ class OptimizeCharging(Resource):
+             grid = GridConfig(
+                 p_max_imp=grid_data.get('p_max_imp', None),
+                 p_max_exp=grid_data.get('p_max_exp', None),
+-                prc_p_exc_imp=grid_data.get('prc_p_exc_imp', None)
++                prc_p_exc_imp=grid_data.get('prc_p_exc_imp', None),
++                i_max_phase=grid_data.get('i_max_phase'),
+             )
+ 
+             # Parse battery configurations
+@@ -207,6 +226,19 @@ class OptimizeCharging(Resource):
                      d_max=bat_data['d_max'],
                      p_a=bat_data['p_a'],
                      c_priority=bat_data.get('c_priority', 0),
@@ -201,10 +256,20 @@ index a355b2d..2918f7e 100644
 +                    c_min_run=bat_data.get('c_min_run'),
 +                    c_run_elapsed=bat_data.get('c_run_elapsed', 0),
 +                    band_storage_feed=bat_data.get('band_storage_feed', True),
++                    phase_current=bat_data.get('phase_current'),
++                    phase_divisor=bat_data.get('phase_divisor'),
                  ))
  
              # Parse time series data
-@@ -253,11 +278,20 @@ class OptimizeCharging(Resource):
+@@ -216,6 +248,7 @@ class OptimizeCharging(Resource):
+                 ft=data['time_series']['ft'],
+                 p_N=data['time_series']['p_N'],
+                 p_E=data['time_series']['p_E'],
++                base_phase_max=data['time_series'].get('base_phase_max'),
+             )
+ 
+             # Validate time series lengths
+@@ -253,11 +286,20 @@ class OptimizeCharging(Resource):
              started = time.perf_counter()
              result = optimizer.solve()
              dump_slow_request(data, time.perf_counter() - started)
@@ -229,17 +294,18 @@ index a355b2d..2918f7e 100644
  class Health(Resource):
 diff --git a/src/optimizer/energy_extension.py b/src/optimizer/energy_extension.py
 new file mode 100644
-index 0000000..e28ca5b
+index 0000000..b4106b0
 --- /dev/null
 +++ b/src/optimizer/energy_extension.py
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,144 @@
 +"""Validation for the local energy planning API."""
 +
 +import math
 +
 +CAPABILITIES = {
 +    'version': 1,
-+    'features': ['battery_availability', 'battery_efficiency', 'battery_wear', 'fixed_first_step', 'battery_band', 'minimum_run'],
++    'features': ['battery_availability', 'battery_efficiency', 'battery_wear', 'fixed_first_step', 'battery_band', 'minimum_run',
++                 'phase_limit'],
 +}
 +MAX_SLOTS = 384
 +MAX_BATTERIES = 16
@@ -291,6 +357,17 @@ index 0000000..e28ca5b
 +    for key, value in data.get('grid', {}).items():
 +        if key in ('p_max_imp', 'p_max_exp', 'prc_p_exc_imp') and value is not None:
 +            finite(value, key, 0)
++    limit = data.get('grid', {}).get('i_max_phase')
++    if limit is not None and finite(limit, 'i_max_phase', 0, 1000) == 0:
++        raise ValueError('i_max_phase must be positive')
++    base = series.get('base_phase_max')
++    if base is not None:
++        if limit is None:
++            raise ValueError('base_phase_max requires grid.i_max_phase')
++        if len(base) != count:
++            raise ValueError('base_phase_max length must match dt')
++        for value in base:
++            finite(value, 'base_phase_max', 0)
 +    for battery in data['batteries']:
 +        validate_battery(battery, series['dt'], eta_c, eta_d)
 +
@@ -326,6 +403,10 @@ index 0000000..e28ca5b
 +    if 'c_min_run' in battery:
 +        if finite(battery['c_min_run'], 'c_min_run', 0, 86400) > 0 and battery['c_min'] == 0:
 +            raise ValueError('c_min_run requires c_min > 0')
++    if battery.get('phase_current') is not None:
++        finite(battery['phase_current'], 'phase_current', 0, 1000)
++    if battery.get('phase_divisor') is not None:
++        finite(battery['phase_divisor'], 'phase_divisor', 1, 3)
 +    if 'c_run_elapsed' in battery:
 +        finite(battery['c_run_elapsed'], 'c_run_elapsed', 0)
 +    if 'band_storage_feed' in battery:
@@ -362,7 +443,7 @@ index 0000000..e28ca5b
 +            discharge = math.nextafter(discharge, 0.0)
 +    raise ValueError('first step action exceeds physical storage capacity')
 diff --git a/src/optimizer/optimizer.py b/src/optimizer/optimizer.py
-index 77c2353..9b67df0 100644
+index 77c2353..ad3cba7 100644
 --- a/src/optimizer/optimizer.py
 +++ b/src/optimizer/optimizer.py
 @@ -38,6 +38,11 @@ DISCHARGING_STRATEGIES = ('none', 'discharge_before_import')
@@ -377,7 +458,20 @@ index 77c2353..9b67df0 100644
  # fixed factor to use instead of deriving one from the coefficients. None derives it, which is the
  # production setting; the tests pin it to compare two scalings of the same model.
  OBJECTIVE_SCALE = None
-@@ -136,6 +141,25 @@ class BatteryConfig:
+@@ -119,6 +124,12 @@ class GridConfig:
+     p_max_imp: float
+     p_max_exp: float
+     prc_p_exc_imp: float
++    # per-phase import current limit (A): one soft worst-phase row per slot
++    i_max_phase: Optional[float] = None
++
++
++# nominal phase voltage the per-phase limit converts with
++PHASE_VOLTAGE = 230.
+ 
+ 
+ @dataclass
+@@ -136,6 +147,29 @@ class BatteryConfig:
      p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
      s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
      c_priority: int = 0
@@ -397,13 +491,25 @@ index 77c2353..9b67df0 100644
 +    c_run_elapsed: float = 0
 +    # False: no battery may discharge into this battery's charging while its band is active
 +    band_storage_feed: bool = True
++    # per-phase limit: worst-phase current (A) whenever it charges (chargers), or the
++    # number of phases its charging power spreads over (home batteries)
++    phase_current: Optional[float] = None
++    phase_divisor: Optional[float] = None
 +
 +    def band_active(self) -> bool:
 +        return self.s_band is not None and self.p_band is not None and self.p_band > 0 and self.s_band > 0
  
  
  @dataclass
-@@ -206,6 +230,8 @@ class Optimizer:
+@@ -145,6 +179,7 @@ class TimeSeriesData:
+     ft: List[float]  # Forecasted production [Wh]
+     p_N: List[float]  # Import prices [currency unit/Wh]
+     p_E: List[float]  # Export prices [currency unit/Wh]
++    base_phase_max: Optional[List[float]] = None  # worst-phase household energy [Wh]
+ 
+ 
+ class Optimizer:
+@@ -206,6 +241,8 @@ class Optimizer:
              self.max_import_price,
              self.max_export_price,
              *(bat.p_a for bat in self.batteries),
@@ -412,16 +518,17 @@ index 77c2353..9b67df0 100644
          ]
          if self.is_grid_demand_rate_active:
              # prc_p_exc_imp is currency/W and the charge is set by the single worst time step, so
-@@ -249,6 +275,8 @@ class Optimizer:
+@@ -249,6 +286,9 @@ class Optimizer:
          self._setup_target_function()
          self._add_energy_balance_constraints()
          self._add_battery_constraints()
 +        self._add_band_storage_constraints()
 +        self._add_band_grid_constraints()
++        self._add_phase_limit_constraints()
  
      def _setup_variables(self):
          """
-@@ -342,6 +370,11 @@ class Optimizer:
+@@ -342,6 +382,11 @@ class Optimizer:
          for t in self.time_steps:
              self.variables['y'].append(pulp.LpVariable(f"y_{t}", cat='Binary'))
  
@@ -433,7 +540,7 @@ index 77c2353..9b67df0 100644
          # Binary variable for charging activation
          self.variables['z_c'] = {}
          for i, bat in enumerate(self.batteries):
-@@ -353,6 +386,18 @@ class Optimizer:
+@@ -353,6 +398,18 @@ class Optimizer:
              else:
                  self.variables['z_c'][i] = None
  
@@ -452,7 +559,7 @@ index 77c2353..9b67df0 100644
          # Binary variable to lock charging against discharging
          self.variables['z_cd'] = {}
          for i, bat in enumerate(self.batteries):
-@@ -396,6 +441,14 @@ class Optimizer:
+@@ -396,6 +453,14 @@ class Optimizer:
          # Final state of charge value [currency unit]
          for i, bat in enumerate(self.batteries):
              objective += self.variables['s'][i][-1] * bat.p_a
@@ -467,7 +574,7 @@ index 77c2353..9b67df0 100644
  
          # charge for import power demand rate. The demand rate is applied to the maximum
          # power draw beyond the threshold within the time horizon.
-@@ -616,23 +669,44 @@ class Optimizer:
+@@ -616,23 +681,44 @@ class Optimizer:
  
          # Constraint (3): Battery dynamics
          for i, bat in enumerate(self.batteries):
@@ -509,10 +616,10 @@ index 77c2353..9b67df0 100644
 +
 +            if self.variables['b'][i] is not None:
 +                self.problem += self.variables['b'][i] <= self.variables['s'][i][-1]
-+
-+            self._add_minimum_run_constraints(i, bat)
  
 -            # Constraint (6): Battery SOC goal constraints (for t > 0)
++            self._add_minimum_run_constraints(i, bat)
++
 +            # Goals refer to energy at the end of each slot, including the first.
              if bat.s_goal is not None:
 -                for t in range(1, self.T):
@@ -520,7 +627,7 @@ index 77c2353..9b67df0 100644
                      if bat.s_goal[t] > 0:
                          self.problem += (self.variables['s'][i][t]
                                           + self.variables['s_goal_pen'][i][t] >= bat.s_goal[t])
-@@ -701,6 +775,139 @@ class Optimizer:
+@@ -701,6 +787,190 @@ class Optimizer:
                  self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                   * (1 - self.variables['z_cd'][i][t]))
  
@@ -621,6 +728,57 @@ index 77c2353..9b67df0 100644
 +                           + big * (1 - z[t]))
 +                self.problem += imported <= allowed
 +
++    def _add_phase_limit_constraints(self):
++        """
++        Per-phase import limit (grid.i_max_phase, A). No phase identity is modelled: one
++        conservative row per slot bounds the worst phase,
++
++            sum_chargers I_max * U * dt * z  +  sum_batteries c / phase_divisor  +  base_phase_max
++                <= i_max_phase * U * dt  +  slack
++
++        in Wh. A charger counts at its full worst-phase current whenever it charges (z = 1),
++        whatever its power: a 3p car at 16 A puts 16 A on every phase, a 1p car 16 A on one.
++        A home battery spreads its charging power over phase_divisor phases. Batteries with
++        neither field are not counted. The slack is priced at ten times penalty_base per Wh:
++        above every money gain, below the goal and SoC penalties, so a request never becomes
++        infeasible and obligations and a fixed first step still win. The penalty is not part
++        of the reported objective.
++        """
++        self.variables['phase_slack'] = []
++        limit = self.grid.i_max_phase
++        if limit is None:
++            return
++        base = self.time_series.base_phase_max or [0.] * self.T
++        counted = [i for i, bat in enumerate(self.batteries)
++                   if bat.phase_current is not None or bat.phase_divisor is not None]
++        if not counted and not any(base):
++            return
++        charging = {}
++        for i in counted:
++            bat = self.batteries[i]
++            if bat.phase_current is None:
++                continue
++            z = self.variables['z_c'][i]
++            if z is None:
++                z = [pulp.LpVariable(f"z_phase_{i}_{t}", cat='Binary') for t in self.time_steps]
++            charging[i] = z
++        slack = [pulp.LpVariable(f"phase_slack_{t}", lowBound=0) for t in self.time_steps]
++        self.variables['phase_slack'] = slack
++        for t in self.time_steps:
++            dth = self.time_series.dt[t] / 3600.
++            row = base[t]
++            for i in counted:
++                bat = self.batteries[i]
++                if bat.phase_current is not None:
++                    self.problem += self.variables['c'][i][t] <= bat.c_max * dth * charging[i][t]
++                    row += bat.phase_current * PHASE_VOLTAGE * dth * charging[i][t]
++                else:
++                    row += self.variables['c'][i][t] / bat.phase_divisor
++            self.problem += row <= limit * PHASE_VOLTAGE * dth + slack[t]
++        # real money stage, see solve(): the penalty must bind in every stage
++        self.cost_objective = self.cost_objective - self.penalty_base * 10 * pulp.lpSum(slack)
++        self.problem.setObjective((self.cost_objective + self.preference_objective) * self.objective_scale)
++
 +    def _add_minimum_run_constraints(self, i, bat):
 +        """
 +        A charging run lasts at least c_min_run seconds, or until the horizon ends. A run
@@ -660,7 +818,7 @@ index 77c2353..9b67df0 100644
      def _solver(self, tmpdir, **options):
          """CBC with the shared settings, writing its scratch files to tmpdir."""
          # COIN_CMD is the same solver taking a path, PULP_CBC_CMD is it pinned to the bundled
-@@ -922,6 +1129,7 @@ class Optimizer:
+@@ -922,6 +1192,7 @@ class Optimizer:
              result = {
                  'status': status,
                  'objective_value': self.get_clean_objective_value(),
@@ -668,7 +826,7 @@ index 77c2353..9b67df0 100644
                  'limit_violations': {
                      'grid_import_limit_exceeded': grid_imp_limit_violated,
                      'grid_export_limit_hit': grid_exp_limit_hit
-@@ -992,7 +1200,9 @@ class Optimizer:
+@@ -992,7 +1263,9 @@ class Optimizer:
          # Final state of charge value [currency unit]
          for i, bat in enumerate(self.batteries):
              clean_objective += (pulp.value(self.variables['s'][i][self.T-1])
@@ -679,7 +837,7 @@ index 77c2353..9b67df0 100644
  
          # charge for import power demand rate. The demand rate is applied to the maximum
          # power draw beyond the threshold within the time horizon.
-@@ -1000,4 +1210,12 @@ class Optimizer:
+@@ -1000,4 +1273,12 @@ class Optimizer:
              clean_objective += - self.grid.prc_p_exc_imp \
                  * pulp.value(self.variables['p_max_imp_exc'])
  

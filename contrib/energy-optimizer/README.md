@@ -32,7 +32,7 @@ when a worker exceeds its wall-clock timeout.
 ```json
 {
   "version": 1,
-  "features": ["battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step", "battery_band", "minimum_run"]
+  "features": ["battery_availability", "battery_efficiency", "battery_wear", "fixed_first_step", "battery_band", "minimum_run", "phase_limit"]
 }
 ```
 
@@ -50,6 +50,18 @@ fields on each battery:
 | `c_min_run` | Seconds. A charging run that starts inside the horizon lasts at least this long, or until the horizon ends, unless it may not charge at all (see `c_run_elapsed`). Uses the `c_min` on/off binaries; requires `c_min > 0`. |
 | `band_storage_feed` | Boolean, default true. Requires `s_band` and `c_min > 0`. False forbids every other battery to discharge in any slot where this battery charges: an inverter in normal mode covers the household and the charging car alike, so the executable alternative to feeding the band is hold. |
 | `c_run_elapsed` | Seconds the run in progress has lasted, 0 (default) if none. Below `c_min_run` the run continues until it has lasted `c_min_run`. This and every start obligation of `c_min_run` yield only where the run may not charge at all (the band grid rule, a fixed first action in a scenario without the solar it was planned on), at a goal-sized penalty, so the minimum never makes a request infeasible; the run then ends, and a later restart is a new run held to the full minimum. Send it only when charging at `c_min` that long fits; at or above the minimum the run may stop any time. |
+
+Per-phase import limit (`phase_limit`, ADR-049). `grid.i_max_phase` (A) adds one
+soft row per slot on the worst phase, in Wh:
+`sum(phase_current * 230 * dt_h * z) + sum(c / phase_divisor) + base_phase_max <= i_max_phase * 230 * dt_h + slack`.
+`z` is 1 whenever a battery with `phase_current` (a charger, counted at its maximum
+current whatever its phase count) charges; batteries with `phase_divisor` (home
+batteries, 3) count their charging energy spread over that many phases;
+`time_series.base_phase_max` is the worst-phase household energy per slot (Wh).
+Batteries with neither field are not counted, and discharge or PV gives no relief.
+The slack costs ten times the penalty base per Wh: above every money gain, below
+goal and SoC penalties, so a request is never infeasible and obligations and a fixed
+first step win. Without `i_max_phase` the phase fields are inert.
 
 The response adds `wear_cost`, the total currency cost of wear. For each battery
 and slot, wear is `wear_cost * discharging_power / eta_d`. It enters the primary
