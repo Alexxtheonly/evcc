@@ -94,6 +94,11 @@ func (site *Site) prepareEnergy(req optimizer.OptimizationInput, details *reques
 			return res, err
 		}
 	}
+	site.Lock()
+	site.gridPhaseLimitA = cfg.GridPhaseLimitA
+	share := site.phaseSnapshot.homeShare
+	site.Unlock()
+	applyPhaseLimit(&res, details.BatteryDetails, cfg.GridPhaseLimitA, share, site.loadpointMaxCurrent)
 	return res, nil
 }
 

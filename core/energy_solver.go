@@ -32,11 +32,14 @@ type energyBattery struct {
 	CMinRun            *float64 `json:"c_min_run,omitempty"`         // minimum charging run started in the horizon, s
 	CRunElapsed        *float64 `json:"c_run_elapsed,omitempty"`     // s the run in progress has lasted
 	BandStorageFeed    *bool    `json:"band_storage_feed,omitempty"` // false: no battery discharges while it charges
+	PhaseCurrent       *float64 `json:"phase_current,omitempty"`     // ADR-049 worst-phase A whenever it charges (loadpoints)
+	PhaseDivisor       *float64 `json:"phase_divisor,omitempty"`     // ADR-049 phases its AC power spreads over (home batteries)
 }
 
 type energyRequest struct {
 	optimizer.OptimizationInput
-	Batteries []energyBattery `json:"batteries"`
+	Batteries  []energyBattery   `json:"batteries"`
+	PhaseLimit *energyPhaseLimit `json:"-"` // ADR-049, encoded by MarshalJSON
 }
 
 var errEnergyInfeasible = errors.New("energy schedule infeasible")
@@ -68,6 +71,9 @@ func energyRequestFeatures(req energyRequest) []string {
 	}
 	if run {
 		res = append(res, "minimum_run")
+	}
+	if req.PhaseLimit != nil {
+		res = append(res, "phase_limit")
 	}
 	return res
 }
@@ -420,7 +426,7 @@ func (site *Site) robustEnergy(ctx context.Context, req energyRequest, details r
 				}
 				suggestions[detail.key()] = s
 			}
-			if scenario == 0 && batteryModeCandidate(suggestions, fixed.ordinary(), res, details.BatteryDetails).vetoReason != vetoReasonNone {
+			if scenario == 0 && batteryModeCandidate(suggestions, fixed.ordinary(), res, details.BatteryDetails, site.phaseLimitGate()).vetoReason != vetoReasonNone {
 				feasible = false
 				excluded = append(excluded, energyScenarioExclusion{action.name, "controlVeto", scenario})
 			}

@@ -31,6 +31,9 @@ type EnergyIntelligenceSettings struct {
 	CheapBandPrice  *float64 `json:"cheapBandPrice,omitempty"`
 	// home batteries may discharge while a car charges inside its band (default off: hold)
 	CheapBandFromBattery bool `json:"cheapBandFromBattery,omitempty"`
+	// per-phase grid import limit in A (ADR-049): solver row and battery grid-charge
+	// gate. 0 = disabled, request and control unchanged.
+	GridPhaseLimitA float64 `json:"gridPhaseLimitA,omitempty"`
 }
 
 type EnergyEfficiencySetting struct {
@@ -53,6 +56,9 @@ func (cfg EnergyIntelligenceSettings) validate() error {
 	}
 	if p := cfg.CheapBandPrice; p != nil && (math.IsNaN(*p) || math.IsInf(*p, 0) || math.Abs(*p) > 10) {
 		return errors.New("cheapBandPrice must be a finite price per kWh")
+	}
+	if l := cfg.GridPhaseLimitA; math.IsNaN(l) || l < 0 || (l > 0 && (l < 6 || l > 1000)) {
+		return errors.New("gridPhaseLimitA must be 0 (off) or 6..1000 A")
 	}
 	if len(cfg.BatteryWear) > 64 {
 		return errors.New("too many battery wear entries")

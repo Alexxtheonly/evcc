@@ -142,6 +142,9 @@ type Site struct {
 	optimizerResetReason             string
 	optimizerModeExpiresAt           time.Time
 	optimizerChargePrice             float64             // price (currency/kWh) the active charge decision was based on
+	optimizerChargePowerW            float64             // grid charge power (W) of the active charge decision, for the phase gate
+	gridPhaseLimitA                  float64             // ADR-049 per-phase import limit, 0 = off
+	phaseSnapshot                    phaseSnapshot       // live per-phase state, see updatePhaseSnapshot
 	optimizerChargeVetoed            bool                // last run suggested grid charging but a gate declined it
 	optimizerVetoReason              optimizerVetoReason // why the applied mode is not (fully) in effect, for UI annotation
 
@@ -200,6 +203,7 @@ type siteState struct {
 	excessDCPower float64            // PV excess DC charge power (hybrid only)
 	auxPower      float64            // Aux power
 	battery       types.BatteryState // Battery cached and published state
+	gridCurrents  []float64          // signed grid phase currents (import positive), nil if unmeasured
 
 	// demandIncomplete is true when a PV or battery power read failed this cycle, so the
 	// homePower derived from pvPower/battery.Power below is not trustworthy for learning.
@@ -1112,7 +1116,10 @@ func (site *Site) updateGridMeter() error {
 		return fmt.Errorf("grid power: %v", err)
 	}
 
-	// grid phase currents (signed)
+	// grid phase currents (signed), stale values must not outlive a failed read
+	site.Lock()
+	site.gridCurrents = nil
+	site.Unlock()
 	if phaseMeter, ok := api.Cap[api.PhaseCurrents](meter); ok {
 		// grid phase powers
 		var p1, p2, p3 float64
@@ -1129,6 +1136,9 @@ func (site *Site) updateGridMeter() error {
 		if i1, i2, i3, err := phaseMeter.Currents(); err == nil {
 			mm.Currents = []float64{util.SignFromPower(i1, p1), util.SignFromPower(i2, p2), util.SignFromPower(i3, p3)}
 			site.log.DEBUG.Printf("grid currents: %.3gA", mm.Currents)
+			site.Lock()
+			site.gridCurrents = mm.Currents
+			site.Unlock()
 		} else if !errors.Is(err, api.ErrNotAvailable) {
 			site.log.ERROR.Printf("grid currents: %v", err)
 		}
@@ -1460,6 +1470,8 @@ func (site *Site) updatePower(lp updater, state siteState, totalChargePower floa
 	homePower := state.gridPower + max(0, state.pvPower) + state.battery.Power - totalChargePower
 	homePower = max(homePower, 0)
 	site.publish(keys.HomePower, homePower)
+
+	site.updatePhaseSnapshot(state)
 
 	if homePower > 0 {
 		// a failed PV or battery read this cycle leaves the corresponding term at its zero
