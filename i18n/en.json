@@ -1648,6 +1648,7 @@
       "reasonDamping": "pending confirmation",
       "reasonForcedIdle": "batteries disagree",
       "reasonLiveRate": "price moved",
+      "reasonPhaseLimit": "phase limit",
       "reasonPayback": "would not pay back"
     },
     "price": {

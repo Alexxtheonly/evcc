@@ -40,6 +40,7 @@ const REASON_LABEL_KEYS: Record<string, string> = {
   forcedIdle: "forecast.optimizer.reasonForcedIdle",
   damping: "forecast.optimizer.reasonDamping",
   liveRate: "forecast.optimizer.reasonLiveRate",
+  phaseLimit: "forecast.optimizer.reasonPhaseLimit",
 };
 
 export function reasonLabelKey(reason?: string): string | undefined {

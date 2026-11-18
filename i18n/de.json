@@ -1648,6 +1648,7 @@
       "reasonDamping": "Bestätigung offen",
       "reasonForcedIdle": "Batterien uneinig",
       "reasonLiveRate": "Preis verändert",
+      "reasonPhaseLimit": "Phasenlimit",
       "reasonPayback": "rechnet sich nicht"
     },
     "price": {

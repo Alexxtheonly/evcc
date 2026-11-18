@@ -1552,6 +1552,8 @@ export enum OPTIMIZER_VETO_REASON {
   DAMPING = "damping",
   /** The live rate has moved past the price the decision was based on. */
   LIVE_RATE = "liveRate",
+  /** A grid charge would push the most loaded phase over the per-phase import limit. */
+  PHASE_LIMIT = "phaseLimit",
 }
 
 /** Vetted outcome of the optimizer's last run, for the forecast view's slot-0 annotation. */
